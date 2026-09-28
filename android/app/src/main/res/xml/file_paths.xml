@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Only the cache directory: the export file is written there and nowhere
+         else, so the provider cannot be used to read anything the app did not
+         deliberately hand out. -->
+    <cache-path name="logs" path="." />
+</paths>

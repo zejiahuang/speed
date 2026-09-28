@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The adaptive icon: a background colour and a foreground bitmap, which Android
+  26+ composes and masks into whatever shape the launcher uses. A single flat PNG
+  would be cropped differently on every device, and this app's mark is a shape
+  that has to survive that.
+
+  The mark is the owner-supplied gauge: a purple-to-blue speedometer ring with a
+  needle. It arrived as a 96x96 JPEG rather than as vector paths, so the
+  foreground is a density-specific raster (`drawable-*/ic_launcher_foreground.png`)
+  and not a `<vector>`. There is no outline here to re-draw at scale — only
+  pixels to place inside the 72dp safe zone — so upscaling beyond the source is
+  soft, which is the cost of using the artwork as supplied.
+
+  The background is white because the artwork was drawn on white. A coloured
+  plate behind a white-backed bitmap would show as a coloured border around the
+  mark, so the plate and the artwork's own field are the same colour on purpose.
+
+  There is deliberately no `<monochrome>` layer. That layer has to be a solid
+  silhouette the system can tint, and a colour raster is not one; pointing it at
+  this drawable would make themed icons render the gauge itself as the mask.
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+</adaptive-icon>

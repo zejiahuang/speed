@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The dark counterpart. Without this a cold start in dark mode draws a white
+     window for the few frames before Compose takes over. -->
+<resources>
+    <color name="window_background">#121318</color>
+</resources>

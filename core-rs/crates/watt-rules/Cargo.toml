@@ -1,0 +1,13 @@
+[package]
+name = "watt-rules"
+description = "Rule JSON model, domain matching and target IP selection for the Watt Android full-traffic kernel"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]

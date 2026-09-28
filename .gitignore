@@ -1,0 +1,48 @@
+# --- Rust -------------------------------------------------------------------
+target/
+core-rs/crates/*/target/
+**/*.rs.bk
+
+# --- Android / Gradle -------------------------------------------------------
+.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+*.apk
+*.aab
+
+# The kernel is a Rust `cdylib`. It is produced by `scripts/app-native-build.sh`
+# locally and rebuilt from source by CI — never committed. A debug `.so` carries
+# `debug_info` and weighs ~35 MB per ABI against ~1.9 MB for a release one, and
+# either way the library that ships has to be the one built from the commit it
+# sits next to, or the tag stops describing the binary.
+android/app/src/main/jniLibs/
+
+# Signing keys. The release keystore is held by the owner and handed to CI through
+# repository secrets. A committed key would be worse than no key at all: anyone
+# who could read this repository could then sign an update the device would accept
+# as this app, and this app installs a VPN — "who can sign a build" *is* the trust
+# boundary here, not a formality.
+*.keystore
+*.jks
+
+# --- Data pulled or produced at run time ------------------------------------
+tmp/
+out/
+rules-puller/data/
+__pycache__/
+*.pyc
+
+# --- Local build logs -------------------------------------------------------
+*.log
+
+# --- Editors / OS -----------------------------------------------------------
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# --- Agent session workspace (never part of the product) --------------------
+.workbuddy-ai/
+.ui-console-shots/

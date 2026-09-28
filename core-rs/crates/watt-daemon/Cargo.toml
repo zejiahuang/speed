@@ -1,0 +1,21 @@
+[package]
+name = "watt-daemon"
+description = "Command line driver for the Watt full-traffic kernel."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "watt-daemon"
+path = "src/main.rs"
+
+[dependencies]
+# Signal handling. The kernel's own sockets go through `libc` in `watt-stack`;
+# this is the same dependency for the same reason, a `poll` loop that has to be
+# told to stop.
+libc = "0.2"
+watt-net = { workspace = true }
+watt-rules = { workspace = true }
+watt-proxy = { workspace = true }
+watt-stack = { workspace = true }

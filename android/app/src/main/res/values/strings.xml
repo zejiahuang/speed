@@ -1,0 +1,482 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  All user-visible text lives here rather than in the Kotlin, so that adding a
+  second language later is a `values-en/` directory and nothing else. The app is
+  Chinese-only for now, but nothing in the code assumes it.
+-->
+<resources>
+    <string name="app_name">speed</string>
+
+    <!-- Bottom navigation -->
+    <string name="nav_home">连接</string>
+    <string name="nav_rules">规则</string>
+    <string name="nav_logs">日志</string>
+    <string name="nav_settings">设置</string>
+
+    <!-- Home -->
+    <string name="home_state_off">未连接</string>
+    <string name="home_state_connecting">正在连接…</string>
+    <string name="home_state_on">已连接</string>
+    <string name="home_state_error">连接失败</string>
+    <string name="home_action_connect">连接</string>
+    <string name="home_action_disconnect">断开</string>
+    <string name="home_mode_proxy">代理模式</string>
+    <string name="home_mode_vpn">VPN 模式</string>
+    <string name="home_uptime">已运行 %1$s</string>
+    <string name="home_speed_down">下行</string>
+    <string name="home_speed_up">上行</string>
+    <string name="home_total">本次会话</string>
+    <string name="home_domains_saved">本次命中规则 %1$d 次</string>
+    <string name="home_no_permission">VPN 模式需要系统授权</string>
+    <string name="home_grant">去授权</string>
+    <string name="home_mode_hint_proxy">需要 App 自己走代理，只对支持代理的软件生效</string>
+    <string name="home_mode_hint_vpn">接管全部流量，需要系统 VPN 授权</string>
+    <string name="home_switch_mode">切换模式</string>
+    <string name="home_proxy_address">代理地址</string>
+    <string name="home_copy">复制</string>
+    <string name="home_copied">已复制</string>
+    <string name="home_proxy_how">把这个地址填进需要走代理的软件</string>
+    <string name="home_mode_pick">选择模式</string>
+    <string name="home_mode_proxy_desc">免 Root，不需要系统授权。只对设置了代理的软件生效。</string>
+    <string name="home_mode_vpn_desc">接管全部流量，需要系统 VPN 授权。能力完整。</string>
+    <string name="home_error_hint">连接失败。检查规则是否已下载，或换一个模式试试。</string>
+    <string name="home_disconnect_confirm_title">断开连接？</string>
+    <string name="home_disconnect_confirm_text">正在传输的数据会立刻中断。</string>
+    <string name="home_disconnect_confirm_ok">断开</string>
+
+    <!-- Rules -->
+    <string name="rules_title">规则</string>
+    <string name="rules_search_hint">搜索域名、地址或分组</string>
+    <string name="rules_enabled_summary">已启用 %1$d / %2$d 组</string>
+    <string name="rules_refresh">刷新规则</string>
+    <string name="rules_source">数据源</string>
+    <!-- The rule sources are a list now (see RuleSource), not a fixed pair of
+         option values. Built-ins take their name from here; a custom source
+         carries its own label. The retired source is shown so the owner can see
+         it exists, and RuleSource.usable is what makes it un-selectable. -->
+    <!-- Named, not numbered. These read as bare "1" / "2暂不可以使用" for a
+         while, which told the user nothing about which document was loaded —
+         on the rules chips and on the home screen's source row both. The name
+         is the one the design docs and the repository use. -->
+    <string name="rules_source_default">github-hosts</string>
+    <string name="rules_source_s302_retired">S302（已停用）</string>
+    <string name="rules_add_source">添加自定义源</string>
+    <string name="rules_source_name">名称（选填）</string>
+    <string name="rules_source_url">地址</string>
+    <string name="rules_source_add_ok">添加</string>
+    <string name="rules_source_delete">删除</string>
+    <string name="rules_source_unavailable">暂不可用</string>
+    <string name="rules_source_invalid_url">请填写以 http(s):// 开头的地址</string>
+    <string name="rules_count_domains">%1$d 个域名</string>
+    <string name="rules_count_addresses">%1$d 个地址</string>
+    <string name="rules_expand">展开</string>
+    <string name="rules_collapse">收起</string>
+    <string name="rules_empty">没有匹配的条目</string>
+    <string name="rules_level_group">分组</string>
+    <string name="rules_level_domain">域名</string>
+    <string name="rules_level_address">地址</string>
+    <string name="rules_disabled_hint">关掉的规则不会进入内核</string>
+    <string name="rules_enable_all">全部开启</string>
+    <string name="rules_disable_all">全部关闭</string>
+    <string name="rules_cache_info">已缓存 %1$d KiB · %2$s</string>
+    <string name="rules_switches_applied">%1$d 个开关已生效</string>
+
+    <!-- Logs -->
+    <string name="logs_title">日志</string>
+    <string name="logs_tab_live">实时</string>
+    <string name="logs_tab_archive">归档</string>
+    <string name="logs_pause">暂停</string>
+    <string name="logs_resume">继续</string>
+    <string name="logs_clear">清空</string>
+    <string name="logs_export">导出</string>
+    <string name="logs_empty">还没有日志</string>
+    <string name="logs_filter_all">全部</string>
+    <string name="logs_filter_session">会话</string>
+    <string name="logs_filter_error">错误</string>
+    <string name="logs_filter_dns">DNS</string>
+    <string name="logs_archived_days">归档 %1$d 天</string>
+    <string name="logs_no_archive">还没有归档</string>
+
+    <!-- Settings -->
+    <string name="settings_title">设置</string>
+    <string name="settings_section_connection">连接与数据源</string>
+    <string name="settings_section_logs">日志与诊断</string>
+    <string name="settings_section_appearance">外观</string>
+    <string name="settings_section_advanced">高级：内核参数</string>
+    <string name="settings_proxy_port">代理监听端口</string>
+    <string name="settings_proxy_port_hint">App 需要把 HTTP 代理指向 127.0.0.1:%1$d</string>
+    <string name="settings_rules_url">规则源地址</string>
+    <string name="settings_refresh_interval">刷新间隔</string>
+    <string name="settings_offline">离线模式</string>
+    <string name="settings_offline_hint">只用已下载的规则，不联网</string>
+    <string name="settings_stats_interval">统计输出间隔</string>
+    <string name="settings_log_level">日志级别</string>
+    <string name="settings_log_archive">按天归档</string>
+    <string name="settings_log_archive_hint">保留最近 7 天的日志</string>
+    <string name="settings_clear_logs">清空全部日志</string>
+    <string name="settings_dynamic_color">跟随壁纸取色</string>
+    <string name="settings_dynamic_color_hint">Android 12 及以上可用</string>
+    <string name="settings_dark_mode">深色模式</string>
+    <string name="settings_dark_follow">跟随系统</string>
+    <string name="settings_dark_always">总是深色</string>
+    <string name="settings_dark_never">总是浅色</string>
+    <string name="settings_developer_view">开发者视图</string>
+    <string name="settings_developer_view_hint">显示候选地址、冷却、静默计数等内核细节，并解锁内核命令行</string>
+    <string name="settings_failure_cooldown">失败冷却时长</string>
+    <string name="settings_max_candidates">单次候选上限</string>
+    <string name="settings_connect_stagger">错峰启动间隔</string>
+    <string name="settings_dial_names">启用拨号名</string>
+    <string name="settings_dial_names_hint">规则里的域名会在刷新时重新解析</string>
+    <string name="settings_kernel_version">内核版本</string>
+    <!-- The in-app command console, shown under 内核版本 only when 开发者视图 is on. -->
+    <string name="settings_console">内核命令行</string>
+    <string name="settings_console_hint">与 adb 控制面同一套命令：status、set mtu 1400、dump、help</string>
+    <string name="settings_console_placeholder">输入命令</string>
+    <string name="settings_console_run">执行</string>
+    <string name="settings_console_clear">清空</string>
+    <string name="settings_console_empty">还没有执行过命令</string>
+    <string name="settings_console_running">执行中…</string>
+    <string name="settings_console_prompt">›</string>
+
+    <!-- Advanced: the knobs that reach the kernel's own config -->
+    <string name="settings_mtu">隧道 MTU</string>
+    <string name="settings_mtu_hint">调小可减少分片，代价是吞吐</string>
+    <string name="settings_connect_timeout">单次连接超时</string>
+    <string name="settings_tcp_idle">TCP 空闲回收</string>
+    <string name="settings_udp_idle">UDP 空闲回收</string>
+    <string name="settings_udp_idle_hint">也决定一条静默的 UDP 流占住描述符多久</string>
+    <string name="settings_max_tcp_flows">TCP 流上限</string>
+    <string name="settings_max_udp_flows">UDP 流上限</string>
+    <string name="settings_answer_dns">本地应答 DNS</string>
+    <string name="settings_answer_dns_hint">命中规则时内核直接应答，不转发</string>
+    <string name="settings_certificate_check">校验规则地址的证书</string>
+    <string name="settings_certificate_check_hint">拨号前确认该地址出示的证书覆盖目标域名。关掉会快一些，但可能连到证书不对的地址</string>
+    <string name="settings_observe_dns">从应答中学习地址</string>
+    <string name="settings_observe_dns_hint">记下转发的应答，用于补充域名到地址的映射</string>
+    <string name="settings_race_width">并行竞速宽度</string>
+    <string name="settings_race_width_hint">一个连接同时拨几个候选地址。1 关闭竞速，退回逐个串行尝试</string>
+    <string name="settings_race_launch">竞速启动间隔</string>
+    <string name="settings_max_dialing">全局拨号并发上限</string>
+    <string name="settings_max_dialing_hint">所有连接同时在握手的上游 socket 总数上限，防止描述符耗尽</string>
+    <string name="settings_kernel_pending_title">内核参数已修改</string>
+    <string name="settings_kernel_pending_body">当前隧道仍在用旧参数，改动要重建内核才生效。</string>
+    <string name="settings_kernel_pending_action">应用并重连</string>
+
+    <!-- Appearance, second batch -->
+    <string name="settings_theme_color">主题色</string>
+    <string name="settings_theme_color_dynamic">跟随壁纸</string>
+    <string name="settings_theme_color_brand">品牌蓝</string>
+    <string name="settings_theme_color_green">青绿</string>
+    <string name="settings_theme_color_orange">暖橙</string>
+    <string name="settings_theme_color_violet">紫罗兰</string>
+    <string name="settings_corner_style">圆角</string>
+    <string name="settings_corner_small">紧凑</string>
+    <string name="settings_corner_medium">标准</string>
+    <string name="settings_corner_large">圆润</string>
+    <!-- The glass section. Two independent master switches, both **off by
+         default** (the owner's call, 2026-09-27): a fresh install draws flat
+         cards and the user opts into the effects. They replaced the old
+         five-tier chip row (自动/关闭/低/高/自定义). The tiers were a second and
+         redundant way to say what the switches say directly, and "自动"
+         (device-decided) was the one tier that made the section unreadable: the
+         user could not tell what they were looking at without knowing their own
+         device's RAM and core count. -->
+    <string name="settings_glass">玻璃效果</string>
+    <!-- The two switches are the two halves of the material, and they are
+         genuinely independent — each can be on without the other:
+         · 磨砂材质 is the *blur* (`DetourGlass.blurRadius`).
+         · 液态玻璃 is the *refraction* (`lensHeight`/`lensAmount`) plus the
+           highlight and the lit edge — the parts that make it read as glass
+           rather than as a merely translucent panel. -->
+    <string name="settings_glass_liquid">液态玻璃</string>
+    <!-- The Android 13 caveat lives in the hint rather than being hidden,
+         because below API 33 `lens` has no `RuntimeShader` to run in and the
+         switch would otherwise look broken on an older phone — see the
+         API-level ladder in `LiquidGlass`. -->
+    <string name="settings_glass_liquid_hint">折射、高光与描边（需要 Android 13）</string>
+    <string name="settings_glass_frost">磨砂材质</string>
+    <string name="settings_glass_frost_hint">模糊背后的内容，是最费性能的一步</string>
+    <!-- Shown only when at least one switch is on; each slider below is shown
+         only when its own switch is on. Same rule as the wallpaper scrim: a
+         control that cannot have an effect must not be shown. -->
+    <string name="settings_glass_knobs_hint">下面的数值只在对应开关打开时生效</string>
+    <string name="settings_glass_blur">模糊强度</string>
+    <string name="settings_glass_tint">底色浓度</string>
+    <string name="settings_glass_lens">折射强度</string>
+    <string name="settings_glass_highlight">高光</string>
+    <string name="settings_glass_border">描边</string>
+    <string name="settings_wallpaper">背景壁纸</string>
+    <string name="settings_wallpaper_hint">自定义应用背景，玻璃效果会折射它</string>
+    <string name="settings_wallpaper_pick">选择图片</string>
+    <string name="settings_wallpaper_change">更换</string>
+    <string name="settings_wallpaper_clear">清除</string>
+    <string name="settings_wallpaper_scrim">壁纸遮罩</string>
+    <string name="settings_wallpaper_failed">图片无法读取，请换一张</string>
+    <string name="settings_font_scale">字号</string>
+    <string name="settings_home_show_rate">主页显示实时速率</string>
+    <string name="settings_home_show_rate_hint">关掉可省电，速率每 0.5 秒刷新一次</string>
+    <string name="settings_confirm_disconnect">断开前二次确认</string>
+    <string name="settings_confirm_disconnect_hint">避免误触把正在跑的下载掐掉</string>
+    <string name="settings_unknown">未知</string>
+
+    <!-- Control (adb) -->
+    <string name="control_unavailable">此构建不开放 adb 控制</string>
+
+    <!-- Relative ages, shared by the home rule card and the rules screen's
+         per-address verdicts. One set rather than two, so "3 分钟前" cannot come
+         to mean two different things on two screens. -->
+    <string name="age_just_now">刚刚</string>
+    <string name="age_seconds">%1$d 秒前</string>
+    <string name="age_minutes">%1$d 分钟前</string>
+    <string name="age_hours">%1$d 小时前</string>
+    <string name="age_days">%1$d 天前</string>
+
+    <!-- Home, second batch. The screen used to answer only "is it up"; these are
+         the two questions that come next: "which rules is it running, and how
+         old are they" and "is the rule set actually being used". -->
+    <string name="home_rule_card_title">规则状态</string>
+    <string name="home_rule_source_label">规则源</string>
+    <string name="home_rule_cache_label">缓存</string>
+    <string name="home_rule_cache_none">尚未缓存</string>
+    <string name="home_rule_cache_fresh">新鲜</string>
+    <string name="home_rule_cache_stale">已过期</string>
+    <string name="home_rule_cache_detail">%1$s · %2$s</string>
+    <string name="home_hits_title">命中规则统计</string>
+    <string name="home_hits_matched">命中规则</string>
+    <string name="home_hits_direct">直连</string>
+    <string name="home_hits_live">存活流</string>
+    <string name="home_hits_ratio">命中率 %1$s</string>
+    <string name="home_hits_none">还没有流量经过隧道</string>
+
+    <!-- Developer rows, lifted out of HomeScreen.kt where they were eight
+         string literals in a list. -->
+    <string name="dev_tcp_open_close">TCP 开/关</string>
+    <string name="dev_tcp_failures">TCP 失败</string>
+    <string name="dev_tcp_rejected">TCP 拒绝</string>
+    <string name="dev_udp_open_evict">UDP 开/淘汰</string>
+    <string name="dev_dns_local">DNS 本地应答</string>
+    <string name="dev_dns_trimmed">DNS 裁剪</string>
+    <string name="dev_live_flows">存活流</string>
+    <string name="dev_packets">包 入/出</string>
+
+    <!-- Logs, second batch. The archive file had no way in from the UI at all. -->
+    <string name="logs_copy">复制</string>
+    <string name="logs_copied">已复制</string>
+    <string name="logs_export_all">导出全部日志</string>
+    <string name="logs_export_share_title">导出日志</string>
+    <string name="logs_export_empty">还没有可导出的日志</string>
+    <string name="logs_export_done">日志已导出</string>
+    <string name="logs_export_failed">导出失败：%1$s</string>
+
+    <!-- Settings, second batch. -->
+    <string name="settings_search_hint">搜索设置项</string>
+    <string name="settings_search_empty">没有匹配的设置项</string>
+    <string name="settings_advanced_expand">展开高级设置</string>
+    <string name="settings_advanced_collapse">收起高级设置</string>
+    <string name="settings_auto_connect">启动时自动连接</string>
+    <string name="settings_auto_connect_hint">打开 App 时若已有 VPN 授权，就自动建立隧道</string>
+    <string name="settings_restore_defaults">恢复默认设置</string>
+    <string name="settings_restore_confirm_title">恢复默认设置？</string>
+    <string name="settings_restore_confirm_text">所有设置会回到初始状态，包括已添加的规则源和自定义开关。当前连接不会被断开，但需要重新连接才能用上新参数。</string>
+    <string name="settings_restore_confirm_ok">恢复</string>
+    <string name="settings_restore_done">已恢复默认设置</string>
+    <string name="settings_dynamic_color_unsupported">此设备不支持（需要 Android 12 及以上）</string>
+
+    <!-- Rules, second batch: the per-address verdicts. Two sources feed these —
+         the certificate probe ("will this address present a certificate for the
+         domain") and the selector's byte history ("did this address actually
+         work"). They answer different questions and both are shown. -->
+    <string name="rules_group_counts">%1$d 个域名 · %2$d 个地址</string>
+    <string name="rules_verdict_label">上次判定</string>
+    <string name="rules_verdict_cert">证书</string>
+    <string name="rules_verdict_selector">选择</string>
+    <string name="rules_verdict_ok">可用</string>
+    <string name="rules_verdict_wrong_cert">证书不匹配</string>
+    <string name="rules_verdict_unreachable">连不上</string>
+    <string name="rules_verdict_in_flight">探测中</string>
+    <string name="rules_verdict_silent">连上无数据</string>
+    <string name="rules_verdict_failed">曾失败</string>
+    <string name="rules_verdict_unprobed">未探测</string>
+    <string name="rules_verdict_rtt">%1$d ms</string>
+    <!-- Only shown when at least one address is known-bad, so a healthy domain
+         stays uncluttered. Both numbers are counts of addresses. -->
+    <string name="rules_verdict_domain_bad">%1$d/%2$d 个地址不可用</string>
+    <string name="rules_verdict_domain_all_bad">全部 %1$d 个地址都不可用</string>
+    <!-- The same shape as the domain rollup, named separately on purpose: a
+         translator may want different wording for a whole group than for one
+         domain, and the two lines appear at different levels of the tree. -->
+    <string name="rules_verdict_group_bad">%1$d/%2$d 个地址不可用</string>
+    <string name="rules_disable_all_confirm_title">关闭全部分组？</string>
+    <string name="rules_disable_all_confirm_text">这会让 %1$d 个分组不再进入内核，相关流量将改走直连。</string>
+    <string name="rules_disable_all_confirm_ok">全部关闭</string>
+
+    <!-- Pages, third batch: the "other pages" pass. Shared page chrome plus the
+         per-screen additions. Strings only; the code that reads them lands in
+         the same batch. -->
+
+    <!-- Home. The mode chip is disabled while the tunnel is up, and nothing on
+         screen said why — this is that sentence. -->
+    <string name="home_mode_locked">断开后可切换</string>
+
+    <!-- Home: 「规则状态」 and 「命中规则统计」 merged into one card. They answered
+         the same question ("are the rules doing anything") from two cards, so
+         the answer had to be assembled by scrolling. -->
+    <string name="home_traffic_title">规则与分流</string>
+    <string name="home_traffic_ratio_label">命中规则占比</string>
+    <string name="home_traffic_flows_label">命中 / 直连 / 存活流</string>
+    <!-- Shown in place of the split when the tunnel is down: the source and
+         cache rows stay (they are configuration, true either way), but a
+         traffic ratio with no traffic would read as a broken tunnel. -->
+    <string name="home_traffic_idle">连接后显示分流统计</string>
+
+    <!-- Logs. The list could be read but not searched, and a single line could
+         be copied but not the set. -->
+    <string name="logs_search_hint">搜索内容或标签</string>
+    <string name="logs_copy_all">复制全部</string>
+    <string name="logs_copied_all">已复制 %1$d 行</string>
+    <string name="logs_back_to_latest">回到最新</string>
+    <!-- The empty state's second line. The title reuses `logs_empty`. -->
+    <string name="logs_empty_detail">连接一次后，内核事件会出现在这里</string>
+
+    <!-- The header's count. The unit cannot live in Kotlin: it is Chinese, and a
+         bare number as a subtitle reads as a bug rather than as a count. -->
+    <string name="logs_count">%1$d 行</string>
+
+    <!-- Shown when there *are* logs but the search or the filter chips hid them
+         all. `logs_empty` ("还没有日志") is a lie in that case — the user has
+         hundreds of lines and the app is telling them the kernel never spoke.
+         The detail names both ways out, because the user may have forgotten
+         which of the two they set. -->
+    <string name="logs_no_match">没有匹配的日志</string>
+    <string name="logs_no_match_detail">换个关键词，或清掉筛选条件</string>
+
+    <!-- The clear-log dialog. The action deletes the session's log buffer and
+         there is no undo, so the body says so rather than relying on the title
+         alone. -->
+    <string name="logs_clear_confirm_detail">此操作不可撤销</string>
+
+    <!-- A generic dismiss. The log dialog used to borrow `rules_source_cancel`,
+         which made a log screen depend on a rule string — the same "one thing
+         written several times" this batch exists to stop. The add-source dialog
+         was the last holder of that string and has folded in too, so there is
+         now exactly one "取消". -->
+    <string name="common_cancel">取消</string>
+    <string name="common_confirm">确定</string>
+
+    <!-- The numeric-entry dialog that every slider opens (`DetourSliderRow`).
+         Every slider in the app has it, not only the glass ones: a drag alone
+         cannot express a value the thumb cannot land on, and the wider the range
+         the worse that gets. -->
+    <string name="slider_input_title">输入数值</string>
+    <string name="slider_input_range">范围 %1$s ~ %2$s</string>
+
+    <!-- The third reason the list can be empty, and the only one that is not a
+         property of the data: the user paused while the buffer was still empty,
+         so the snapshot being shown is empty while logs have since arrived.
+         Neither `logs_empty` ("还没有日志") nor `logs_no_match` ("换个关键词") is
+         true here — the logs exist and nothing is filtered. The detail names the
+         one action that helps, which is to resume. -->
+    <string name="logs_paused_empty">已暂停</string>
+    <string name="logs_paused_empty_detail">恢复后显示新日志</string>
+
+    <!-- Rules. -->
+    <string name="rules_filter_all">全部</string>
+    <!-- The page's most practical question is "why does this one site not
+         work", which is answered by the addresses the kernel has already judged
+         bad. This filter brings them to the top level. -->
+    <string name="rules_filter_problems">只看有问题的</string>
+    <!-- The verdict columns are a snapshot taken while the tunnel runs, so they
+         are absent when it is down. A placeholder says "not yet" instead of
+         leaving the user to read the absence as "this does not exist". -->
+    <string name="rules_verdict_offline">连接后可查看地址判定</string>
+    <!-- The empty state's second line. The title reuses `rules_empty`. -->
+    <string name="rules_empty_detail">换一个数据源，或在设置里添加自定义源</string>
+
+    <!-- Shown when the "只看有问题的" filter is on and nothing matches. This
+         cannot reuse `rules_empty_detail` ("换一个数据源…"), because the filter
+         hides entries the user *does* have — the fix is to turn the filter off,
+         not to change the data source. The detail line states the counting rule
+         on purpose: `UNPROBED` and in-flight addresses are deliberately not
+         counted as problems, so a user who sees "no problems" while most
+         addresses are unjudged is not being lied to. -->
+    <string name="rules_filter_problems_empty">没有判定异常的条目</string>
+    <string name="rules_filter_problems_empty_detail">只统计已判定的地址；未判定与进行中的不算异常</string>
+
+    <!-- Data portability: export / import, plus the About entry.
+
+         The export is deliberately a *settings* document, not a backup. It
+         excludes the wallpaper image — a multi-megabyte photo the user already
+         has in their gallery, and the one thing here that cannot be carried in
+         a chat message — and it excludes every piece of runtime state (the
+         engine's applied settings, the cache-dirty repair flag, the schema
+         version). What is left is a few KB of JSON that can be pasted into any
+         chat app, which is the whole point: a backup nobody can move is not a
+         backup.
+
+         Import applies each value through the same setter the corresponding
+         settings row uses, so a setting cannot be exported without also being
+         importable. That property is what keeps the two directions from
+         drifting apart. -->
+    <string name="settings_section_data">数据与关于</string>
+    <string name="settings_export">导出数据</string>
+    <string name="settings_export_hint">把设置存成一个 JSON 文件（不含壁纸图片）</string>
+    <string name="settings_export_action">导出</string>
+    <string name="settings_import">导入数据</string>
+    <string name="settings_import_hint">从 JSON 文件恢复设置，会覆盖当前设置</string>
+    <string name="settings_import_action">导入</string>
+    <string name="settings_about">关于</string>
+    <string name="settings_about_hint">版本、运行环境与更新</string>
+    <string name="settings_about_action">查看</string>
+
+    <string name="settings_export_done">已导出设置</string>
+    <string name="settings_export_failed">导出失败：%1$s</string>
+    <string name="settings_import_confirm_title">导入设置？</string>
+    <string name="settings_import_confirm_text">导入会用文件里的值覆盖当前设置，已添加的规则源和自定义开关也在其中。当前连接不会被断开，但需要重新连接才能用上新参数。</string>
+    <string name="settings_import_confirm_ok">导入</string>
+    <string name="settings_import_done">已导入 %1$d 项设置</string>
+    <string name="settings_import_done_ignored">已导入 %1$d 项设置，忽略 %2$d 项无法识别的项</string>
+    <string name="settings_import_bad_json">这个文件不是有效的 JSON</string>
+    <string name="settings_import_not_ours">这不是本应用导出的设置文件</string>
+    <string name="settings_import_too_new">这个文件来自更新的版本，请先更新应用</string>
+    <string name="settings_import_read_failed">读取文件失败：%1$s</string>
+
+    <!-- About.
+
+         "内核库" reports whether the native library loaded, and deliberately
+         does not report a version number. The FFI header exports no version
+         symbol, so the only number available is the app's own — and printing
+         that next to the word "内核" produces a value that changes when the
+         shell changes and never when the kernel does. The load error, when
+         there is one, is the honest answer instead. -->
+    <string name="about_title">关于</string>
+    <string name="about_section_version">版本信息</string>
+    <string name="about_app_version">应用版本</string>
+    <string name="about_build_type">构建类型</string>
+    <string name="about_build_debug">调试版</string>
+    <string name="about_build_release">正式版</string>
+    <string name="about_kernel">内核库</string>
+    <string name="about_kernel_ok">已加载</string>
+    <string name="about_environment">运行环境</string>
+    <string name="about_device">设备</string>
+    <string name="about_section_rules">数据源</string>
+    <string name="about_rule_source">当前规则源</string>
+    <string name="about_rule_scale">规则规模</string>
+    <string name="about_section_update">更新</string>
+    <string name="about_update_url">版本清单地址</string>
+    <string name="about_update_unset">未配置</string>
+    <string name="about_update_set">设置地址</string>
+    <string name="about_update_change">修改</string>
+    <string name="about_update_check">检查更新</string>
+    <string name="about_update_checking">正在检查…</string>
+    <string name="about_update_latest">已是最新版本</string>
+    <string name="about_update_available">有新版本 %1$s</string>
+    <string name="about_update_notes">更新说明</string>
+    <string name="about_update_download">前往下载</string>
+    <string name="about_update_failed">检查失败：%1$s</string>
+    <string name="about_update_url_title">版本清单地址</string>
+    <string name="about_update_url_hint">App 会拉取这个地址上的 JSON，读取其中的 versionCode 与下载链接。留空则不检查更新。</string>
+    <string name="about_update_url_invalid">请填一个以 http:// 或 https:// 开头的地址</string>
+    <string name="about_section_what">关于本应用</string>
+    <string name="about_description">speed（内部名 detour）是一个免 Root 的全流量用户态网络内核。它用一个本地 VPN 接口把流量接进 Rust 内核，按规则把命中域名的连接中继到规则给出的地址，其余流量直连。它不解密 TLS，所以一个域名能否走通，取决于规则里的地址是否可达、以及该地址的证书是否覆盖原域名。</string>
+    <string name="about_close">关闭</string>
+</resources>

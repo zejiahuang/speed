@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Matches the fallback light surface in Theme.kt, so the window the system
+     draws before Compose is up does not flash a different colour. -->
+<resources>
+    <color name="window_background">#FBF8FF</color>
+</resources>

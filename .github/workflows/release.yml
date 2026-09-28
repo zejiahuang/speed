@@ -1,0 +1,226 @@
+name: Release
+
+# 推一个 `v*` 标签即发布；也可以手动触发（手动触发时只构建、不建 Release，
+# 用来在真正打标签之前先验证一遍构建链路）。
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+# 默认的 GITHUB_TOKEN 是只读的，而发布这一步要创建 Release 并上传附件。
+permissions:
+  contents: write
+
+# 同一个标签重复触发时排队而不是并发：两个 job 同时往一个 Release 里传附件
+# 会互相覆盖。
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: 构建并签名
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: 检出
+        uses: actions/checkout@v4
+
+      # 本仓库不提交 Gradle wrapper —— 一个仓库里没有任何东西能重新生成的二进制
+      # 比一次下载更糟。`scripts/app-build.sh` 首次运行会把发行包取到 ~/.cache，
+      # 所以缓存的是那个目录，而不是让每个标签都重新下一次。
+      - name: 缓存 Gradle 发行包
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/gradle-8.14.3
+          key: gradle-8.14.3
+
+      - name: 缓存 cargo 与内核中间产物
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cache/watt-target
+          key: cargo-${{ runner.os }}-${{ hashFiles('core-rs/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: 安装 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: 安装 Android SDK
+        uses: android-actions/setup-android@v3
+
+      # compileSdk 是 36，所以 platform 36 与 build-tools 36.0.0 必须在场；
+      # 版本要和 android/app/build.gradle.kts 一起改，否则构建会在
+      # `:app:checkDebugAarMetadata` 之类的步骤上失败。
+      - name: 安装 SDK 组件
+        run: |
+          set -euo pipefail
+          sdkmanager --install "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+
+      # 内核由 `scripts/android-build.sh` 用 NDK 的 clang 链接，所以 CI 必须有一个
+      # 同版本的 NDK。解压到 `$HOME/android/android-ndk-r30`，正好是脚本的默认路径。
+      - name: 安装 NDK r30
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/android"
+          curl -fsSL -o /tmp/ndk.zip \
+            https://dl.google.com/android/repository/android-ndk-r30-linux.zip
+          unzip -q /tmp/ndk.zip -d "$HOME/android"
+          echo "NDK_DIR=$HOME/android/android-ndk-r30" >> "$GITHUB_ENV"
+
+      - name: 安装 Rust 与 Android target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      # 两个 ABI 在同一个 job 里编，然后交给 Gradle 的 ABI 拆分。
+      # 之所以不按 ABI 拆成两个并行 job：拆分的输入是 `jniLibs/` 里实际存在的
+      # 库，只放一个 ABI 的库进去，另一个 ABI 的分包就可能因为「没有原生库」而
+      # 不被产出，或者产出一个空壳。让两个库都在，产出才是确定的。
+      - name: 编译内核（release，两个 ABI）
+        env:
+          PROFILE: release
+        run: bash scripts/app-native-build.sh aarch64-linux-android x86_64-linux-android
+
+      # 密钥以 base64 存进 secret，运行时才落盘，落盘位置在 runner 的临时目录里。
+      # 仓库里没有密钥是刻意的：这个应用会安装 VPN，「谁能签出构建」就是它的信任
+      # 边界。密钥缺失时直接失败，而不是退回未签名构建 —— 未签名的包会被设备拒装，
+      # 而一个「看起来发布成功、实际装不上」的 Release 比构建失败更难发现。
+      - name: 落盘签名密钥
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${KEYSTORE_BASE64:-}" ]; then
+            echo "缺少 secret KEYSTORE_BASE64，拒绝产出未签名的发布包" >&2
+            exit 1
+          fi
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          echo "WATT_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+
+      - name: 打包并签名（按 ABI 拆分）
+        env:
+          SKIP_NATIVE: "1"
+          WATT_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          WATT_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          WATT_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: bash scripts/app-build.sh assembleRelease -PabiSplits
+
+      # 把「产物是不是我们要的那个」变成构建的一部分，而不是发布之后靠人看。
+      # 这里最容易出的错是「标签打了 v0.1.0，但 versionName 忘了改」——那种包
+      # 能装上，但用户看到的版本号是错的，而且事后无法分辨。
+      - name: 校验产物
+        run: |
+          set -euo pipefail
+          BT="$ANDROID_HOME/build-tools/36.0.0"
+          APKDIR=android/app/build/outputs/apk/release
+
+          expected="$(grep -oP 'versionName = "\K[^"]+' android/app/build.gradle.kts)"
+          echo "build.gradle.kts 里的 versionName = $expected"
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            tag_ver="${GITHUB_REF_NAME#v}"
+            if [ "$tag_ver" != "$expected" ]; then
+              echo "标签 $GITHUB_REF_NAME 与 versionName $expected 不一致，先改 build.gradle.kts" >&2
+              exit 1
+            fi
+          fi
+
+          count="$(find "$APKDIR" -name '*.apk' | wc -l)"
+          if [ "$count" -ne 2 ]; then
+            echo "期望 arm64-v8a 与 x86_64 各一个包，实际 $count 个" >&2
+            ls -l "$APKDIR" >&2
+            exit 1
+          fi
+
+          for apk in "$APKDIR"/*.apk; do
+            echo "=================== $apk"
+            # 签名：不带 --print-certs 时只在失败时非零退出，这里连证书指纹一起打出来，
+            # 方便事后比对「这次发布用的确实是同一个密钥」。
+            "$BT/apksigner" verify --print-certs "$apk"
+            badging="$("$BT/aapt2" dump badging "$apk")"
+            echo "$badging" | sed -n '1,2p'
+            echo "$badging" | grep -q "versionName='$expected'" || {
+              echo "包内 versionName 不是 $expected" >&2; exit 1; }
+          done
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: apks
+          path: android/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+
+  release:
+    name: 发布
+    needs: build
+    # 手动触发时 `github.ref_type` 是 `branch`，此时只构建不发布。
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 检出（取 CHANGELOG.md）
+        uses: actions/checkout@v4
+
+      - name: 下载产物
+        uses: actions/download-artifact@v4
+        with:
+          name: apks
+          path: apks
+
+      # 把 Gradle 的内部产物名（`app-arm64-v8a-release.apk`）换成用户看得懂的名字。
+      # 用 `find` 而不是 glob：`**` 需要 `shopt -s globstar`，而 GitHub 的默认 shell
+      # 不保证开着它，静默匹配不到比报错更难查。
+      - name: 按发布名重命名
+        run: |
+          set -euo pipefail
+          ver="${GITHUB_REF_NAME#v}"
+          mkdir -p out
+          find apks -name 'app-*-release.apk' -print0 | while IFS= read -r -d '' f; do
+            abi="$(basename "$f")"
+            abi="${abi#app-}"
+            abi="${abi%-release.apk}"
+            cp "$f" "out/speed-${ver}-${abi}.apk"
+          done
+          ls -l out
+          test "$(find out -name '*.apk' | wc -l)" -eq 2
+
+      # Release 说明取自 CHANGELOG.md 里本版本那一节，而不是另写一份 —— 两份文案
+      # 一定会漂移，而用户看到的应当是同一段话。
+      - name: 从 CHANGELOG 取出本版本正文
+        run: |
+          set -euo pipefail
+          ver="${GITHUB_REF_NAME#v}"
+          {
+            printf '## speed %s\n\n' "$ver"
+            awk -v v="$ver" '
+              $0 ~ "^## \\[" v "\\]" { f = 1; next }
+              f && /^## \[/        { exit }
+              f                    { print }
+            ' CHANGELOG.md
+            printf '\n---\n\n'
+            printf '下载对应 ABI 的 APK 安装：`speed-%s-arm64-v8a.apk`（多数手机与平板）、' "$ver"
+            printf '`speed-%s-x86_64.apk`（模拟器）。两个包用同一个密钥签名。\n' "$ver"
+          } > notes.md
+
+          if ! grep -q '[^[:space:]]' notes.md; then
+            echo "CHANGELOG.md 里没有 $ver 这一节" >&2
+            exit 1
+          fi
+          cat notes.md
+
+      - name: 创建 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: notes.md
+          files: out/*.apk
+          draft: false
+          prerelease: false

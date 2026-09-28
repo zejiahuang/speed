@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The icon's background plate. White, because the owner-supplied artwork is
+     drawn on a white field: any other colour would frame the mark with a visible
+     border, since the bitmap itself cannot be cut out of its own background. -->
+<resources>
+    <color name="ic_launcher_background">#FFFFFF</color>
+</resources>

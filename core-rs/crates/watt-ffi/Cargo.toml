@@ -1,0 +1,39 @@
+[package]
+name = "watt-ffi"
+description = "C ABI for the Android shell: VpnService hands in a descriptor, this hands out a kernel"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+# `cdylib` is what JNI loads. `rlib` too, so the Rust tests can call the same
+# entry points the shell will.
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[features]
+default = []
+# The JNI entry points. Off by default so a non-Android build does not need the
+# crate, and so the plain C ABI can be tested without a JVM in the room.
+# `logcat` is implied: on Android the two are always wanted together.
+jni-bridge = ["dep:jni", "logcat"]
+# Send the kernel's diagnostics to logcat instead of stderr.
+logcat = ["dep:android_logger"]
+
+[dependencies]
+libc = "0.2"
+# Only for re-encoding a merged document. The rule crate owns parsing and
+# merging; this is the serialisation the caller gets back.
+serde_json = "1"
+watt-proxy = { workspace = true }
+watt-rules = { workspace = true }
+watt-stack = { workspace = true }
+jni = { version = "0.21", optional = true }
+# The level filter handed to `android_logger`. Named here rather than reached
+# through a re-export, because a crate has to depend on what it names.
+log = "0.4"
+# Routes the kernel's diagnostics to logcat. `eprintln!` writes to Android's
+# `System.err`, which lands under a different tag than the JVM's and is in
+# practice unreadable from `adb logcat` — so every "the kernel said nothing"
+# conclusion drawn without this was drawn blind. Android only.
+android_logger = { version = "0.15", optional = true }

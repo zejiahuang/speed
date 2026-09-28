@@ -1,0 +1,760 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>其它页面改造方案 · 首页 / 规则 / 日志</title>
+<style>
+  :root{
+    --brand:#6D4AB8; --brand-2:#8A6ACB; --brand-dark:#4E2F91; --brand-light:#EFE9FA;
+    --ink:#1B1B1F; --muted:#6B6B75; --faint:#9A98A6;
+    --bg:#F4F3F8; --card:#FFFFFF; --line:#E7E5EE;
+    --green:#1F9D63; --amber:#C8811A; --red:#C0392B;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; padding:40px 32px 80px;
+    background:#FAFAFC; color:var(--ink);
+    font-family:"Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1440px; margin:0 auto;}
+  h1{font-size:23px; margin:0 0 8px; font-weight:650; letter-spacing:-.3px;}
+  h2.sec{font-size:17px; margin:0 0 6px; font-weight:650; letter-spacing:-.2px;}
+  h2.sec span{font-size:11px; color:var(--faint); font-weight:500; margin-left:8px; letter-spacing:0;}
+  h3{font-size:13.5px; margin:22px 0 8px; font-weight:650; color:var(--brand-dark);}
+  h3.q{font-size:13px; margin:18px 0 6px; font-weight:650; color:var(--ink);}
+  p.sub{color:var(--muted); font-size:13px; margin:0 0 4px; line-height:1.75; max-width:1180px;}
+  p.sub b,li b{color:var(--ink); font-weight:600;}
+  code{font-family:"Cascadia Code","Consolas",monospace; font-size:12px;
+       background:#F1EFF7; color:var(--brand-dark); padding:1px 5px; border-radius:4px; white-space:nowrap;}
+  ul.sub,ol.sub{margin:6px 0 0; padding-left:20px; font-size:12.5px; line-height:1.95; color:var(--muted); max-width:1180px;}
+  ul.sub li,ol.sub li{margin:2px 0;}
+  .rule{height:1px; background:var(--line); margin:34px 0 28px;}
+  .row{display:flex; gap:22px; align-items:flex-start; flex-wrap:wrap;}
+
+  /* ---------- verdict ---------- */
+  .verdict{
+    border:1px solid var(--line); border-left:4px solid var(--brand);
+    background:linear-gradient(180deg,#FBF9FF,#FFFFFF);
+    border-radius:14px; padding:18px 22px; max-width:1180px; margin-top:10px;
+  }
+  .verdict .lead{font-size:14.5px; font-weight:650; margin:0 0 10px;}
+  .verdict ul{margin:0; padding-left:0; list-style:none; font-size:12.5px; line-height:1.95; color:var(--muted);}
+  .verdict li{padding-left:20px; position:relative;}
+  .verdict li::before{content:"▸"; position:absolute; left:2px; color:var(--brand); font-weight:700;}
+  .verdict li b{color:var(--ink);}
+
+  /* ---------- callouts ---------- */
+  .box{border-radius:12px; padding:14px 18px; margin:16px 0 0; font-size:12.5px; line-height:1.8; max-width:1180px;}
+  .box .t{font-weight:650; font-size:12.5px; margin:0 0 6px; display:flex; align-items:center; gap:7px;}
+  .box p{margin:0 0 6px;}
+  .box p:last-child{margin-bottom:0;}
+  .box b{color:var(--ink);}
+  .box.risk{border:1px solid #F0D5D1; border-left:4px solid var(--red); background:#FDF4F3;}
+  .box.risk .t{color:#9A2C22;}
+  .box.warn{border:1px solid #F0E1C7; border-left:4px solid var(--amber); background:#FDF9F0;}
+  .box.warn .t{color:#8A5A0F;}
+  .box.ok{border:1px solid #D3EBDE; border-left:4px solid var(--green); background:#F2F9F5;}
+  .box.ok .t{color:#14744A;}
+  .box.info{border:1px solid var(--line); border-left:4px solid var(--brand); background:#FAF8FE;}
+  .box.info .t{color:var(--brand-dark);}
+  .tagm{display:inline-block; font-size:10px; font-weight:700; padding:1.5px 6px; border-radius:5px;
+        background:#EDE9F6; color:#4E2F91; letter-spacing:.3px;}
+  .tagm.meas{background:#E6F5EE; color:#14744A;}
+  .tagm.guess{background:#FDF0DC; color:#8A5A0F;}
+  .tagm.risk{background:#FBE6E3; color:#9A2C22;}
+
+  /* ---------- tables ---------- */
+  table{border-collapse:collapse; margin-top:14px; font-size:12px; width:100%; max-width:1440px;}
+  th,td{text-align:left; padding:9px 12px; border-bottom:1px solid var(--line); vertical-align:top;}
+  th{font-weight:600; color:var(--muted); font-size:11px; letter-spacing:.3px; background:#F7F6FB;}
+  td:first-child{color:var(--muted);}
+  .tag{display:inline-block; font-size:10px; padding:1.5px 6px; border-radius:5px;
+       background:var(--brand-light); color:var(--brand-dark); font-weight:650; margin-right:4px; white-space:nowrap;}
+  .tag.no{background:#F0EFF3; color:#6B6B75;}
+  .tag.now{background:#E6F5EE; color:#14744A;}
+  .tag.new{background:#FBE6E3; color:#9A2C22;}
+
+  /* ---------- generic phone / panel ---------- */
+  .panel{border:1px solid var(--line); border-radius:16px; background:#fff; padding:14px 16px;
+         box-shadow:0 6px 18px rgba(24,18,44,.05);}
+  .panel .ph{font-size:11.5px; font-weight:650; color:#4E2F91; margin:0 0 10px;}
+
+  /* mock bits */
+  .mcard{background:#fff; border:1px solid #ECEAF3; border-radius:14px; padding:10px 12px;
+         box-shadow:0 2px 8px rgba(24,18,44,.05); margin-bottom:8px;}
+  .gcard{background:rgba(255,255,255,.66); border:1px solid rgba(255,255,255,.9); border-radius:18px;
+         backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
+         box-shadow:0 8px 22px rgba(60,40,110,.12); padding:10px 12px;}
+  .mrow{display:flex; align-items:center; justify-content:space-between; gap:8px;
+        padding:6px 2px; border-top:1px solid #EFEDF5; font-size:11.5px; color:#2A2140;}
+  .mrow:first-child{border-top:none;}
+  .mrow small{display:block; font-size:9.5px; color:#6B6B75; margin-top:1px;}
+  .mtitle{font-size:11px; font-weight:650; color:#4E2F91; margin:0 0 6px;}
+  .mnum{font-size:19px; font-weight:650; letter-spacing:-.4px; color:#1B1B1F;}
+  .mnum em{font-style:normal; font-size:10px; opacity:.6; margin-left:2px;}
+  .bar{height:7px; border-radius:999px; background:rgba(109,74,184,.14); position:relative; overflow:hidden;}
+  .bar i{position:absolute; left:0; top:0; bottom:0; background:linear-gradient(90deg,#8A6ACB,#4E2F91); border-radius:999px;}
+  .badge{display:inline-block; font-size:9px; font-weight:700; padding:1px 5px; border-radius:5px;
+         background:#FBE6E3; color:#9A2C22; vertical-align:1px;}
+
+  /* list sampling diagram */
+  .sampwrap{display:flex; gap:20px; flex-wrap:wrap; margin-top:14px;}
+  .samp{width:320px; background:#F7F5FB; border:1px solid var(--line); border-radius:16px; padding:14px;}
+  .samp .hd{font-size:12px; font-weight:650; margin:0 0 4px;}
+  .samp .hint{font-size:10.5px; color:var(--muted); margin:0 0 10px; line-height:1.5;}
+  .samp .lrow{display:flex; align-items:center; justify-content:space-between; gap:8px;
+              padding:7px 10px; font-size:10.5px; color:#3A3350; font-family:"Consolas",monospace;
+              border-top:1px solid #EFEDF5;}
+  .samp .lrow:first-child{border-top:none;}
+  .glassrow{background:rgba(255,255,255,.62); border:1px solid rgba(255,255,255,.9); border-radius:10px;
+            backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+            box-shadow:0 3px 10px rgba(60,40,110,.10); margin-bottom:5px;}
+  .glassone{background:rgba(255,255,255,.62); border:1px solid rgba(255,255,255,.9); border-radius:14px;
+            backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+            box-shadow:0 6px 18px rgba(60,40,110,.12); overflow:hidden;}
+  .count{font-size:11px; font-weight:650; margin-top:10px;}
+  .count.red{color:#9A2C22;} .count.green{color:#14744A;}
+
+  /* nav bar mock for section 6 */
+  .phonebar{border:1px solid var(--line); border-radius:18px; background:#F7F5FB; padding:0; overflow:hidden; width:300px;}
+  .phonebar .screen{position:relative; height:250px;
+    background:linear-gradient(178deg,#EDE7FA,#F5F3FA 40%,#F7F6FA); overflow:hidden;}
+  .phonebar .blob{position:absolute; width:200px; height:200px; border-radius:50%; top:-40px; left:-30px;
+    background:radial-gradient(circle,rgba(160,132,225,.5),rgba(160,132,225,0) 68%);}
+  .phonebar .contentx{position:absolute; left:14px; right:14px; top:16px; display:flex; flex-direction:column; gap:8px;}
+  .phonebar .fbar{position:absolute; left:14px; right:14px; bottom:12px; height:46px; border-radius:22px;
+    background:rgba(255,255,255,.74); border:1px solid rgba(255,255,255,.92);
+    backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
+    box-shadow:0 10px 22px rgba(60,40,110,.16); display:flex; align-items:center; justify-content:space-around;
+    font-size:9px; color:#7C7890;}
+  .mini{background:rgba(255,255,255,.6); border:1px solid rgba(255,255,255,.9); border-radius:10px;
+        backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); padding:7px 10px; font-size:10px; color:#2A2140;}
+
+  /* steps */
+  ol.steps{margin:14px 0 0; padding-left:0; list-style:none; counter-reset:s; max-width:1440px;}
+  ol.steps li{counter-increment:s; position:relative; padding:11px 0 11px 44px;
+              border-bottom:1px solid var(--line); font-size:12.5px; line-height:1.7; color:var(--muted);}
+  ol.steps li::before{content:counter(s); position:absolute; left:0; top:11px;
+    width:26px; height:26px; border-radius:8px; background:var(--brand); color:#fff;
+    font-size:12px; font-weight:700; display:grid; place-items:center;}
+  ol.steps li b{color:var(--ink);}
+  .batch{display:inline-block; font-size:10px; font-weight:700; padding:1.5px 7px; border-radius:5px; margin-right:6px;}
+  .batch.b1{background:#E6F5EE; color:#14744A;}
+  .batch.b2{background:#EDE9F6; color:#4E2F91;}
+  .batch.b3{background:#FDF0DC; color:#8A5A0F;}
+
+  /* open questions */
+  .qcard{border:1px solid var(--line); border-radius:14px; background:#fff; padding:16px 18px; margin-top:14px;
+         max-width:1440px; box-shadow:0 6px 18px rgba(24,18,44,.05);}
+  .qcard .qh{display:flex; gap:10px; align-items:baseline; margin-bottom:8px;}
+  .qcard .qn{flex:none; width:24px; height:24px; border-radius:8px; background:var(--brand); color:#fff;
+             font-size:12px; font-weight:700; display:grid; place-items:center;}
+  .qcard .qt{font-size:13px; font-weight:650;}
+  .qcard .opts{display:flex; gap:12px; flex-wrap:wrap; margin-top:8px;}
+  .opt{flex:1; min-width:280px; border:1px solid var(--line); border-radius:10px; padding:10px 12px; font-size:12px; line-height:1.65; color:var(--muted);}
+  .opt b{color:var(--ink); display:block; margin-bottom:3px; font-size:12px;}
+  .opt.rec{border-color:#C9E7D7; background:#F4FBF7;}
+  .opt.rec b::after{content:"推荐"; font-size:9.5px; font-weight:700; color:#14744A; background:#E0F3E9;
+                    padding:1px 5px; border-radius:5px; margin-left:6px; vertical-align:1px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>其它页面改造方案 · 首页 / 规则 / 日志</h1>
+<p class="sub">
+  玻璃与壁纸已经落地并在模拟器上验证通过。这份方案处理的是<b>页面本身</b>——三页各自的头部、空状态、长列表密度、
+  以及那些「滚两次才能拼出一个答案」的信息布局。目标是给 owner 一份可以逐条拍板的清单，而不是直接动手。
+  全文<b>不含实现代码</b>，所有现状都可回溯到文件与行号。
+</p>
+<p class="sub" style="margin-top:8px;">
+  读法：每节<b>先给结论</b>，再给理由与取舍。凡结论来自读码的标 <span class="tagm meas">读码所得</span>，
+  凡属于性能推断、需要上机验证的标 <span class="tagm guess">待实测</span>，破坏性或高风险项单独用红色卡片标出。
+</p>
+
+<div class="verdict">
+  <p class="lead">一句话结论</p>
+  <ul>
+    <li><b>三页缺的是同一批零件：</b>页面头、空状态、比例条。现在它们各写各的（规则/日志各有一份头部 Row、两份空状态），建议抽成三个组件统一，<b>零内核改动</b>。</li>
+    <li><b>唯一一处建议「减少玻璃」：</b>日志页现在<b>每一行都是一张玻璃卡</b>，一屏十余行 ⇒ 每帧十余次背景采样。建议改成「整个列表容器一张玻璃，行内不再上玻璃」，采样次数从 N 降到 1。这是本方案<b>唯一</b>减玻璃的地方，且性能判断目前是<b>推断，未实测</b>。</li>
+    <li><b>首页最大的问题不是材质，是信息被切成两张卡：</b>「规则状态」与「命中规则」回答的是同一个问题（规则在起作用吗），建议合并为一张「规则与分流」，并把命中率从一句文字升级为比例条。</li>
+    <li><b>规则页最大的风险是规模：</b>hosts 组 <b>5225 域名 / 15952 地址</b>，而 <code>rows()</code> 是一次性展平的，展开即一次性构建几千个对象。建议默认只展开前 N 个。</li>
+    <li><b>悬浮栏是否让内容从下面穿过</b>（方案 A / B）是本方案<b>唯一的结构性取舍</b>，代价写在第 6 节，建议交给你拍板，不替你决定。</li>
+  </ul>
+</div>
+
+<div class="rule"></div>
+
+<!-- =========================================================== -->
+<h2 class="sec">0 · 现状盘点与共性问题 <span>读码所得 · 非实测</span></h2>
+<p class="sub">
+  结论：三页的问题不是「缺功能」，而是<b>缺共用零件</b>，导致同一种东西被写了三遍，且三遍长得不一样。
+</p>
+
+<table>
+  <tr><th>共性</th><th>现状</th><th>影响</th></tr>
+  <tr>
+    <td>页面头各写各的</td>
+    <td>首页<b>根本没有头部</b>，直接用 <code>app_name</code> 当标题（<code>HomeScreen.kt:118–121</code>，<code>headlineMedium</code>）；规则页与日志页各写一个头部 <code>Row</code>，内边距都是 <code>start=20, end=8, top=12</code>（<code>RulesScreen.kt:213–216</code>、<code>LogsScreen.kt:102–105</code>）</td>
+    <td>三页标题的字号、基线、左右留白不统一；首页的标题是「应用名」而不是「页面名」，从底栏点进来会有一瞬的错位感</td>
+  </tr>
+  <tr>
+    <td>空状态写了两份</td>
+    <td>规则页一份具名实现 <code>EmptyHint</code>（<code>RulesScreen.kt:692–706</code>）；日志页一份内联 <code>Column</code>（<code>LogsScreen.kt:224–239</code>）</td>
+    <td>两份都是「居中一行灰字」，没有图标、没有说明、没有下一步动作。空状态恰恰是最该引导用户的地方，却最简陋</td>
+  </tr>
+  <tr>
+    <td>玻璃覆盖面不均</td>
+    <td>规则页<b>只有组卡是玻璃</b>，展开后的 <code>DomainRow</code>（<code>RulesScreen.kt:538</code>）与 <code>AddressRow</code>（<code>:611</code>）是裸行；日志页<b>每一行都是独立玻璃卡</b>（<code>LogsScreen.kt:287–333</code>）</td>
+    <td>同一套材质，一个页面「舍不得用」，另一个「用过头」。这既是观感不一致，也是性能隐患（见第 2 节）</td>
+  </tr>
+  <tr>
+    <td>无文字图标按钮成堆</td>
+    <td>规则页头部两个（全部关闭/开启 <code>RulesScreen.kt:266–285</code>、刷新 <code>:286–298</code>）；日志页头部三个（暂停 <code>LogsScreen.kt:113–130</code>、清空 <code>:131–141</code>、分享 <code>:142–206</code>）</td>
+    <td>共 5 个无文字按钮。<code>contentDescription</code> 只有读屏能听见，<b>看得见的用户只能靠猜</b>。其中「全部关闭」还是破坏性动作</td>
+  </tr>
+  <tr>
+    <td>长列表一次性展平</td>
+    <td><code>RuleIndex.rows()</code>（<code>core/RuleIndex.kt:69–133</code>）把可见列表一次性展平成 <code>List&lt;Node&gt;</code>，再交给 <code>LazyColumn</code>（<code>RulesScreen.kt:361–363</code>）</td>
+    <td>展开 hosts 组时，一次性构建几千个节点对象。列表本身是懒加载的，但<b>数据不是</b></td>
+  </tr>
+  <tr>
+    <td>判定列随连接状态整体消失</td>
+    <td><code>ipStats</code> 只在隧道运行时抓一次快照（<code>RulesScreen.kt:130–146</code>），断开时置为 <code>null</code>，判定行整列不渲染（<code>:632</code>）</td>
+    <td>断开时用户看到的是「没有这一列」，而不是「连接后可查看」。功能是好的，表达是空的</td>
+  </tr>
+</table>
+
+<div class="rule"></div>
+
+<!-- =========================================================== -->
+<h2 class="sec">1 · 跨页面统一（建议新增的组件） <span>零内核改动</span></h2>
+<p class="sub">
+  结论：抽三个组件，<b>替换掉 0 节里所有的重复代码</b>。这一步没有任何内核依赖，风险最低，建议排进第一批。
+  组件库当前目录 <code>ui/components/</code> 下没有页面头、空状态、比例条、统计块这四类零件——这正好是三个页面的共同缺口。
+</p>
+
+<div class="row" style="margin-top:16px;">
+
+  <div class="panel" style="width:440px;">
+    <div class="ph">① DetourPageHeader(title, subtitle?, actions)</div>
+    <div style="border:1px dashed #D9D4E6; border-radius:12px; padding:12px 14px;">
+      <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:10px;">
+        <div>
+          <div style="font-size:16px; font-weight:650;">日志</div>
+          <div style="font-size:11px; color:#6B6B75; margin-top:2px;">最近 500 条 · 会话与错误</div>
+        </div>
+        <div style="display:flex; gap:6px;">
+          <div style="width:26px;height:26px;border-radius:50%;background:#F1EFF7;"></div>
+          <div style="width:26px;height:26px;border-radius:50%;background:#F1EFF7;"></div>
+          <div style="width:26px;height:26px;border-radius:50%;background:#F1EFF7;"></div>
+        </div>
+      </div>
+    </div>
+    <p class="sub" style="font-size:11.5px; margin-top:10px;">
+      替换：规则页 <code>RulesScreen.kt:213–299</code> 的整个头部 Row、日志页 <code>LogsScreen.kt:102–207</code> 的整个头部 Row、首页 <code>HomeScreen.kt:118–121</code> 的裸标题。
+      三页标题字号与左右留白从此一致。<code>actions</code> 是右侧动作槽，规则的「全部关闭/刷新」、日志的「暂停/清空/分享」都塞进来。
+    </p>
+  </div>
+
+  <div class="panel" style="width:440px;">
+    <div class="ph">② DetourEmptyState(icon, title, detail?, action?)</div>
+    <div style="border:1px dashed #D9D4E6; border-radius:12px; padding:18px 14px; text-align:center;">
+      <div style="width:38px;height:38px;border-radius:50%;background:#F1EFF7;margin:0 auto 8px;"></div>
+      <div style="font-size:12.5px; font-weight:650;">还没有日志</div>
+      <div style="font-size:11px; color:#6B6B75; margin-top:3px; line-height:1.5;">连接一次后，内核事件会出现在这里</div>
+      <div style="display:inline-block; margin-top:9px; font-size:11px; color:#4E2F91; border:1px solid #D9D4E6; border-radius:999px; padding:4px 12px;">去连接</div>
+    </div>
+    <p class="sub" style="font-size:11.5px; margin-top:10px;">
+      替换：<code>RulesScreen.kt:692–706</code> 的 <code>EmptyHint</code> 与 <code>LogsScreen.kt:224–239</code> 的内联空状态。
+      两份并一份，且补上图标、说明与下一步动作——<b>空状态是唯一能告诉用户「为什么这里是空的、接下来点哪」的地方</b>。
+    </p>
+  </div>
+
+  <div class="panel" style="width:440px;">
+    <div class="ph">③ DetourRatioBar(fraction)</div>
+    <div style="border:1px dashed #D9D4E6; border-radius:12px; padding:14px;">
+      <div style="display:flex; justify-content:space-between; font-size:11px; color:#6B6B75; margin-bottom:5px;">
+        <span>命中规则</span><span style="color:#1B1B1F; font-weight:650;">82%</span>
+      </div>
+      <div class="bar"><i style="width:82%;"></i></div>
+      <div style="display:flex; justify-content:space-between; font-size:9.5px; color:#9A98A6; margin-top:5px;">
+        <span>命中 1,204</span><span>直连 264</span>
+      </div>
+    </div>
+    <p class="sub" style="font-size:11.5px; margin-top:10px;">
+      用于首页「命中规则」的比例（现在是一句文字，<code>HomeScreen.kt:326–338</code>）与规则页的可用率。
+      比例条把「一个百分比」变成「一眼能比的长短」，是这两处最划算的视觉升级。<b>纯 UI，数据现成。</b>
+    </p>
+  </div>
+
+</div>
+
+<div class="box ok">
+  <p class="t">为什么先做这一节</p>
+  <p>这三个组件把 0 节里的<b>四类重复</b>一次收口（头部 ×3、空状态 ×2、比例表达 ×2、动作槽 ×5）。
+  它们不碰内核、不碰导航、不改数据结构，是整份方案里唯一「做完不可能变坏」的一步。</p>
+</div>
+
+<div class="rule"></div>
+
+<!-- =========================================================== -->
+<h2 class="sec">2 · 玻璃在长列表上的取舍 <span>本方案最重要的一节</span></h2>
+
+<div class="box warn">
+  <p class="t"><span class="tagm guess">待实测</span> 本节结论中的性能判断属于<b>推断</b>，不是实测</p>
+  <p>目标机是 <b>2 核 / 2GB</b>，<code>isLowEndDevice</code> 让 <code>auto</code> 档在这台机器上解析为 <code>off</code>——正因为如此。
+  下文关于「每帧 N 次采样」的判断来自代码结构与玻璃的实现方式，<b>上线前必须在目标机上实测帧时间</b>，不能以本节文字为准。</p>
+</div>
+
+<h3>结论</h3>
+<p class="sub">
+  <b>把长列表从「每行一张玻璃」改成「整个列表容器一张玻璃，行内不再单独上玻璃」。</b>
+  这是整份方案里<b>唯一一处建议减少玻璃</b>的地方，其余各页都是维持或增加。
+</p>
+
+<div class="sampwrap">
+  <div class="samp">
+    <p class="hd">现在：日志页每行一张玻璃</p>
+    <p class="hint">一屏十余行 ⇒ 每帧十余次背景采样 + 模糊（<code>LogsScreen.kt:287–333</code>）</p>
+    <div class="glassrow"><div class="lrow"><span>16:34:02.118 内核启动</span><span class="badge">采样</span></div></div>
+    <div class="glassrow"><div class="lrow"><span>16:34:02.204 规则缓存命中</span><span class="badge">采样</span></div></div>
+    <div class="glassrow"><div class="lrow"><span>16:34:02.517 握手成功 128ms</span><span class="badge">采样</span></div></div>
+    <div class="glassrow"><div class="lrow"><span>16:34:03.001 候选 2 已取消</span><span class="badge">采样</span></div></div>
+    <div class="glassrow"><div class="lrow"><span>16:34:04.882 候选 3 超时</span><span class="badge">采样</span></div></div>
+    <div class="glassrow"><div class="lrow"><span>16:34:05.010 隧道已建立</span><span class="badge">采样</span></div></div>
+    <div class="count red">≈ 6–12 次采样 / 帧（随可见行数增长）</div>
+  </div>
+
+  <div class="samp" style="background:#F4FAF6; border-color:#D3EBDE;">
+    <p class="hd">建议：整列表一张玻璃</p>
+    <p class="hint">容器采样一次，行内用分隔线区分，视觉上仍是磨砂列表</p>
+    <div class="glassone">
+      <div class="lrow"><span>16:34:02.118 内核启动</span></div>
+      <div class="lrow"><span>16:34:02.204 规则缓存命中</span></div>
+      <div class="lrow"><span>16:34:02.517 握手成功 128ms</span></div>
+      <div class="lrow"><span>16:34:03.001 候选 2 已取消</span></div>
+      <div class="lrow"><span>16:34:04.882 候选 3 超时</span></div>
+      <div class="lrow"><span>16:34:05.010 隧道已建立</span></div>
+    </div>
+    <div class="count green">1 次采样 / 帧（与行数无关）</div>
+  </div>
+</div>
+
+<h3>代价（必须说清楚）</h3>
+<ul class="sub">
+  <li><b>行间不再有各自的高光与独立轮廓。</b>现在每行边缘都有一圈白色高光，行与行之间是「一叠玻璃片」的层次；改成整块之后，行之间只剩一条分隔线，层次感变平。</li>
+  <li><b>滚动的「穿透感」变弱。</b>每行独立玻璃时，滚动中行与行的高光会错动，观感更「活」；整块玻璃则是一整面静止的磨砂，滚动只体现在文字位移。</li>
+  <li><b>视觉上是可接受的。</b>因为日志/规则列表本来就是要读内容，不是要欣赏材质。玻璃在这里是「底」，不是「主角」。</li>
+</ul>
+
+<h3>两个可选做法</h3>
+<table>
+  <tr><th>做法</th><th>描述</th><th>适合</th></tr>
+  <tr>
+    <td><b>(a) 列表容器玻璃 + 行分隔线</b></td>
+    <td>整个 <code>LazyColumn</code> 的可见区域套一张玻璃容器，行内用 <code>DetourDivider</code> 分隔。采样恒为 1 次。</td>
+    <td><b>建议默认。</b>低端机与高端机表现一致，视觉稳定，改动集中在容器层</td>
+  </tr>
+  <tr>
+    <td><b>(b) 保持每行玻璃，仅在 <code>high</code> 档且设备非低端时启用</b></td>
+    <td>沿用现在的每行玻璃，但用玻璃档位门控：<code>off</code>/<code>low</code> 或低端机 → 退化成容器玻璃；<code>high</code> 且非低端 → 保留每行玻璃。</td>
+    <td>想要「一叠玻璃片」的观感，又不想在低端机上崩帧。代价是<b>同一个页面的观感随设备变化</b>，两台手机截图会不一样</td>
+  </tr>
+</table>
+
+<div class="box risk">
+  <p class="t">风险项</p>
+  <p>无论选哪个做法，<b>规则页展开后的 <code>DomainRow</code> / <code>AddressRow</code> 都不应逐行上玻璃</b>——那是一个可能展开到 <b>15952 行</b>的列表。
+  日志页最多几百行，风险尚可；规则页的量级完全不同。规则页的行保持现在的裸行是<b>正确</b>的，第 4 节只讨论它们的层级表达，不讨论材质。</p>
+</div>
+
+<div class="rule"></div>
+
+<!-- =========================================================== -->
+<h2 class="sec">3 · 首页（连接页） <span>读码所得 · 除第 6 项外零内核改动</span></h2>
+
+<p class="sub">
+  结论：首页的问题<b>不是材质，是信息被切成两张卡</b>。速率是一张卡、总流量是一张卡、规则状态是一张卡、命中规则又是一张卡——
+  而「规则在起作用吗」这个用户真正的问题，答案被摊在最后两张卡里，要滚动两次才能拼出来。
+</p>
+
+<div class="row" style="margin-top:14px; gap:26px;">
+  <div class="panel" style="width:340px;">
+    <div class="ph">现在（4 张独立卡）</div>
+    <div class="mcard"><div class="mtitle">↓ 下行</div><div class="mnum">2.4<em>MB/s</em></div></div>
+    <div class="mcard"><div class="mtitle">↑ 上行</div><div class="mnum">318<em>KB/s</em></div></div>
+    <div class="mcard">
+      <div class="mtitle">规则状态</div>
+      <div class="mrow"><span>规则源</span><span>github-hosts</span></div>
+      <div class="mrow"><span>缓存</span><span>新鲜 · 197KB · 2 分钟前</span></div>
+    </div>
+    <div class="mcard" style="margin-bottom:0;">
+      <div class="mtitle">命中规则</div>
+      <div class="mrow"><span style="color:#6B6B75;">命中规则的流量占 82%</span></div>
+      <div class="mrow"><span>命中</span><span>1204</span></div>
+      <div class="mrow"><span>直连</span><span>264</span></div>
+      <div class="mrow"><span>活动流</span><span>17</span></div>
+    </div>
+  </div>
+
+  <div class="panel" style="width:380px; border-color:#C9E7D7; background:#FBFEFC;">
+    <div class="ph">建议（速率合一张 · 规则合一张）</div>
+    <div class="mcard">
+      <div style="display:flex;">
+        <div style="flex:1;"><div class="mtitle">↓ 下行</div><div class="mnum">2.4<em>MB/s</em></div></div>
+        <div style="width:1px;background:#EFEDF5;margin:0 12px;"></div>
+        <div style="flex:1;"><div class="mtitle">↑ 上行</div><div class="mnum">318<em>KB/s</em></div></div>
+      </div>
+    </div>
+    <div class="mcard" style="margin-bottom:0;">
+      <div class="mtitle">规则与分流</div>
+      <div class="mrow"><span>规则源</span><span>github-hosts</span></div>
+      <div class="mrow"><span>缓存</span><span>新鲜 · 197KB · 2 分钟前</span></div>
+      <div class="mrow" style="display:block;">
+        <div style="display:flex;justify-content:space-between;font-size:10px;color:#6B6B75;margin-bottom:5px;"><span>命中规则</span><span style="color:#1B1B1F;font-weight:650;">82%</span></div>
+        <div class="bar"><i style="width:82%;"></i></div>
+      </div>
+      <div class="mrow"><span>命中 / 直连 / 活动流</span><span>1204 / 264 / 17</span></div>
+    </div>
+    <p class="sub" style="font-size:11px; margin-top:10px;">同一屏就能读出「规则在起作用吗」。少一次滚动，也少一次玻璃采样。</p>
+  </div>
+</div>
+
+<h3>逐项建议</h3>
+<table>
+  <tr><th>#</th><th>建议</th><th>理由与取舍</th><th>依赖</th></tr>
+  <tr>
+    <td>1</td>
+    <td><b>「规则状态」+「命中规则」合并为一张「规则与分流」卡</b><br><small>源 / 缓存新鲜度 / 命中率比例条 / 命中 / 直连 / 活动流</small></td>
+    <td>两张卡回答同一个问题。合并后：信息在一屏内闭环；命中率从一句文字升级为比例条（第 1 节的组件）；少一张玻璃采样。<b>代价：</b>卡片变高，但首页本来就是可滚动的（<code>HomeScreen.kt:109–113</code>）</td>
+    <td>第 1 节组件</td>
+  </tr>
+  <tr>
+    <td>2</td>
+    <td><b>速率双卡合并为一张双列卡</b>，中间一条竖分隔线</td>
+    <td>下行/上行天然是一对，现在被 <code>Arrangement.spacedBy(12.dp)</code> 拆成两张（<code>HomeScreen.kt:224–240</code>）。合并后省一次玻璃采样，也少一条缝。<b>注意：</b>「隐藏 0 B/s」的行为要保留（<code>:220–222</code> 的理由是「一对零读起来像隧道卡住了」），合并后整张卡一起隐藏即可</td>
+    <td>无</td>
+  </tr>
+  <tr>
+    <td>3</td>
+    <td><b>新增「已连接 mm:ss」</b></td>
+    <td>现在首页<b>没有连接时长</b>。这是纯本地计时：记住连接时刻，每秒/每分钟自增即可，<b>不需要任何内核改动</b>。放在状态文字下方，是「我连了多久」这个高频问题的直接答案</td>
+    <td>无</td>
+  </tr>
+  <tr>
+    <td>4</td>
+    <td><b>错误态给一个「查看日志」动作</b></td>
+    <td>现在失败只有红字 + 一句通用提示（<code>HomeScreen.kt:199–216</code>），用户看得到问题却无处可去。加一个按钮跳到日志页。<b>依赖：</b>需要壳层提供一个跨页导航回调（现在 <code>MainActivity.kt:253–258</code> 的 <code>when</code> 是单向的，页面拿不到「切到日志」的能力）</td>
+    <td><span class="tag new">shell 支持</span></td>
+  </tr>
+  <tr>
+    <td>5</td>
+    <td><b>模式 chip 被禁用时加副标题「断开后可切换」</b></td>
+    <td>chip 在运行中被禁用（<code>HomeScreen.kt:139–141</code>，<code>enabled = !status.isRunning</code>），但界面上<b>没有任何文字解释为什么点不动</b>。加一行小字即可，零成本</td>
+    <td>无</td>
+  </tr>
+  <tr>
+    <td>6</td>
+    <td><b>速率 sparkline（可选，后续）</b></td>
+    <td>把速率从「瞬时数字」升级为「最近 N 秒的曲线」。<b>需要内核改动</b>：<code>Rate</code> 目前只给瞬时值，要保留一个历史环形缓冲。明确列为第三批，不在本方案范围内</td>
+    <td><span class="tag new">内核改动</span></td>
+  </tr>
+</table>
+
+<div class="box info">
+  <p class="t">关于第 1 项的边界</p>
+  <p>「命中规则」卡只在隧道运行时出现（<code>HomeScreen.kt:318</code>）。合并后要处理「未运行时」的形态：建议<b>保留卡片、隐藏分流部分</b>，
+  只显示源与缓存——因为「规则状态」本来就是常驻信息，不该随连接状态整张消失。</p>
+</div>
+
+<div class="rule"></div>
+
+<!-- =========================================================== -->
+<h2 class="sec">4 · 规则页 <span>读码所得 · 第 3 项需注意规模</span></h2>
+
+<p class="sub">
+  结论：规则页是三个页面里<b>信息层级最复杂、规模最大</b>的。它的核心矛盾是「三层结构（组 → 域名 → 地址）」与「一次性展平的列表」之间的张力。
+</p>
+
+<h3>逐项建议</h3>
+<table>
+  <tr><th>#</th><th>建议</th><th>理由与取舍</th><th>依赖</th></tr>
+  <tr>
+    <td>1</td>
+    <td><b>展开后的 Domain / Address 行：并进组卡（嵌套）还是保持裸行？</b></td>
+    <td>两种做法都成立，取舍如下表。<b>建议保持裸行</b>，但用「层级缩进 + 左侧导轨线」强化层级</td>
+    <td>无</td>
+  </tr>
+  <tr>
+    <td>2</td>
+    <td><b>新增「只看有问题的」筛选</b><br><small>把判定非 ok 的域名/地址提到顶层</small></td>
+    <td>这是本页最实际的用法——「为什么某个站不通」。数据来自已有的 <code>ipStats</code>（<code>RulesScreen.kt:143–145</code>），<b>无需内核改动</b>。实现上是在 <code>rows()</code> 的结果上再过滤一层</td>
+    <td>无</td>
+  </tr>
+  <tr>
+    <td>3</td>
+    <td><b>组内规模治理：默认只展开前 N 个 + 「显示全部」</b></td>
+    <td><code>rows()</code>（<code>core/RuleIndex.kt:69–133</code>）一次性展平。<b>hosts 组 5225 域名 / 15952 地址</b>，展开即一次性构建几千个对象。建议默认只展开前 N 个（如 50）域名，底部给「显示全部（还有 5175 个）」。<b>代价：</b>用户要多点一次；<b>收益：</b>避免展开大组时的明显卡顿</td>
+    <td>无</td>
+  </tr>
+  <tr>
+    <td>4</td>
+    <td><b>断开时显示「连接后可查看地址判定」</b>，而不是整列消失</td>
+    <td>现在 <code>ipStats == null</code> 时判定行完全不渲染（<code>RulesScreen.kt:632</code>）。加一行占位说明，用户才知道这一列是「暂时没有」而不是「不存在」</td>
+    <td>无</td>
+  </tr>
+  <tr>
+    <td>5</td>
+    <td><b>头部两个无文字图标按钮的可发现性</b></td>
+    <td>「全部关闭/开启」与「刷新」都只有图标（<code>RulesScreen.kt:266–298</code>）。建议加长按提示（Tooltip）或在下拉里给出带文字的动作。<b>特别是「全部关闭」</b>——它是破坏性动作，现在只在组数超过阈值时才确认（<code>:274</code>），图标本身却看不出危险性</td>
+    <td>无</td>
+  </tr>
+  <tr>
+    <td>6</td>
+    <td><b>搜索框写明匹配范围</b></td>
+    <td><code>rows()</code> 已实现「组名 / 域名 / 地址」子串匹配，但界面上只写「搜索」（<code>RulesScreen.kt:309</code>）。把提示文案改成「搜索组名、域名或地址」，用户才知道可以按 IP 搜</td>
+    <td>无</td>
+  </tr>
+</table>
+
+<h3 class="q">第 1 项展开：并进组卡 vs 保持裸行</h3>
+<div class="row" style="gap:22px;">
+  <div class="panel" style="flex:1; min-width:400px;">
+    <div class="ph">做法 A · 并进组卡（嵌套）</div>
+    <div class="gcard" style="margin-bottom:8px;">
+      <div class="mrow"><b>广告拦截</b><span>1,204 域名 · 318 地址</span></div>
+      <div class="mrow" style="padding-left:14px;"><span>cdn.example.com</span><span style="font-size:10px;color:#14744A;">命中</span></div>
+      <div class="mrow" style="padding-left:28px;"><span style="font-family:Consolas,monospace;">10.0.0.1</span><span style="font-size:10px;color:#14744A;">可用</span></div>
+      <div class="mrow" style="padding-left:28px;"><span style="font-family:Consolas,monospace;">10.0.0.2</span><span style="font-size:10px;color:#9A2C22;">曾失败</span></div>
+    </div>
+    <p class="sub" style="font-size:11.5px;">
+      <b>优点：</b>层级一目了然，一个组就是一张卡，缩进即层级。<br>
+      <b>缺点：</b>整张组卡是玻璃的，嵌套后<b>组卡会随展开无限变高</b>，一张卡可能包住 15952 行；玻璃容器的高度失去意义，且展开动画会变得很重。
+    </p>
+  </div>
+  <div class="panel" style="flex:1; min-width:400px; border-color:#C9E7D7; background:#FBFEFC;">
+    <div class="ph">做法 B · 保持裸行 + 左侧导轨线（建议）</div>
+    <div class="gcard" style="margin-bottom:6px;">
+      <div class="mrow"><b>广告拦截</b><span>1,204 域名 · 318 地址</span></div>
+    </div>
+    <div style="border-left:2px solid #D9D4E6; margin-left:14px; padding-left:12px;">
+      <div style="font-size:11px; padding:5px 0; border-bottom:1px solid #EFEDF5;">cdn.example.com <span style="color:#14744A;">· 命中</span></div>
+      <div style="border-left:2px solid #E7E5EE; margin-left:10px; padding-left:10px;">
+        <div style="font-size:10.5px; font-family:Consolas,monospace; padding:4px 0; border-bottom:1px solid #EFEDF5;">10.0.0.1 <span style="color:#14744A;">可用 · 42ms</span></div>
+        <div style="font-size:10.5px; font-family:Consolas,monospace; padding:4px 0;">10.0.0.2 <span style="color:#9A2C22;">曾失败</span></div>
+      </div>
+    </div>
+    <p class="sub" style="font-size:11.5px;">
+      <b>优点：</b>组卡保持一张矮卡（玻璃的意义还在）；层级靠左侧导轨线表达，展开任意多行都不改变卡的形状；列表懒加载照常生效。<br>
+      <b>缺点：</b>缩进 + 导轨线不如「装进同一个盒子」那样强绑定，需要用户理解导轨的含义。
+    </p>
+  </div>
+</div>
+
+<div class="box risk">
+  <p class="t">风险项 · 第 5 项</p>
+  <p>「全部关闭」是<b>破坏性动作</b>：它一次性把所有组关掉，页面上不会显示「刚刚关掉了多少流量」。
+  现在的确认逻辑只在组数超过阈值时弹出（<code>RulesScreen.kt:258–264</code>、<code>:274</code>），也就是说<b>组数少时它是静默执行的</b>。
+  建议至少在动作后给一条可撤销的提示（Snackbar + 撤销），或把确认阈值降下来。这一条建议优先于它的图标美化。</p>
+</div>
+
+<div class="rule"></div>
+
+<!-- =========================================================== -->
+<h2 class="sec">5 · 日志页 <span>读码所得</span></h2>
+
+<p class="sub">
+  结论：日志页的<b>材质问题在第 2 节</b>（每行一张玻璃），本节只谈功能与可读性。日志页现在是一个「能看」的列表，
+  但不是一个「能查」的列表——没有搜索、没有复制全部、时间戳跨天分不清。
+</p>
+
+<table>
+  <tr><th>#</th><th>建议</th><th>理由与取舍</th><th>依赖</th></tr>
+  <tr>
+    <td>1</td>
+    <td><b>玻璃密度：见第 2 节</b></td>
+    <td>每行一张玻璃 → 整列表一张玻璃。这是本页唯一的材质改动</td>
+    <td>无</td>
+  </tr>
+  <tr>
+    <td>2</td>
+    <td><b>新增搜索（按 tag / 关键字）</b></td>
+    <td>现在只有四个筛选 chip（全部/会话/错误/DNS，<code>LogsScreen.kt:209–220</code>），<b>没有搜索</b>。要找一个具体 tag 或一段消息，只能肉眼扫。加一个搜索框，在 <code>visible</code>（<code>:96–99</code>）的过滤链上再加一环即可</td>
+    <td>无</td>
+  </tr>
+  <tr>
+    <td>3</td>
+    <td><b>新增「复制全部」</b></td>
+    <td>现在只能长按复制单行（<code>LogsScreen.kt:296–300</code>）。「复制全部」应<b>受当前筛选影响</b>——用户筛选出错误日志，就是想把这批错误贴给别人。注意导出分享已有（<code>:142–206</code>），但那是文件，粘贴板是另一回事</td>
+    <td>无</td>
+  </tr>
+  <tr>
+    <td>4</td>
+    <td><b>时间戳补日期（跨天）</b></td>
+    <td>现在是 <code>HH:mm:ss.SSS</code>（<code>LogsScreen.kt:277</code>），<b>没有日期</b>。跨天的日志无法区分先后，导出到文件后更明显。建议当天的只显示时间、非当天的前面加日期</td>
+    <td>无</td>
+  </tr>
+  <tr>
+    <td>5</td>
+    <td><b>新增「回到最新」浮标</b></td>
+    <td>现在刻意不自动滚动（<code>LogsScreen.kt:56–59</code>，理由充分：自动滚动会让想读的人读不了）。但想跟实时日志时<b>没有任何入口</b>。加一个「回到最新」按钮，只在用户已向上滚动时出现——既保留「不打扰」，又给了「我要跟」的路径</td>
+    <td>无</td>
+  </tr>
+  <tr>
+    <td>6</td>
+    <td><b>三个无文字图标按钮加标签或长按提示</b></td>
+    <td>暂停/清空/分享都只有图标（<code>LogsScreen.kt:113–206</code>）。其中「清空」不可撤销，风险最高</td>
+    <td>无</td>
+  </tr>
+</table>
+
+<div class="box info">
+  <p class="t">第 3 项与第 5 项是同一个需求的两种形态</p>
+  <p>「复制全部」和「回到最新」都在回答「我想把日志拿出来用」。「复制全部」解决「贴给别人」，「回到最新」解决「盯实时」。
+  两者互不替代，且都不需要内核改动。</p>
+</div>
+
+<div class="rule"></div>
+
+<!-- =========================================================== -->
+<h2 class="sec">6 · 悬浮栏与内容（跨页） <span>唯一的结构性取舍</span></h2>
+
+<p class="sub">
+  结论：<b>建议本批保持方案 A（现状），把方案 B 列为独立批次。</b>理由不是 B 不好，而是 B 会动到每一页的底部边缘，
+  而底部边缘刚因为玻璃与壁纸做过一轮调整——现在动它，回归风险最高。
+</p>
+
+<div class="row" style="margin-top:14px;">
+  <div>
+    <p class="ph" style="font-size:11.5px;font-weight:650;color:#4E2F91;margin:0 0 8px;">方案 A · 现状（内容在栏上方）</p>
+    <div class="phonebar">
+      <div class="screen">
+        <div class="blob"></div>
+        <div class="contentx">
+          <div class="mini">卡片 A</div>
+          <div class="mini">卡片 B</div>
+        </div>
+        <div class="fbar"><span style="color:#4E2F91;font-weight:650;">连接</span><span>规则</span><span>日志</span><span>设置</span></div>
+      </div>
+    </div>
+    <p class="sub" style="font-size:11px; margin-top:8px; max-width:300px;">
+      内容被 <code>Scaffold</code> 的 <code>insets</code> 垫在栏上方（<code>MainActivity.kt:240–244</code>）。<b>悬浮栏只折射装饰背景，不折射滚动内容。</b>
+    </p>
+  </div>
+
+  <div>
+    <p class="ph" style="font-size:11.5px;font-weight:650;color:#8A5A0F;margin:0 0 8px;">方案 B · 内容滚到栏下（栏真正折射内容）</p>
+    <div class="phonebar">
+      <div class="screen">
+        <div class="blob"></div>
+        <div class="contentx" style="top:16px; gap:8px;">
+          <div class="mini">卡片 A</div>
+          <div class="mini">卡片 B</div>
+          <div class="mini" style="opacity:.7;">卡片 C（被栏遮住一半）</div>
+        </div>
+        <div class="fbar"><span style="color:#4E2F91;font-weight:650;">连接</span><span>规则</span><span>日志</span><span>设置</span></div>
+      </div>
+    </div>
+    <p class="sub" style="font-size:11px; margin-top:8px; max-width:300px;">
+      内容延伸到栏下方，栏的模糊会<b>真实地扭曲滚过去的文字</b>。观感提升明显，代价见下表。
+    </p>
+  </div>
+</div>
+
+<table>
+  <tr><th>维度</th><th>方案 A（现状）</th><th>方案 B（内容滚到栏下）</th></tr>
+  <tr><td>观感</td><td>栏折射纯背景，玻璃效果偏「平」</td><td>栏折射滚动内容，玻璃质感真正成立</td></tr>
+  <tr><td>每页底部留白</td><td>由 <code>Scaffold</code> 统一处理，各页无需关心</td><td><b>每页都要自己算底部 padding</b>，漏一个就会出现「最后一行被栏盖住」</td></tr>
+  <tr><td><code>Scaffold</code> insets 语义</td><td>标准用法</td><td>要改成「内容不吃底部 inset、只吃顶部」，<b>语义反转，容易误改</b></td></tr>
+  <tr><td>LazyColumn 性能</td><td>列表底部不渲染</td><td>列表底部要多渲染一屏内容；规则页大列表上叠加第 4 节的规模问题，风险叠加</td></tr>
+  <tr><td>对刚完成的玻璃/壁纸的回归风险</td><td>无</td><td><b>高。</b>底栏的 backdrop 采样源、装饰层与内容的叠放顺序都可能需要重算</td></tr>
+  <tr><td>代码现状</td><td>已被 <code>MainActivity.kt:277–282</code> 明确标注为「已知后续项，本次刻意不做」</td><td>正是那句话所指的那件事</td></tr>
+</table>
+
+<div class="box warn">
+  <p class="t">建议</p>
+  <p>先做方案 A（即：本批不动）。等第 1–5 节的内容改动全部落地并验证稳定后，再单独开一批做方案 B，
+  届时只改 <code>MainActivity.kt</code> 与各页的底部 padding，改动面清晰、可独立回滚。<b>是否要做，交给你决定。</b></p>
+</div>
+
+<div class="rule"></div>
+
+<!-- =========================================================== -->
+<h2 class="sec">7 · 实施顺序建议 <span>风险低 → 高，依赖少 → 多</span></h2>
+
+<p class="sub">结论：分三批。<b>第一批完全不含内核改动，也不含导航改动</b>，可以立即开始并独立验证。</p>
+
+<ol class="steps">
+  <li><span class="batch b1">第一批 · 纯 UI</span><b>新增三个统一组件</b>（第 1 节：<code>DetourPageHeader</code> / <code>DetourEmptyState</code> / <code>DetourRatioBar</code>），并替换掉 0 节列出的重复实现。<b>零内核、零导航。</b></li>
+  <li><span class="batch b1">第一批 · 纯 UI</span><b>首页合并卡片</b>（第 3 节 1、2 项）：规则状态 + 命中规则合并为「规则与分流」；速率双卡合并为双列卡。</li>
+  <li><span class="batch b1">第一批 · 纯 UI</span><b>首页零成本项</b>（第 3 节 3、5 项）：新增「已连接 mm:ss」；模式 chip 禁用时加副标题。</li>
+  <li><span class="batch b1">第一批 · 纯 UI</span><b>日志页功能</b>（第 5 节 2–5 项）：搜索、复制全部、时间戳跨天、「回到最新」浮标。</li>
+  <li><span class="batch b1">第一批 · 纯 UI</span><b>规则页筛选与文案</b>（第 4 节 2、4、6 项）：「只看有问题的」筛选、断开时的判定占位说明、搜索范围文案。</li>
+  <li><span class="batch b1">第一批 · 纯 UI</span><b>长列表玻璃密度</b>（第 2 节）：把日志页从「每行一张玻璃」改成「整列表一张玻璃」。<b>建议先上机实测帧时间再定做法 (a)/(b)。</b></li>
+  <li><span class="batch b2">第二批 · 需 shell 支持</span><b>跨页导航回调</b>（第 3 节 4 项）：让首页错误态能跳到日志页。</li>
+  <li><span class="batch b2">第二批 · 需 shell 支持</span><b>悬浮栏方案 B</b>（第 6 节）：内容滚到栏下。改动集中在 <code>MainActivity.kt</code> 与各页底部 padding，可独立回滚。</li>
+  <li><span class="batch b3">第三批 · 需内核改动</span><b>速率 sparkline</b>（第 3 节 6 项）：需要 <code>Rate</code> 保留历史缓冲，是唯一触及内核的项。</li>
+</ol>
+
+<div class="box ok">
+  <p class="t">第一批为什么安全</p>
+  <p>它不新增权限、不改数据结构、不改导航、不动内核，全部落在 <code>ui/</code> 与 <code>ui/components/</code> 里。
+  唯一有性能不确定性的第 6 条，也只影响日志页一个页面，且给了「先实测再定」的路径。</p>
+</div>
+
+<div class="rule"></div>
+
+<!-- =========================================================== -->
+<h2 class="sec">8 · 需要你决定的开放问题 <span>逐条编号 · 请按序号回复</span></h2>
+
+<div class="qcard">
+  <div class="qh"><div class="qn">1</div><div class="qt">日志 / 规则长列表的玻璃：保持「每行一张」还是改成「整列表一张」？</div></div>
+  <p class="sub">这是唯一一处建议减少玻璃的地方，也直接影响低端机的帧率。</p>
+  <div class="opts">
+    <div class="opt rec"><b>(a) 整列表一张玻璃</b>采样恒为 1 次，低端机与高端机表现一致；代价是行间失去独立高光，层次感变平。</div>
+    <div class="opt"><b>(b) 保持每行一张，按档位门控</b>只在 <code>high</code> 档且设备非低端时逐行玻璃；代价是同一页面在不同设备上观感不同。</div>
+    <div class="opt"><b>(c) 完全不动</b>维持现状，先上机实测再决定。</div>
+  </div>
+</div>
+
+<div class="qcard">
+  <div class="qh"><div class="qn">2</div><div class="qt">首页「规则状态」+「命中规则」是否合并成一张「规则与分流」？</div></div>
+  <p class="sub">合并后信息在一屏内闭环，命中率升级为比例条；代价是卡片变高。</p>
+  <div class="opts">
+    <div class="opt rec"><b>合并</b>两张卡回答同一个问题，合并是信息架构上的修正，不只是省地方。</div>
+    <div class="opt"><b>不合并</b>保持「规则状态常驻、命中规则仅在运行时出现」的现有区分。</div>
+  </div>
+</div>
+
+<div class="qcard">
+  <div class="qh"><div class="qn">3</div><div class="qt">规则页展开后的 Domain / Address 行：并进组卡还是保持裸行？</div></div>
+  <p class="sub">直接影响 hosts 组（5225 域名 / 15952 地址）展开时的表现。</p>
+  <div class="opts">
+    <div class="opt rec"><b>保持裸行 + 左侧导轨线</b>组卡保持矮卡，玻璃容器不随展开膨胀，列表懒加载照常。</div>
+    <div class="opt"><b>并进组卡（嵌套）</b>层级更直观，但一张卡可能包住上万行，展开动画很重。</div>
+  </div>
+</div>
+
+<div class="qcard">
+  <div class="qh"><div class="qn">4</div><div class="qt">悬浮栏下的内容滚动（方案 B）做不做？</div></div>
+  <p class="sub">唯一的结构性取舍，代价是每页底部 padding 重算与对玻璃/壁纸的回归风险。</p>
+  <div class="opts">
+    <div class="opt rec"><b>本批不做</b>先稳定内容改动，方案 B 单开一批，只改 <code>MainActivity.kt</code> 与各页底部 padding，可独立回滚。</div>
+    <div class="opt"><b>本批一起做</b>一次把观感做到位，但改动面扩大到每一页的底部边缘，验证成本显著上升。</div>
+  </div>
+</div>
+
+<div class="qcard">
+  <div class="qh"><div class="qn">5</div><div class="qt">是否需要速率 sparkline（需内核改动）？</div></div>
+  <p class="sub">把瞬时速率升级为最近一段时间的曲线，是唯一需要动内核的一项。</p>
+  <div class="opts">
+    <div class="opt"><b>需要，排第三批</b>观感提升明显，但要给 <code>Rate</code> 加历史环形缓冲，属于内核改动。</div>
+    <div class="opt rec"><b>暂不需要</b>先把纯 UI 的改进做完，观察一段时间再决定。</div>
+  </div>
+</div>
+
+</div>
+</body>
+</html>

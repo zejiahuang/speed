@@ -1,0 +1,15 @@
+[package]
+name = "watt-proxy"
+description = "No-Root HTTP CONNECT proxy: the path that needs neither TUN nor root"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+watt-net = { workspace = true }
+watt-rules = { workspace = true }
+# Diagnostics go through `log` rather than `eprintln!` so the Android shell can
+# point them at logcat. On Android, stderr from native code is not readable by
+# tag, which made every "the proxy logged nothing" conclusion wrong.
+log = "0.4"

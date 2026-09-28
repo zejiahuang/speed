@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = ["crates/watt-rules", "crates/watt-net", "crates/watt-stack", "crates/watt-daemon", "crates/watt-ffi", "crates/watt-proxy"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "GPL-3.0-only"
+repository = "https://github.com/zejiahuang/speed"
+
+[workspace.dependencies]
+watt-rules = { path = "crates/watt-rules" }
+watt-net = { path = "crates/watt-net" }
+watt-stack = { path = "crates/watt-stack" }
+watt-daemon = { path = "crates/watt-daemon" }
+watt-proxy = { path = "crates/watt-proxy" }

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  A Compose app still needs a platform theme for the window itself: the splash
+  frame the system draws before Compose is up, the status bar, and the
+  navigation bar. `Theme.Material3.DayNight.NoActionBar` is the closest platform
+  theme to what Compose will draw, so the handover does not flash a different
+  colour.
+
+  The window background is set to the same surface the Compose theme uses, which
+  is what stops a light flash on a cold start in dark mode.
+-->
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <style name="Theme.Detour" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/window_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar" tools:targetApi="m">true</item>
+    </style>
+</resources>

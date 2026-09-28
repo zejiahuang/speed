@@ -1,0 +1,18 @@
+[package]
+name = "watt-stack"
+description = "Full-traffic userspace kernel: TUN in, per-flow TCP/UDP relay out"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+# `libc` rather than `std::net`: the upstream descriptor has to be handed to the
+# platform before it connects, so `VpnService.protect` can exempt it from the
+# tunnel. `std::net` gives no access to the raw descriptor before connecting.
+libc = "0.2"
+smoltcp = { version = "0.11.0", default-features = false, features = ["std", "medium-ip", "proto-ipv4", "proto-ipv6", "socket-tcp", "socket-udp", "socket-icmp"] }
+watt-net = { workspace = true }
+watt-rules = { workspace = true }
+# Diagnostics through `log` so the Android shell can route them to logcat.
+log = "0.4"

@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- The tunnel is a foreground service: Android kills a background one, and a
+         killed tunnel is indistinguishable from a broken one. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application
+        android:name=".DetourApp"
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Detour">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.Detour">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- The tunnel, and in proxy mode just the service that owns the listener.
+             `specialUse` rather than `dataSync`: what this does is relay the
+             device's own traffic, which is not a sync job and not a media session,
+             and the other categories would each be a lie.
+
+             Android 14 rejects a foreground service that does not declare a type,
+             so this is required, not decoration. -->
+        <service
+            android:name=".core.DetourVpnService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+            android:permission="android.permission.BIND_VPN_SERVICE">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Relays device traffic through the rule set" />
+        </service>
+
+        <!-- adb control surface.
+             Exported so `adb shell am broadcast` can reach it, and gated on
+             BuildConfig.DEBUG in the receiver itself so a release build cannot be
+             driven this way. See ControlReceiver for the commands. -->
+        <receiver
+            android:name=".control.ControlReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="dev.detour.CONTROL" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Hands the log export to a share target. The authority is
+             `${applicationId}.fileprovider` because the Kotlin side computes
+             `context.packageName + ".fileprovider"`, and for this app
+             `packageName == applicationId == "dev.detour"`, so the two match.
+             Not exported: only this app may originate a URI from it, and the
+             share itself grants a one-shot read permission to the target. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+    </application>
+</manifest>

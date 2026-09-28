@@ -1,0 +1,45 @@
+# rules-puller 中转站 · 短网址重写
+#
+# 让 https://你的域名/1 和 /2 直接返回规则，而不是 /r.php?p=1。
+#
+# 只在你改了后台「中转站」里的路径时才需要改这个文件；
+# 改完记得同步下面的 RewriteRule。若你的面板有「伪静态」输入框，
+# 也可以把下面两条 RewriteRule 粘进去，效果一样。
+#
+# 不支持 .htaccess 的环境（部分 Nginx、或没开 AllowOverride）不影响使用 ——
+# 直接访问 r.php?p=1 / r.php?p=2 即可，功能完全一样。
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteBase /
+
+    # 已经是真实文件/目录的，别动（保护 admin.php、lib/、status.php 等）
+    RewriteCond %{REQUEST_FILENAME} -f [OR]
+    RewriteCond %{REQUEST_FILENAME} -d
+    RewriteRule ^ - [L]
+
+    # 中转站：/1 → UsbEAm 规则，/2 → S302 规则
+    # 路径要和后台「中转站」里设置的保持一致
+    RewriteRule ^1/?$ r.php?p=usbeam [L,QSA]
+    RewriteRule ^2/?$ r.php?p=s302   [L,QSA]
+</IfModule>
+
+# ---------------------------------------------------------------- 安全
+# data/ 里是状态、日志和密钥，绝不能被直接下载。
+# 中转站的产物由 r.php 读出来输出，不依赖直接访问 data/。
+RedirectMatch 404 ^/data/
+RedirectMatch 404 /\.git(/|$)
+
+<FilesMatch "^(settings\.json|security\.json|internal-secret\.txt|php-cli-path\.txt)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+<IfModule mod_headers.c>
+    Header set X-Content-Type-Options "nosniff"
+</IfModule>

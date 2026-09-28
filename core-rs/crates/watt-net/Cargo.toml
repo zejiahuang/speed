@@ -1,0 +1,10 @@
+[package]
+name = "watt-net"
+description = "Raw IP packet transport (Linux TUN, Android VpnService fd, in-memory test device)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+libc = "0.2"

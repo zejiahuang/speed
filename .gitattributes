@@ -1,0 +1,24 @@
+# Line endings are pinned to LF for everything textual.
+#
+# This repository is developed on Windows but *built and run* on Linux (WSL and
+# GitHub's runners). Git's default `core.autocrlf=true` on Windows would check
+# these files out with CRLF, and a CRLF shebang does not fail as "wrong line
+# ending" — it fails as `bash: scripts/app-build.sh: /usr/bin/env: bad
+# interpreter` or a bare "No such file or directory", which points at the script
+# instead of at the cause. Pinning it here means the checkout matches on every
+# machine without anyone having to configure Git.
+* text=auto eol=lf
+
+# Binary: never line-ending converted, never diffed as text.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.gif binary
+*.ico binary
+*.ttf binary
+*.otf binary
+*.so binary
+*.jks binary
+*.keystore binary
+*.zip binary
