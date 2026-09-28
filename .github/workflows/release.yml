@@ -55,17 +55,25 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      # `packages` 必须显式给。这个 action 的默认值是 `tools platform-tools`，
+      # 而 `tools` 早就从 Google 的仓库里删掉了 —— 默认值会让它自己的
+      # `sdkmanager --install` 以 "Failed to find package 'tools'" 退出码 1 失败，
+      # 表现为「安装 Android SDK」这一步就红了，与我们的构建毫无关系。
+      # 这里换成真实存在的包，并且一次把它该装的装完，省得再去猜它的 PATH。
       - name: 安装 Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools platforms;android-36 build-tools;36.0.0"
 
-      # compileSdk 是 36，所以 platform 36 与 build-tools 36.0.0 必须在场；
-      # 版本要和 android/app/build.gradle.kts 一起改，否则构建会在
-      # `:app:checkDebugAarMetadata` 之类的步骤上失败。
-      - name: 安装 SDK 组件
+      # `scripts/app-build.sh` 认的是 ANDROID_HOME（默认 ~/android-sdk），
+      # 而 runner 上的 SDK 在别处，必须显式指过去。
+      - name: 指向 runner 自带的 SDK
         run: |
           set -euo pipefail
-          sdkmanager --install "platforms;android-36" "build-tools;36.0.0" "platform-tools"
-          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          sdk="${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"
+          test -d "$sdk/platforms" || { echo "SDK 里没有 platforms：$sdk" >&2; exit 1; }
+          echo "ANDROID_HOME=$sdk" >> "$GITHUB_ENV"
+          ls "$sdk/platforms" "$sdk/build-tools"
 
       # 内核由 `scripts/android-build.sh` 用 NDK 的 clang 链接，所以 CI 必须有一个
       # 同版本的 NDK。解压到 `$HOME/android/android-ndk-r30`，正好是脚本的默认路径。
