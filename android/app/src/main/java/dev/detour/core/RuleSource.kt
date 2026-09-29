@@ -115,7 +115,7 @@ data class RuleSource(
          * transport, not the document.
          */
         private const val GITHUB_HOSTS_URL =
-            "https://no-such-mirror-12345.invalid/hosts"
+            "https://gh-proxy.com/https://raw.githubusercontent.com/maxiaof/github-hosts/master/hosts"
 
         /**
          * The other endpoints that serve the same document, tried in this order
