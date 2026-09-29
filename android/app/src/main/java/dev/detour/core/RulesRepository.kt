@@ -135,6 +135,15 @@ object RulesRepository {
 
     private const val TAG = "DetourRules"
 
+    /**
+     * The fewest entries a built-in document may parse to and still be accepted.
+     *
+     * Not an arbitrary round number — see [requireUsable] for the measurements it
+     * sits between. A built-in's size is known, so a floor can be enforced on it;
+     * a user-added source's is not.
+     */
+    private const val BUILTIN_MIN_ENTRIES = 10
+
     private const val CACHE_NAME = "rules.json"
 
     /**
@@ -397,13 +406,16 @@ object RulesRepository {
      * Fetch the selected source and return a kernel document that is known to
      * hold at least one rule.
      *
-     * The gates are not decoration. `fetchText` already refuses a non-200,
-     * because a 404 here is an HTML page that would parse as zero rules — but a
-     * *successful* response can also be unusable, and the kernel accepts it
-     * silently. See [looksLikeHtml] and [requireUsable].
+     * The gates are not decoration, and they catch different things: `fetchText`
+     * refuses a non-200 ("the server said it failed"), [looksLikeHtml] refuses a
+     * 200 that is a web page ("the server said it succeeded but did not send a
+     * document"), and [requireUsable] refuses a document that parsed to too few
+     * entries. None of them is redundant — a non-200 is not necessarily HTML, a
+     * 200 HTML page is not zero entries (measured: 1), and the kernel accepts a
+     * wrong-shaped document silently. See each for the measurement.
      *
      * Every URL in [RuleSource.fetchUrls] is tried in order and the first one
-     * that clears both gates wins. Endpoints die — eight of the eleven measured
+     * that clears every gate wins. Endpoints die — eight of the eleven measured
      * candidates for the default document were already gone — so a single URL is
      * a single point of failure the user cannot see or fix.
      */
@@ -442,7 +454,7 @@ object RulesRepository {
                 // rather than fail.
                 val document =
                     if (looksLikeKernelJson(text)) text.toByteArray() else toKernelDocument(text)
-                return requireUsable(document, url)
+                return requireUsable(document, source, url)
             } catch (err: Throwable) {
                 failures += "$url → ${err.message}"
                 KernelState.log(
@@ -466,21 +478,33 @@ object RulesRepository {
      *
      * A status check is not enough, and this is measured, not hypothetical:
      * `gitcode.com` answers **HTTP 200 with a rendered HTML page** for a plain
-     * text path that does not exist. The status check passes, the document parses
-     * to zero entries, and the tunnel comes up relaying nothing — a "successful"
-     * fetch that produces the worst possible state. HTML is what that false
-     * success looks like, so it is what this refuses.
+     * text path that does not exist. The status check passes — so the only
+     * question is whether the *entry count* catches it, and it does **not**.
+     * Feeding the real GitCode error page through the real Rust parse chain
+     * (verbatim `watt_merge_documents`, the chain behind `Kernel.merge`) yields
+     * **entryCount = 1**, not 0, because the page contains the line
      *
-     * It is not a redundant second gate on top of the entry count. The two catch
-     * different things, and this one catches it *earlier*: an HTML page is
-     * rejected as "not a document at all", whereas [requireUsable] only sees the
-     * aftermath (zero entries). The reason HTML also happens to produce zero
-     * entries is structural — the tokens in an error page (`<html>`, `<!DOCTYPE`,
-     * `href="…"`) carry angle brackets, quotes and colons that
-     * `normalize_domain`'s character class rejects, and a single-token line has
-     * no second field for the hosts parser to read — but relying on that would
-     * mean a future parser change could turn an HTML page back into a silent
-     * zero-rule tunnel.
+     * ```text
+     * hm.src = "https://hm.baidu.com/hm.js?62047c952451105d57bab2c4af9ce85b";
+     * ```
+     *
+     * `hm.src` has a dot and passes `normalize_dial_name`'s character class as
+     * the address, and `=` is accepted as the **domain** — `hosts.rs:116-120`
+     * applies the character-class gate only to the *first* column and barely
+     * checks the domain column at all. So an HTML error page can conjure a
+     * handful of fabricated entries and sail through a "more than zero" check.
+     * (Control: the same path counts **40** entries for `raw.hellogithub.com`,
+     * and **2** for a hand-built file of two valid dotted names — the harness is
+     * sound; it is the HTML that produces junk, not zero.)
+     *
+     * That is why this marker check is the **only** thing that recognises "this
+     * is not a rule document", not a redundant second gate. The direction of the
+     * structural argument still holds — an error page's own tokens (`<html>`,
+     * `<!DOCTYPE`, `href="…"`) carry angle brackets, quotes and colons the
+     * character class rejects, and a single-token line has no second field — but
+     * it is not *sufficient*: a token like `hm.src = "…"` splits into two
+     * plausible fields, so relying on the parser to reject HTML would leave the
+     * page's junk entries in the document.
      *
      * The test is a plain case-insensitive `contains`, not a regex and not a
      * parse: the question is only "is this obviously *not* a rule document", and
@@ -496,7 +520,7 @@ object RulesRepository {
         runCatching { JSONObject(text).optJSONArray("groups") != null }.getOrDefault(false)
 
     /**
-     * Refuse a document that would relay nothing.
+     * Refuse a document that would relay nothing — or almost nothing.
      *
      * Every field on the kernel's `RuleDocument` is `#[serde(default)]`, so a
      * whole-document shape mismatch is accepted as `Ok(document with zero
@@ -507,14 +531,36 @@ object RulesRepository {
      * entries is the only place that can catch it, so it happens here, before the
      * document is cached or handed to a tunnel.
      *
-     * [url] is the address that was actually tried, not the source's primary one:
-     * with mirrors in play the primary URL is often *not* what was fetched, and
-     * an error naming an address that was never contacted sends the reader to the
-     * wrong endpoint.
+     * "More than zero" is not enough for a built-in, and the threshold is 10
+     * because of what was measured, not because it is a round number:
+     *
+     * * legitimate documents — `maxiaof/github-hosts` **37** entries,
+     *   `raw.hellogithub.com` **40**;
+     * * garbage that parses anyway — the GitCode HTML error page **1** entry
+     *   (from `hm.src = "https://…"`, see [looksLikeHtml]), a hand-built file of
+     *   two valid dotted names **2**.
+     *
+     * 10 sits an order of magnitude above the garbage and roughly four times
+     * below the legitimate values, so it has margin on both sides: it cannot be
+     * reached by a stray line, and it will not trip on a real document that
+     * shrinks a little upstream.
+     *
+     * The floor applies **only to built-ins**. Their size is something we have
+     * measured, so a floor is safe; a user-added source's size is not, and
+     * imposing one would reject a legitimately small custom list.
+     *
+     * [source] carries both `builtin` and the primary URL; [url] is the address
+     * that was actually tried, not the primary one: with mirrors in play the
+     * primary URL is often *not* what was fetched, and an error naming an address
+     * that was never contacted sends the reader to the wrong endpoint.
      */
-    private fun requireUsable(document: ByteArray, url: String): ByteArray {
-        if (entryCount(document) == 0) {
-            throw IllegalStateException("规则源没有解析出任何规则：$url")
+    private fun requireUsable(document: ByteArray, source: RuleSource, url: String): ByteArray {
+        val count = entryCount(document)
+        val floor = if (source.builtin) BUILTIN_MIN_ENTRIES else 1
+        if (count < floor) {
+            throw IllegalStateException(
+                "规则源「${source.id}」解析出的条目过少：$url（实测 $count 条，内置源要求至少 $floor 条）",
+            )
         }
         return document
     }
@@ -556,11 +602,19 @@ object RulesRepository {
             instanceFollowRedirects = true
         }
         return try {
-            // A 404 from this host is an HTML error page. Without the status
-            // check it parses as zero rules and the tunnel starts up relaying
-            // nothing — a working-looking tunnel that drops every packet, which
-            // is exactly the failure `watt-rules` warns about. The old
-            // endpoints were silently retired, so this is not hypothetical.
+            // The status check and [looksLikeHtml] answer two different
+            // questions, and this one is not made redundant by the other. This
+            // check is "did the server say it failed" — a non-200 (the old
+            // endpoints were silently retired, so a 404 here is not hypothetical)
+            // means there is nothing to read and the fetch must stop. It does
+            // **not** catch a server that says it succeeded and then hands back a
+            // web page: that is a 200, and [looksLikeHtml] is the only gate that
+            // sees it. Nor would the entry count stop it — the measured GitCode
+            // page parses to **1 fabricated entry**, not 0, from
+            // `hm.src = "https://…"` (see [looksLikeHtml]). This check must not
+            // be weakened on the theory that the HTML check covers it — a 404
+            // body is an HTML page only by convention, and a non-200 body could
+            // be anything.
             if (connection.responseCode != HttpURLConnection.HTTP_OK) {
                 throw java.io.IOException("HTTP ${connection.responseCode} for $url")
             }
