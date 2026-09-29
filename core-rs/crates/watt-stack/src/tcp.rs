@@ -2583,8 +2583,9 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Racing (happy eyeballs) — the invariants of
-    // docs/architecture/kernel-racing.md §5, exercised by the §7 cases.
+    // Racing (happy eyeballs) — the invariants of the kernel-racing design
+    // note (§5; the note itself is not distributed with this repository),
+    // exercised by its §7 cases.
     //
     // The candidate list is named here rather than produced by the planner on
     // purpose. A rule's alternatives pass through `is_blocked_target`, which

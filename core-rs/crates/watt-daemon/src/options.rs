@@ -18,8 +18,9 @@ use watt_stack::DestinationOverride;
 /// (`{"entries":[{"ip":..,"domain":..}]}`) that [`watt_rules::parse_document`]
 /// cannot read. Pointing this constant at `/rules` would ship a 404; pointing it
 /// at `/1?format=json` would ship a download that fails every six hours. An
-/// operator who runs their own `rules-puller` emitting the `groups` shape passes
-/// `--rules-url https://their-host/rules` and the JSON lane works again.
+/// operator who runs their own upstream rule aggregator emitting the `groups`
+/// shape passes `--rules-url https://their-host/rules` and the JSON lane works
+/// again.
 ///
 /// `Options::parse` skips the JSON refresh when this is empty (see `run`), so an
 /// empty default does not produce a fetch of the empty string.
@@ -37,12 +38,13 @@ pub const DEFAULT_RULES_URL: &str = "";
 /// would be too strong.
 ///
 /// `/2` is the Steamcommunity 302 hijack block: 862 domains whose addresses are
-/// **all `127.0.0.1`**. In `rules-puller`'s world that address is meaningful —
-/// there a local reverse proxy listens on loopback and the hijack points traffic
-/// at it. In *this* kernel it is not: `Planner::can_relay` (`watt-stack`,
-/// planner.rs) returns false for a non-overridden loopback target, and `tcp.rs`
-/// answers such a flow with `socket.abort()` and a RST (`tcp_flows_rejected`).
-/// So folding `/2` in does not *add* domains — it **breaks** them: measured, the
+/// **all `127.0.0.1`**. In the world of the upstream aggregator that produced
+/// this block, that address is meaningful — there a local reverse proxy listens
+/// on loopback and the hijack points traffic at it. In *this* kernel it is not:
+/// `Planner::can_relay` (`watt-stack`, planner.rs) returns false for a
+/// non-overridden loopback target, and `tcp.rs` answers such a flow with
+/// `socket.abort()` and a RST (`tcp_flows_rejected`). So folding `/2` in does not
+/// *add* domains — it **breaks** them: measured, the
 /// merged set is 5905 domains, 5230 hold a real address, and **675 are
 /// loopback-only, every one of them `/2`-only**. Those 675 would otherwise be
 /// unmatched and go **direct and work**; carrying `/2` turns each into a refusal.
@@ -453,7 +455,7 @@ pub fn usage() -> String {
            --rules-url <url>        a JSON (`groups` shape) endpoint. Empty by\n\
                                     default: the upstream retired the only public\n\
                                     one, so the JSON lane is cache-or-builtin unless\n\
-                                    a rules-puller instance is named here\n\
+                                    an upstream aggregator is named here\n\
            --rules-file <path>      compile this JSON document instead, never fetching\n\
            --cache-dir <path>       where the downloaded copy is kept\n\
            --max-age <seconds>      age at which the cached copy is stale (default: 21600)\n\

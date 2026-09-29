@@ -15,11 +15,12 @@
 //! This function unions addresses per domain, and for two *address-bearing*
 //! documents that is strictly better than either alone. `/2` is not such a
 //! document. Every one of its 862 addresses is `127.0.0.1`, and that address has
-//! the *opposite* meaning in the two worlds it appears in: in `rules-puller` it
-//! points at a local reverse proxy (a hijack), but in this kernel a rule may not
-//! relay loopback at all. `Planner::can_relay` (`watt-stack`, planner.rs) returns
-//! false for a non-overridden loopback target, and `tcp.rs` answers such a flow
-//! with `socket.abort()` and a RST (`tcp_flows_rejected`). Note it is `can_relay`
+//! the *opposite* meaning in the two worlds it appears in: in the upstream
+//! aggregator that produced it, it points at a local reverse proxy (a hijack),
+//! but in this kernel a rule may not relay loopback at all.
+//! `Planner::can_relay` (`watt-stack`, planner.rs) returns false for a
+//! non-overridden loopback target, and `tcp.rs` answers such a flow with
+//! `socket.abort()` and a RST (`tcp_flows_rejected`). Note it is `can_relay`
 //! that inspects the *target*; `is_blocked_target` is called only over
 //! `decision.alternatives` (the tail of the candidate list), never the target.
 //!

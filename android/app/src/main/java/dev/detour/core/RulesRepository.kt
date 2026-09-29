@@ -39,9 +39,9 @@ import org.json.JSONObject
  * if !planner.can_relay(&decision) { socket.abort(); stats.tcp_flows_rejected += 1; }
  * ```
  *
- * The identical `127.0.0.1 domain` line is *correct* in `rules-puller`'s output,
- * where it is a hosts file for a machine running S302's own local Caddy reverse
- * proxy — something really is listening there. watt does not MITM, so nothing
+ * The identical `127.0.0.1 domain` line is *correct* in the upstream aggregator's
+ * output, where it is a hosts file for a machine running S302's own local Caddy
+ * reverse proxy — something really is listening there. watt does not MITM, so nothing
  * ever will, and the same line can only mean "refuse". Same data, opposite
  * meaning; the difference is whether a local proxy exists, not the endpoint.
  *

@@ -6,9 +6,10 @@
 //! injected by hand, so a pass here means the whole path works — kernel routing,
 //! the userspace TCP stack, both relays and the upstream sockets.
 //!
-//! It is driven by `scripts/tun-smoke.sh`, which owns the parts that are not the
-//! library's job: assigning the interface address, installing the route, and
-//! starting the local servers that relayed flows are rewritten onto.
+//! It is driven by an internal harness that is not distributed with this
+//! repository, which owns the parts that are not the library's job: assigning
+//! the interface address, installing the route, and starting the local servers
+//! that relayed flows are rewritten onto.
 //!
 //! Two destinations are deliberately rewritten rather than reached for real:
 //!
@@ -503,7 +504,7 @@ fn print_usage() {
            --quiet            only print the final report\n\
          \n\
          Needs root: creating a TUN device requires CAP_NET_ADMIN. The interface\n\
-         still has to be addressed and routed by the caller; scripts/tun-smoke.sh\n\
+         still has to be addressed and routed by the caller; the external harness\n\
          does both."
     );
 }

@@ -12,7 +12,7 @@
 //! * a settle phase after the client stops, so the verdict is formed against a
 //!   drained kernel rather than one that is still tearing flows down.
 //!
-//! Driven by `scripts/tun-stress.sh`.
+//! Driven by an internal harness that is not distributed with this repository.
 
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr};
@@ -616,7 +616,7 @@ fn print_usage() {
            --stop-file <path>   start the settle phase once this file exists\n\
            --quiet              only print the final report\n\
          \n\
-         Needs root: creating a TUN device requires CAP_NET_ADMIN. Driven by\n\
-         scripts/tun-stress.sh, which also configures the interface."
+         Needs root: creating a TUN device requires CAP_NET_ADMIN. Driven by an\n\
+         external harness, which also configures the interface."
     );
 }

@@ -1,8 +1,8 @@
 //! Tests against the real upstream rule document.
 //!
-//! The fixture lives outside the crate (in the repository's `tmp/` directory) and
-//! is not committed, so the test is skipped when it is absent. Run
-//! `scripts/fetch-rules.sh` to populate it.
+//! The fixture lives outside the crate (in the repository's gitignored `tmp/`
+//! directory) and is not committed, so the test is skipped when it is absent.
+//! Populate it by saving an upstream `groups`-shape rule document to that path.
 //!
 //! These tests exist because the upstream document is third-party data whose
 //! shape has changed before: `id` and `port` used to be numbers, `cert` is a
@@ -35,7 +35,8 @@ macro_rules! fixture_or_skip {
             Some(rules) => rules,
             None => {
                 eprintln!(
-                    "skipping: upstream fixture {} not present, run scripts/fetch-rules.sh",
+                    "skipping: upstream fixture {} not present; save the upstream \
+                     rule document there to run it",
                     fixture_path().display()
                 );
                 return;
