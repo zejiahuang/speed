@@ -12,8 +12,10 @@ import org.json.JSONObject
  *
  * ## The default source, and why it is a single document
  *
- * `github-hosts` (`maxiaof/github-hosts`) is a plain hosts file: measured 1740
- * bytes, 37 domains, and no `# === [x] ===` section markers. `watt-rules` gives a
+ * `github-hosts` (`maxiaof/github-hosts`) is a plain hosts file: 37 domains, and
+ * no `# === [x] ===` section markers. (Its size is deliberately not written here
+ * — it tracks the upstream document, which changes, and a stale byte count in a
+ * comment is worse than no count.) `watt-rules` gives a
  * section-less hosts document **one** group, named `hosts` (`hosts.rs:165-169`),
  * so this source parses to a single group of 37 domains / 37 addresses. That is
  * the shape the rules screen has to be able to drill into — a group with nothing
@@ -395,10 +397,15 @@ object RulesRepository {
      * Fetch the selected source and return a kernel document that is known to
      * hold at least one rule.
      *
-     * The two gates are not decoration. `fetchText` already refuses a non-200,
+     * The gates are not decoration. `fetchText` already refuses a non-200,
      * because a 404 here is an HTML page that would parse as zero rules — but a
      * *successful* response can also be unusable, and the kernel accepts it
-     * silently. See [requireUsable].
+     * silently. See [looksLikeHtml] and [requireUsable].
+     *
+     * Every URL in [RuleSource.fetchUrls] is tried in order and the first one
+     * that clears both gates wins. Endpoints die — eight of the eleven measured
+     * candidates for the default document were already gone — so a single URL is
+     * a single point of failure the user cannot see or fix.
      */
     private fun fetch(context: Context): ByteArray {
         val source = Prefs.of(context).selectedSource
@@ -408,15 +415,80 @@ object RulesRepository {
             // opening a connection to an empty URL.
             throw IllegalStateException("规则源「${source.id}」暂不可用")
         }
-        KernelState.log(KernelState.LogEntry.Level.INFO, TAG, "拉取规则：${source.id}（${source.url}）")
 
-        val text = fetchText(source.url)
-        // A custom source may publish the kernel's own JSON rather than hosts
-        // text, so the shape is sniffed before the hosts conversion is applied.
-        // Converting an already-JSON document would be a parse of the wrong
-        // grammar, and the merge would return zero entries rather than fail.
-        val document = if (looksLikeKernelJson(text)) text.toByteArray() else toKernelDocument(text)
-        return requireUsable(document, source)
+        val urls = source.fetchUrls
+        val failures = mutableListOf<String>()
+        for ((index, url) in urls.withIndex()) {
+            // The index is in the log because a fallback that succeeds on the
+            // third try and one that succeeds on the first look identical in a
+            // log otherwise, and "which endpoint is actually carrying this
+            // install" is the question the mirrors exist to make answerable.
+            KernelState.log(
+                KernelState.LogEntry.Level.INFO, TAG,
+                "拉取规则：${source.id}（候选 ${index + 1}/${urls.size}，$url）",
+            )
+            try {
+                val text = fetchText(url)
+                // A 200 can still not be a rule document — see [looksLikeHtml] —
+                // and this check runs before the shape sniff so an HTML page is
+                // never fed to either parser.
+                if (looksLikeHtml(text)) {
+                    throw java.io.IOException("响应是 HTML 页面，不是规则文档")
+                }
+                // A custom source may publish the kernel's own JSON rather than
+                // hosts text, so the shape is sniffed before the hosts conversion
+                // is applied. Converting an already-JSON document would be a parse
+                // of the wrong grammar, and the merge would return zero entries
+                // rather than fail.
+                val document =
+                    if (looksLikeKernelJson(text)) text.toByteArray() else toKernelDocument(text)
+                return requireUsable(document, url)
+            } catch (err: Throwable) {
+                failures += "$url → ${err.message}"
+                KernelState.log(
+                    KernelState.LogEntry.Level.WARN, TAG,
+                    "候选 ${index + 1}/${urls.size} 失败：$url（${err.message}）",
+                )
+            }
+        }
+
+        // Every address is reported, not just the last failure. The last error
+        // alone cannot answer the only question worth asking here — "why did all
+        // of them fail" — and it hides whether one endpoint returned HTML while
+        // the rest were unreachable.
+        throw IllegalStateException(
+            "规则源「${source.id}」的 ${urls.size} 个地址全部失败：" + failures.joinToString("；"),
+        )
+    }
+
+    /**
+     * Whether a fetched body is an HTML page rather than a rule document.
+     *
+     * A status check is not enough, and this is measured, not hypothetical:
+     * `gitcode.com` answers **HTTP 200 with a rendered HTML page** for a plain
+     * text path that does not exist. The status check passes, the document parses
+     * to zero entries, and the tunnel comes up relaying nothing — a "successful"
+     * fetch that produces the worst possible state. HTML is what that false
+     * success looks like, so it is what this refuses.
+     *
+     * It is not a redundant second gate on top of the entry count. The two catch
+     * different things, and this one catches it *earlier*: an HTML page is
+     * rejected as "not a document at all", whereas [requireUsable] only sees the
+     * aftermath (zero entries). The reason HTML also happens to produce zero
+     * entries is structural — the tokens in an error page (`<html>`, `<!DOCTYPE`,
+     * `href="…"`) carry angle brackets, quotes and colons that
+     * `normalize_domain`'s character class rejects, and a single-token line has
+     * no second field for the hosts parser to read — but relying on that would
+     * mean a future parser change could turn an HTML page back into a silent
+     * zero-rule tunnel.
+     *
+     * The test is a plain case-insensitive `contains`, not a regex and not a
+     * parse: the question is only "is this obviously *not* a rule document", and
+     * a real parser here would be more code to be wrong with.
+     */
+    private fun looksLikeHtml(text: String): Boolean {
+        val head = text.take(2048).lowercase()
+        return "<html" in head || "<!doctype" in head || "<body" in head
     }
 
     /** Whether a fetched body is already a kernel rule document. */
@@ -434,10 +506,15 @@ object RulesRepository {
      * like the rules are running and every listed site is broken. Counting the
      * entries is the only place that can catch it, so it happens here, before the
      * document is cached or handed to a tunnel.
+     *
+     * [url] is the address that was actually tried, not the source's primary one:
+     * with mirrors in play the primary URL is often *not* what was fetched, and
+     * an error naming an address that was never contacted sends the reader to the
+     * wrong endpoint.
      */
-    private fun requireUsable(document: ByteArray, source: RuleSource): ByteArray {
+    private fun requireUsable(document: ByteArray, url: String): ByteArray {
         if (entryCount(document) == 0) {
-            throw IllegalStateException("规则源没有解析出任何规则：${source.url}")
+            throw IllegalStateException("规则源没有解析出任何规则：$url")
         }
         return document
     }

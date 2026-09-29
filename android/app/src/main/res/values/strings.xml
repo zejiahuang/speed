@@ -60,6 +60,10 @@
          is the one the design docs and the repository use. -->
     <string name="rules_source_default">github-hosts</string>
     <string name="rules_source_s302_retired">S302（已停用）</string>
+    <!-- The optional second document, 521xueweihan/GitHub520 served by HelloGitHub.
+         It is a different document from github-hosts, so the name has to say
+         which one: "HelloGitHub" alone would not tell the two apart. -->
+    <string name="rules_source_hellogithub">HelloGitHub（GitHub520）</string>
     <string name="rules_add_source">添加自定义源</string>
     <string name="rules_source_name">名称（选填）</string>
     <string name="rules_source_url">地址</string>

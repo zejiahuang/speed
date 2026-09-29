@@ -96,8 +96,13 @@
 </picture>
 </div>
 
-- 默认源是 `github-hosts`（[`maxiaof/github-hosts`](https://github.com/maxiaof/github-hosts) 的 hosts 文件）。
-  默认源在你的网络下不可达时，在规则页添加自定义源即可。
+- 默认源是 `github-hosts`（[`maxiaof/github-hosts`](https://github.com/maxiaof/github-hosts) 的 hosts 文件），
+  经国内可达的镜像获取：GitHub 的 IPv4 在大陆不可达，而 Android 的 `HttpURLConnection` 不会回落 IPv6，
+  直连对国内新用户必然失败。主地址走反代，另有 jsDelivr 与上游直连两个备选依次回退。
+- 另有一个可选源 `HelloGitHub（GitHub520）`（[`521xueweihan/GitHub520`](https://github.com/521xueweihan/GitHub520)），
+  是**另一份** hosts 文档（40 个域名）。它不做默认，因为许可为 CC BY-NC-ND 4.0（禁商用、禁演绎），
+  且服务器将于 2026-12-31 到期。
+- 默认源在你的网络下不可达时，在规则页切换其他源或添加自定义源即可。
 - 三级下钻：**分组 → 域名 → 地址**；搜索覆盖域名、地址与分组名。
 - 分组级开关，以及全部开启 / 全部关闭；被关掉的规则不会进入内核。
 - 规则热替换不打断正在传输的连接。
@@ -318,6 +323,7 @@ GNU General Public License v3.0，见 [LICENSE](LICENSE)。
 - [BeyondDimension/SteamTools](https://github.com/BeyondDimension/SteamTools)（Watt Toolkit）——
   代理设计的参考。
 - [maxiaof/github-hosts](https://github.com/maxiaof/github-hosts) —— 默认规则源。
+- [521xueweihan/GitHub520](https://github.com/521xueweihan/GitHub520) —— 可选规则源（HelloGitHub）。
 - [smoltcp](https://github.com/smoltcp-rs/smoltcp) —— 用户态 TCP/IP 协议栈。
 - [Kyant0/AndroidLiquidGlass](https://github.com/Kyant0/AndroidLiquidGlass)（发布在 Maven 上的坐标是
   `io.github.kyant0:backdrop`）—— 玻璃材质的背景采样。

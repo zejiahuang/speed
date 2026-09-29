@@ -16,12 +16,12 @@ import org.json.JSONObject
  *
  * ## Built-in versus custom
  *
- * The two built-in sources are **defined in code, not in storage**. [decode]
+ * The three built-in sources are **defined in code, not in storage**. [decode]
  * always returns [defaults] first and reads only custom entries from the store,
- * so a built-in's `url` / `labelRes` / `unavailable` follow the installed
- * version. That is deliberate: the default source has already moved once (off
- * the retired `abhuang` endpoints), and had the URL been persisted, every
- * existing install would have kept fetching a dead host with no way for an
+ * so a built-in's `url` / `mirrors` / `labelRes` / `unavailable` follow the
+ * installed version. That is deliberate: the default source has already moved
+ * once (off the retired `abhuang` endpoints), and had the URL been persisted,
+ * every existing install would have kept fetching a dead host with no way for an
  * update to fix it. Only user-added sources — the ones the app cannot know — are
  * stored.
  *
@@ -42,11 +42,24 @@ data class RuleSource(
     val labelRes: Int? = null,
     /** Where to fetch. Empty means there is nothing to fetch. */
     val url: String,
+    /**
+     * Extra URLs that can serve this source, tried after [url].
+     *
+     * A single endpoint is a single point of failure: of the eleven candidate
+     * endpoints measured for the default document, eight were already dead. A
+     * list of mirrors is the only shape that survives one of them dying, and
+     * because every entry serves the *same* document the order is a speed
+     * preference, not a correctness one.
+     */
+    val mirrors: List<String> = emptyList(),
     val builtin: Boolean = false,
     val unavailable: Boolean = false,
 ) {
     /** Whether this source can be selected and fetched. */
     val usable: Boolean get() = url.isNotEmpty() && !unavailable
+
+    /** Every URL that can serve this source, in the order they should be tried. */
+    val fetchUrls: List<String> get() = if (url.isEmpty()) emptyList() else listOf(url) + mirrors
 
     /**
      * What the cache sidecar records for this source.
@@ -54,20 +67,86 @@ data class RuleSource(
      * The URL, not the [id]: an id is a name the user can delete and re-add, and
      * two different URLs must never share a cache stamp. The URL is the document
      * itself, so it is the honest identity.
+     *
+     * **[mirrors] is deliberately excluded.** Every mirror serves the same
+     * document, so folding the one that happened to answer into the identity
+     * would make the cache stamp depend on *which machine won a race*: the first
+     * fetch succeeds on a mirror, the second falls back to [url], the two stamps
+     * disagree, and a perfectly good cache is thrown away on every load. The
+     * identity answers "which document is this", not "which host served it", and
+     * only [url] is stable enough to name the document.
      */
     val identity: String get() = url
 
     companion object {
         const val GITHUB_HOSTS_ID = "github-hosts"
+        const val HELLOGITHUB_HOSTS_ID = "hellogithub-hosts"
         const val S302_ID = "s302"
 
         /**
          * The default source: `maxiaof/github-hosts`, a plain hosts file with no
          * `# === [x] ===` sections. Measured: 1740 bytes, 37 domains, so it parses
          * to a single `hosts` group of 37 domains / 37 addresses.
+         *
+         * The primary URL is a **reverse proxy**, not the upstream raw URL, and
+         * that is not a convenience. `raw.githubusercontent.com` is served by
+         * GitHub, whose IPv4 addresses are blocked in mainland China, and Android's
+         * `HttpURLConnection` does **not** fall back to IPv6 when the A record is
+         * unreachable. A direct fetch therefore fails for every new user in that
+         * network, deterministically, which is exactly the first-run experience
+         * this constant exists to prevent. The proxy serves the *same bytes* —
+         * measured byte-for-byte identical to upstream — so this changes the
+         * transport, not the document.
          */
         private const val GITHUB_HOSTS_URL =
-            "https://raw.githubusercontent.com/maxiaof/github-hosts/master/hosts"
+            "https://gh-proxy.com/https://raw.githubusercontent.com/maxiaof/github-hosts/master/hosts"
+
+        /**
+         * The other endpoints that serve the same document, tried in this order
+         * after [GITHUB_HOSTS_URL].
+         *
+         * Proxies first, CDNs second: the CDN entries are caches and were measured
+         * a day behind on some of their gcore nodes, so a proxy that is live
+         * delivers a fresher document. The upstream URL is **last on purpose** —
+         * for a mainland user it is the one address that cannot work, but for a
+         * user outside China it is the nearest route, and it is the only entry
+         * here that is not a mirror, so it is the address we are certain will
+         * still name this document if every mirror disappears. The cost of that
+         * certainty is one extra connection timeout when nothing else answers.
+         */
+        private val GITHUB_HOSTS_MIRRORS = listOf(
+            "https://fastly.jsdelivr.net/gh/maxiaof/github-hosts@master/hosts",
+            "https://cdn.jsdelivr.net/gh/maxiaof/github-hosts@master/hosts",
+            "https://raw.githubusercontent.com/maxiaof/github-hosts/master/hosts",
+        )
+
+        /**
+         * The optional second source: `521xueweihan/GitHub520`, served by
+         * HelloGitHub. A **different document** from the default (40 domains, not
+         * 37), so it is offered as its own selectable source.
+         *
+         * It is **not** the default, for two reasons that are about the document
+         * and not the transport:
+         *
+         * * Its licence is **CC BY-NC-ND 4.0** — non-commercial and no
+         *   derivatives. That is acceptable for a source a user opts into, but it
+         *   should not be what the app ships as its default.
+         * * Its server is scheduled to expire on **2026-12-31**, so an endpoint
+         *   the app cannot replace on its own must not be the one every install
+         *   depends on.
+         *
+         * Its URL must **not** be folded into [GITHUB_HOSTS_MIRRORS]. The two
+         * serve different documents under different licences; mixing the
+         * endpoints into one fallback list would silently hand some users a
+         * different document, with a different licence, than the source label
+         * says they are on.
+         */
+        private const val HELLOGITHUB_HOSTS_URL = "https://raw.hellogithub.com/hosts"
+
+        /** Another endpoint for the same GitHub520 document, tried after the primary. */
+        private val HELLOGITHUB_HOSTS_MIRRORS = listOf(
+            "https://gh-proxy.com/https://raw.githubusercontent.com/521xueweihan/GitHub520/main/hosts",
+        )
 
         /**
          * A GitHub *page* URL names the same file as its raw URL, but only the raw
@@ -79,13 +158,27 @@ data class RuleSource(
         private val GITHUB_BLOB =
             Regex("""^https?://github\.com/([^/]+)/([^/]+)/blob/(.+)$""")
 
-        /** The built-in sources, always in this order. */
+        /**
+         * The built-in sources, always in this order: the default document, the
+         * optional HelloGitHub document, then the retired `s302` row. The order is
+         * the order the settings screen lists them, so the default has to be first
+         * — it is what a fresh install is already on.
+         */
         fun defaults(): List<RuleSource> = listOf(
             RuleSource(
                 id = GITHUB_HOSTS_ID,
                 label = "",
                 labelRes = R.string.rules_source_default,
                 url = GITHUB_HOSTS_URL,
+                mirrors = GITHUB_HOSTS_MIRRORS,
+                builtin = true,
+            ),
+            RuleSource(
+                id = HELLOGITHUB_HOSTS_ID,
+                label = "",
+                labelRes = R.string.rules_source_hellogithub,
+                url = HELLOGITHUB_HOSTS_URL,
+                mirrors = HELLOGITHUB_HOSTS_MIRRORS,
                 builtin = true,
             ),
             RuleSource(
