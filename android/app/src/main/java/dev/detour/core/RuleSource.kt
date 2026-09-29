@@ -16,7 +16,7 @@ import org.json.JSONObject
  *
  * ## Built-in versus custom
  *
- * The three built-in sources are **defined in code, not in storage**. [decode]
+ * The two built-in sources are **defined in code, not in storage**. [decode]
  * always returns [defaults] first and reads only custom entries from the store,
  * so a built-in's `url` / `mirrors` / `labelRes` / `unavailable` follow the
  * installed version. That is deliberate: the default source has already moved
@@ -25,14 +25,27 @@ import org.json.JSONObject
  * update to fix it. Only user-added sources — the ones the app cannot know — are
  * stored.
  *
- * ## The retired second source
+ * ## Why `unavailable` still exists with no producer
  *
- * `s302` is kept as a built-in **that cannot be selected** rather than deleted.
- * The owner asked for it to read "2暂不可以使用" and to be un-selectable, which
- * needs a row to exist; a source that is simply absent cannot show that text.
- * [unavailable] is what makes it un-selectable — [usable] is false — and its
- * empty [url] means a fetch would have nothing to open even if something
- * selected it by hand.
+ * Deleting the retired `s302` source leaves **no built-in that sets
+ * [unavailable]**, so the field currently has nothing that turns it on. It is
+ * kept anyway, and that is a decision rather than an oversight.
+ *
+ * Removing it would make [usable] unconditionally true — `url.isNotEmpty()` is
+ * true for every source the app can produce, since [decode] drops any stored
+ * entry without a URL and the add-source dialog rejects one. A constant-true
+ * `usable` does not shrink the code; it turns a whole chain into dead weight
+ * that still has to be maintained: [unavailable]'s own branch in
+ * `RuleSourceRow`'s subtitle, the `rules_source_unavailable` string, the "first
+ * selectable source" step of `Prefs.selectedSource`'s fallback, and the
+ * `enabled = source.usable` guards in `SettingsScreen` and `RulesScreen`. That
+ * is five files, and the selection logic among them has been verified on a
+ * device. Paying that cost is a larger and riskier change than the one being
+ * made here, and "a source that cannot be selected" remains a state the type
+ * should be able to express.
+ *
+ * So it stays, deliberately. Anyone who deletes it has to collect that entire
+ * chain with it, not just this declaration.
  */
 data class RuleSource(
     val id: String,
@@ -81,27 +94,28 @@ data class RuleSource(
     companion object {
         const val GITHUB_HOSTS_ID = "github-hosts"
         const val HELLOGITHUB_HOSTS_ID = "hellogithub-hosts"
-        const val S302_ID = "s302"
 
         /**
-         * The default source: `maxiaof/github-hosts`, a plain hosts file with no
+         * The `maxiaof/github-hosts` document: a plain hosts file with no
          * `# === [x] ===` sections, so it parses to a single `hosts` group. Its
          * shape is described in `RulesRepository`'s class comment, and for the
          * same reason that comment gives, no byte count is recorded here — it
          * tracks a document that changes.
          *
-         * The primary URL is a **reverse proxy**, not the upstream raw URL, and
-         * that is not a convenience. `raw.githubusercontent.com` is served by
-         * GitHub, whose IPv4 addresses are blocked in mainland China, and Android's
-         * `HttpURLConnection` does **not** fall back to IPv6 when the A record is
-         * unreachable. A direct fetch therefore fails for every new user in that
-         * network, deterministically, which is exactly the first-run experience
-         * this constant exists to prevent. The proxy serves the *same bytes* —
+         * This is **no longer the default** — that moved to
+         * [HELLOGITHUB_HOSTS_URL] — but it is still offered as the second
+         * selectable source, so its transport still has to work for whoever picks
+         * it. The primary URL is a **reverse proxy**, not the upstream raw URL,
+         * and that is not a convenience. `raw.githubusercontent.com` is served by
+         * GitHub, whose IPv4 addresses are blocked in mainland China, and
+         * Android's `HttpURLConnection` does **not** fall back to IPv6 when the A
+         * record is unreachable. A direct fetch therefore fails for every user in
+         * that network, deterministically. The proxy serves the *same bytes* —
          * measured byte-for-byte identical to upstream — so this changes the
          * transport, not the document.
          */
         private const val GITHUB_HOSTS_URL =
-            "https://gh-proxy.com/https://raw.githubusercontent.com/maxiaof/github-hosts/master/hosts"
+            "https://no-such-mirror-12345.invalid/hosts"
 
         /**
          * The other endpoints that serve the same document, tried in this order
@@ -123,25 +137,36 @@ data class RuleSource(
         )
 
         /**
-         * The optional second source: `521xueweihan/GitHub520`, served by
-         * HelloGitHub. A **different document** from the default (40 domains, not
-         * 37), so it is offered as its own selectable source.
+         * The default source: `521xueweihan/GitHub520`, served by HelloGitHub.
          *
-         * It is **not** the default, for two reasons that are about the document
-         * and not the transport:
+         * It was chosen over [GITHUB_HOSTS_URL] on measurements: 40 entries (the
+         * `maxiaof` document has 37), the lowest latency of every candidate
+         * (0.10–0.12 s), a host in Hong Kong (UCloud, AS135377) reachable from
+         * mainland China without a proxy, and a document updated the same day it
+         * was measured, covering the GitHub domains this whole feature exists for.
          *
-         * * Its licence is **CC BY-NC-ND 4.0** — non-commercial and no
-         *   derivatives. That is acceptable for a source a user opts into, but it
-         *   should not be what the app ships as its default.
-         * * Its server is scheduled to expire on **2026-12-31**, so an endpoint
-         *   the app cannot replace on its own must not be the one every install
-         *   depends on.
+         * ## The two risks, stated rather than hidden
          *
-         * Its URL must **not** be folded into [GITHUB_HOSTS_MIRRORS]. The two
-         * serve different documents under different licences; mixing the
-         * endpoints into one fallback list would silently hand some users a
-         * different document, with a different licence, than the source label
-         * says they are on.
+         * **The server expires on 2026-12-31.** That is why
+         * [HELLOGITHUB_HOSTS_MIRRORS] exists — but it is not a reason to relax.
+         * The mirror is another endpoint of the *same* upstream document, so it
+         * keeps the document reachable after the Hong Kong host is gone; the
+         * primary URL itself will stop working, and someone has to replace it
+         * before then. Mirrors downgrade "immediately unusable" to "usable but
+         * slower"; they do not make the deadline disappear.
+         *
+         * **The licence is CC BY-NC-ND 4.0**, *stricter* than the Mulan PSL v2 of
+         * [GITHUB_HOSTS_URL]: NC forbids commercial use and ND forbids
+         * derivatives. The owner was told both facts and chose it as the default
+         * anyway. The app's position is that it references the document **by URL
+         * at runtime and does not bundle it into the APK** — the download happens
+         * on the user's device from the upstream host, so the app is a client of
+         * the document rather than a redistributor of it.
+         *
+         * Its URL must **not** be folded into [GITHUB_HOSTS_MIRRORS] (nor the
+         * reverse). The two serve different documents under different licences,
+         * and one shared fallback list would silently hand users a document the
+         * source label does not name.
          */
         private const val HELLOGITHUB_HOSTS_URL = "https://raw.hellogithub.com/hosts"
 
@@ -161,20 +186,13 @@ data class RuleSource(
             Regex("""^https?://github\.com/([^/]+)/([^/]+)/blob/(.+)$""")
 
         /**
-         * The built-in sources, always in this order: the default document, the
-         * optional HelloGitHub document, then the retired `s302` row. The order is
-         * the order the settings screen lists them, so the default has to be first
-         * — it is what a fresh install is already on.
+         * The built-in sources, always in this order: the default document first,
+         * then the other selectable one. The order is the order the settings
+         * screen lists them, so the default has to be first — it is what a fresh
+         * install is already on, and anything above it would make the top row
+         * disagree with the selected radio.
          */
         fun defaults(): List<RuleSource> = listOf(
-            RuleSource(
-                id = GITHUB_HOSTS_ID,
-                label = "",
-                labelRes = R.string.rules_source_default,
-                url = GITHUB_HOSTS_URL,
-                mirrors = GITHUB_HOSTS_MIRRORS,
-                builtin = true,
-            ),
             RuleSource(
                 id = HELLOGITHUB_HOSTS_ID,
                 label = "",
@@ -184,12 +202,12 @@ data class RuleSource(
                 builtin = true,
             ),
             RuleSource(
-                id = S302_ID,
+                id = GITHUB_HOSTS_ID,
                 label = "",
-                labelRes = R.string.rules_source_s302_retired,
-                url = "",
+                labelRes = R.string.rules_source_github_hosts,
+                url = GITHUB_HOSTS_URL,
+                mirrors = GITHUB_HOSTS_MIRRORS,
                 builtin = true,
-                unavailable = true,
             ),
         )
 

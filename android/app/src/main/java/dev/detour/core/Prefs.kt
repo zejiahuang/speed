@@ -14,7 +14,7 @@ import androidx.compose.runtime.setValue
  * properties are Compose state so a screen can read them directly.
  *
  * The defaults are the ones a first run should have, not the ones that are
- * easiest: rules come from the built-in `github-hosts` source, dynamic colour is
+ * easiest: rules come from the built-in HelloGitHub source, dynamic colour is
  * on because the device's own palette is what Material You is for, and the
  * developer view is off because most people do not want a cooling counter on
  * their home screen.
@@ -35,7 +35,7 @@ class Prefs private constructor(private val store: SharedPreferences) {
         private set
 
     /** Which source is selected, by id. */
-    var ruleSourceId by mutableStateOf(store.getString(KEY_RULE_SOURCE_ID, RuleSource.GITHUB_HOSTS_ID) ?: RuleSource.GITHUB_HOSTS_ID)
+    var ruleSourceId by mutableStateOf(store.getString(KEY_RULE_SOURCE_ID, RuleSource.HELLOGITHUB_HOSTS_ID) ?: RuleSource.HELLOGITHUB_HOSTS_ID)
         private set
 
     /**
@@ -554,7 +554,7 @@ class Prefs private constructor(private val store: SharedPreferences) {
      * * **A repair that writes the store has to write the in-memory state too.**
      *   `of()` builds every property from the store and *then* calls this, so by
      *   the time a step here runs the old values are already loaded. An `edit {}`
-     *   alone repairs the next launch and not this one — versions 5 and 7 both
+     *   alone repairs the next launch and not this one — versions 5, 7 and 8 all
      *   have to assign their properties directly, or the upgrade process spends
      *   its whole life believing the stale value it just fixed on disk.
      * * **A stored value naming a model that no longer exists is removed, not
@@ -651,7 +651,7 @@ class Prefs private constructor(private val store: SharedPreferences) {
             // before repairing itself. The flag repairs it on the first load.
             edit {
                 putString(KEY_RULE_SOURCES, RuleSource.encode(RuleSource.defaults()))
-                putString(KEY_RULE_SOURCE_ID, RuleSource.GITHUB_HOSTS_ID)
+                putString(KEY_RULE_SOURCE_ID, RuleSource.HELLOGITHUB_HOSTS_ID)
                 putBoolean(KEY_RULES_DIRTY, true)
                 remove("rule_source")
             }
@@ -660,8 +660,51 @@ class Prefs private constructor(private val store: SharedPreferences) {
             // upgrade process would still be holding the old id and would stamp
             // the new cache with it.
             ruleSources = RuleSource.defaults()
-            ruleSourceId = RuleSource.GITHUB_HOSTS_ID
+            ruleSourceId = RuleSource.HELLOGITHUB_HOSTS_ID
             rulesCacheDirty = true
+        }
+
+        if (version < 8) {
+            // The default source moved from `github-hosts` to HelloGitHub, and
+            // this step exists because **a changed default does not reach anyone
+            // who already has the old value stored**: `SharedPreferences` returns
+            // the stored value over the new default, so without rewriting it every
+            // existing install would keep fetching `github-hosts` and this change
+            // would take effect nowhere it had already run. That is the same trap
+            // v6's comment names for `refresh_hours`, and the same one v7 avoided
+            // by writing the id rather than only changing the initialiser.
+            //
+            // The blast radius is bounded by rewriting **only the exact old
+            // default**. Any other id was chosen deliberately and is left alone.
+            // On an existing install, a stored `github-hosts` can only mean "never
+            // changed it" or "picked it by hand" — and before this change
+            // `github-hosts` was the *only* usable built-in, so "picked by hand"
+            // and "got the default" are factually indistinguishable. Treating it
+            // as the default is the only option that both makes the change take
+            // effect and cannot misread a deliberate choice of something else.
+            if (store.getString(KEY_RULE_SOURCE_ID, null) == RuleSource.GITHUB_HOSTS_ID) {
+                edit { putString(KEY_RULE_SOURCE_ID, RuleSource.HELLOGITHUB_HOSTS_ID) }
+                // The in-memory half again: `of()` reads the properties from the
+                // store *before* calling `migrate()`, so without this the process
+                // performing the upgrade would keep the old id and stamp the cache
+                // with it (the same reason v5 and v7 assign it).
+                ruleSourceId = RuleSource.HELLOGITHUB_HOSTS_ID
+            }
+            // The cache is deliberately **not** marked dirty here, unlike v5 and
+            // v7. Both of those set the flag because the document on disk came
+            // from an endpoint the new build no longer understood. v8 is a
+            // different situation: the cached document is a perfectly usable
+            // GitHub hosts file, merely from `maxiaof` rather than HelloGitHub,
+            // and the two documents overlap heavily. The identity sidecar will
+            // mismatch on its own (the source's URL changed, so
+            // `RulesRepository` sees `identityMatches == false`, treats the cache
+            // as absent, and refetches — falling back to the old cache only if
+            // that fetch fails), so no flag is needed to make it refresh.
+            //
+            // Setting the flag would be actively harmful: `discardCache` deletes
+            // the document, so a user who upgrades and is then offline would have
+            // **no rules at all**. Leaving it alone is strictly better — try the
+            // new source, and fall back to the old usable cache if that fails.
         }
 
         if (version < CURRENT_VERSION) {
@@ -869,10 +912,10 @@ class Prefs private constructor(private val store: SharedPreferences) {
         // so `encode` writes the (empty) custom list, and the selection goes back
         // to the built-in default.
         ruleSources = RuleSource.defaults()
-        ruleSourceId = RuleSource.GITHUB_HOSTS_ID
+        ruleSourceId = RuleSource.HELLOGITHUB_HOSTS_ID
         edit {
             putString(KEY_RULE_SOURCES, RuleSource.encode(RuleSource.defaults()))
-            putString(KEY_RULE_SOURCE_ID, RuleSource.GITHUB_HOSTS_ID)
+            putString(KEY_RULE_SOURCE_ID, RuleSource.HELLOGITHUB_HOSTS_ID)
         }
 
         // Stamping the current version here only stops `migrate()` from running
@@ -936,8 +979,10 @@ class Prefs private constructor(private val store: SharedPreferences) {
          * renamed to `s302`. 5: the rule cache written by 1–4 carries no identity,
          * so it is marked for refetch. 6: `refresh_hours`' default moved from 6
          * hours to 24, and a stored 6 is carried forward. 7: `rule_source`'s fixed
-         * option values are replaced by a list of [RuleSource]s, the default moves
-         * to the `github-hosts` source, and the old key is removed.
+         * option values are replaced by a list of [RuleSource]s, and the old key is
+         * removed. 8: the default source moved from `github-hosts` to HelloGitHub,
+         * and a stored `github-hosts` — the old default — is carried forward while
+         * every other id is left alone.
          *
          * Public rather than private because it is also the `version` field of the
          * settings-export document: `SettingsBackup` stamps it on export and
@@ -945,7 +990,7 @@ class Prefs private constructor(private val store: SharedPreferences) {
          * have to read the same number. A second copy over there would be a copy
          * that drifts the first time this one is bumped.
          */
-        const val CURRENT_VERSION = 7
+        const val CURRENT_VERSION = 8
         private const val KEY_THEME_COLOR = "theme_color"
         private const val KEY_CORNER_STYLE = "corner_style"
 

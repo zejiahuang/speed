@@ -440,8 +440,9 @@ fun RulesScreen() {
                         selected = source.id == prefs.ruleSourceId,
                         onClick = { selectSource(source.id) },
                         label = source.labelRes?.let { stringResource(it) } ?: source.label,
-                        // The retired source is shown but cannot be chosen — see
-                        // RuleSource.unavailable.
+                        // A source whose `url` is empty is shown but cannot be
+                        // chosen — see RuleSource.usable. No built-in is in that
+                        // state since `s302` was deleted.
                         enabled = source.usable,
                     )
                 }

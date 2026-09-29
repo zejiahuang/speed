@@ -52,15 +52,15 @@
     <string name="rules_source">数据源</string>
     <!-- The rule sources are a list now (see RuleSource), not a fixed pair of
          option values. Built-ins take their name from here; a custom source
-         carries its own label. The retired source is shown so the owner can see
-         it exists, and RuleSource.usable is what makes it un-selectable. -->
-    <!-- Named, not numbered. These read as bare "1" / "2暂不可以使用" for a
-         while, which told the user nothing about which document was loaded —
-         on the rules chips and on the home screen's source row both. The name
-         is the one the design docs and the repository use. -->
-    <string name="rules_source_default">github-hosts</string>
-    <string name="rules_source_s302_retired">S302（已停用）</string>
-    <!-- The optional second document, 521xueweihan/GitHub520 served by HelloGitHub.
+         carries its own label. -->
+    <!-- Named, not numbered. These read as bare "1" / "2" for a while, which
+         told the user nothing about which document was loaded — on the rules
+         chips and on the home screen's source row both. The name is the one the
+         design docs and the repository use. The default is expressed by the
+         order of RuleSource.defaults() and the selected radio, not by a "默认"
+         suffix on the label. -->
+    <string name="rules_source_github_hosts">github-hosts</string>
+    <!-- The default document, 521xueweihan/GitHub520 served by HelloGitHub.
          It is a different document from github-hosts, so the name has to say
          which one: "HelloGitHub" alone would not tell the two apart. -->
     <string name="rules_source_hellogithub">HelloGitHub（GitHub520）</string>

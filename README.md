@@ -96,12 +96,14 @@
 </picture>
 </div>
 
-- 默认源是 `github-hosts`（[`maxiaof/github-hosts`](https://github.com/maxiaof/github-hosts) 的 hosts 文件），
+- 默认源是 `HelloGitHub（GitHub520）`（[`521xueweihan/GitHub520`](https://github.com/521xueweihan/GitHub520) 的 hosts 文件），
+  40 个域名，主地址 `raw.hellogithub.com` 在香港，实测延迟最低（0.10–0.12s）。
+  两个风险用户必须知道：**服务器将于 2026-12-31 到期**，**许可为 CC BY-NC-ND 4.0（禁商用、禁演绎）**。
+  镜像取的是同一份上游文档的另一个端点，所以主地址失效后文档仍取得到，但届时需要换掉主地址——镜像只是把
+  「立刻不可用」降级成「降速可用」。应用只按 URL 在运行时引用该文档，不打包进安装包。
+- 第二个可选源是 `github-hosts`（[`maxiaof/github-hosts`](https://github.com/maxiaof/github-hosts) 的 hosts 文件），
   经国内可达的镜像获取：GitHub 的 IPv4 在大陆不可达，而 Android 的 `HttpURLConnection` 不会回落 IPv6，
-  直连对国内新用户必然失败。主地址走反代，另有 jsDelivr 与上游直连两个备选依次回退。
-- 另有一个可选源 `HelloGitHub（GitHub520）`（[`521xueweihan/GitHub520`](https://github.com/521xueweihan/GitHub520)），
-  是**另一份** hosts 文档（40 个域名）。它不做默认，因为许可为 CC BY-NC-ND 4.0（禁商用、禁演绎），
-  且服务器将于 2026-12-31 到期。
+  直连对国内用户必然失败。主地址走反代，另有 jsDelivr 与上游直连两个备选依次回退。
 - 默认源在你的网络下不可达时，在规则页切换其他源或添加自定义源即可。
 - 三级下钻：**分组 → 域名 → 地址**；搜索覆盖域名、地址与分组名。
 - 分组级开关，以及全部开启 / 全部关闭；被关掉的规则不会进入内核。
@@ -322,8 +324,8 @@ GNU General Public License v3.0，见 [LICENSE](LICENSE)。
 
 - [BeyondDimension/SteamTools](https://github.com/BeyondDimension/SteamTools)（Watt Toolkit）——
   代理设计的参考。
-- [maxiaof/github-hosts](https://github.com/maxiaof/github-hosts) —— 默认规则源。
-- [521xueweihan/GitHub520](https://github.com/521xueweihan/GitHub520) —— 可选规则源（HelloGitHub）。
+- [521xueweihan/GitHub520](https://github.com/521xueweihan/GitHub520) —— 默认规则源（HelloGitHub）。
+- [maxiaof/github-hosts](https://github.com/maxiaof/github-hosts) —— 可选规则源。
 - [smoltcp](https://github.com/smoltcp-rs/smoltcp) —— 用户态 TCP/IP 协议栈。
 - [Kyant0/AndroidLiquidGlass](https://github.com/Kyant0/AndroidLiquidGlass)（发布在 Maven 上的坐标是
   `io.github.kyant0:backdrop`）—— 玻璃材质的背景采样。

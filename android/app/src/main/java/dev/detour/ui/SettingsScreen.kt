@@ -1454,8 +1454,10 @@ private fun ColumnScope.SettingsRows(rows: List<SettingsRow>) {
  * Built-in sources have no delete — they are not in storage to delete, and
  * [Prefs.removeRuleSource] refuses them anyway, so offering the button would be a
  * control that cannot do what it says. The subtitle is the URL for a usable
- * source and the "unavailable" string for one that is not, because a retired
- * source has no URL worth showing.
+ * source and the "unavailable" string otherwise. That `else` branch no longer
+ * describes a *retired* source — no built-in sets `unavailable` since `s302` was
+ * deleted (see [RuleSource]) — it is what shows for a source whose `url` is
+ * empty, the one case `usable` is false for.
  */
 @Composable
 private fun RuleSourceRow(
