@@ -30,6 +30,9 @@ android/app/src/main/jniLibs/
 # --- Data pulled or produced at run time ------------------------------------
 tmp/
 out/
+# Not stale even though `rules-puller/` is no longer in the repository: the
+# aggregator's data directory still exists on the machine that pulls rules, and
+# this line is what keeps its archive out of a commit.
 rules-puller/data/
 __pycache__/
 *.pyc

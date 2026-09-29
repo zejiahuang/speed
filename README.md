@@ -176,8 +176,19 @@
 需要：Rust（含 `aarch64-linux-android` 与 `x86_64-linux-android` target）、
 Android NDK r30、Android SDK（platform 36 + build-tools 36.0.0）、JDK 17。
 
+两条命令就够了：
+
+```bash
+bash scripts/app-native-build.sh aarch64-linux-android x86_64-linux-android
+SKIP_NATIVE=1 bash scripts/app-build.sh assembleRelease -PabiSplits
+```
+
+这两个脚本是薄封装，CI 用的就是它们。下面把脚本里做的事摊开写一遍——出问题时
+（NDK 链接器选错、`--manifest-path` 漏了、ABI 与目录名对不上、Gradle 从哪来）
+才知道该动哪一层，不想跑脚本的人也可以逐步核对。
+
 **仓库里没有 Gradle wrapper，也没有 `gradlew`。** 一个仓库里放一份没人能重新生成的二进制
-比一次下载更糟，所以 Gradle 发行包自己取：
+比一次下载更糟，所以 Gradle 发行包自己取（`scripts/app-build.sh` 首次运行也会取到同一个地方）：
 
 ```bash
 GRADLE_VERSION=8.14.3
@@ -270,6 +281,7 @@ core-rs/            内核（Rust workspace）
   crates/watt-daemon  CLI 驱动
   crates/watt-ffi     C ABI 与 JNI 入口
 android/            Android 壳层（Kotlin + Jetpack Compose）
+scripts/            构建入口：编内核 `.so` 与打包 APK 的两个脚本
 assets/             README 里的示意图
 ```
 
