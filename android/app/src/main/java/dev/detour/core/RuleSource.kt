@@ -85,8 +85,10 @@ data class RuleSource(
 
         /**
          * The default source: `maxiaof/github-hosts`, a plain hosts file with no
-         * `# === [x] ===` sections. Measured: 1740 bytes, 37 domains, so it parses
-         * to a single `hosts` group of 37 domains / 37 addresses.
+         * `# === [x] ===` sections, so it parses to a single `hosts` group. Its
+         * shape is described in `RulesRepository`'s class comment, and for the
+         * same reason that comment gives, no byte count is recorded here — it
+         * tracks a document that changes.
          *
          * The primary URL is a **reverse proxy**, not the upstream raw URL, and
          * that is not a convenience. `raw.githubusercontent.com` is served by
