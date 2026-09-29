@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="580" viewBox="0 0 900 580" role="img">
+<defs><marker id="a-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#8b949e"/></marker><marker id="a-green-s" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#2ea043"/></marker></defs>
+<rect x="260" y="20" width="380" height="56" rx="12" fill="#0d2b52" stroke="#316dca" stroke-width="1.5"/>
+<text x="450.0" y="46.0" font-family='-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif' font-size="14.0" fill="#79c0ff" text-anchor="middle" font-weight="600" >应用（浏览器 / 游戏 / 终端）</text>
+<text x="450.0" y="62.35" font-family='-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif' font-size="11.5" fill="#79c0ff" text-anchor="middle" opacity="0.85" >照常发起连接，完全不知道下面发生了什么</text>
+<line x1="450" y1="76" x2="450" y2="112" stroke="#8b949e" stroke-width="1.6" marker-end="url(#a-arrow)"/>
+<rect x="170" y="112" width="560" height="66" rx="12" fill="#241b3d" stroke="#8957e5" stroke-width="1.5"/>
+<text x="450.0" y="143.0" font-family='-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif' font-size="14.0" fill="#d2a8ff" text-anchor="middle" font-weight="600" >接管点</text>
+<text x="450.0" y="159.35" font-family='-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif' font-size="11.5" fill="#d2a8ff" text-anchor="middle" opacity="0.85" >VpnService 的 tun0（整机流量）　或　本地 HTTP 代理 127.0.0.1:1080</text>
+<line x1="450" y1="178" x2="450" y2="214" stroke="#8b949e" stroke-width="1.6" marker-end="url(#a-arrow)"/>
+<rect x="140" y="214" width="620" height="96" rx="12" fill="#241b3d" stroke="#8957e5" stroke-width="1.5"/>
+<text x="450" y="246" font-family='-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif' font-size="14.0" fill="#d2a8ff" text-anchor="middle" font-weight="600" >内核 · 用户态 TCP/IP 协议栈</text>
+<text x="450" y="270" font-family='-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif' font-size="12.5" fill="#d2a8ff" text-anchor="middle" >① 读出目标域名　　② 查规则表</text>
+<text x="450" y="292" font-family='-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif' font-size="11.5" fill="#d2a8ff" text-anchor="middle" opacity="0.8" >smoltcp + 多候选拨号器　·　全程在应用进程里，不进内核模块</text>
+<line x1="310" y1="310" x2="310" y2="346" stroke="#2ea043" stroke-width="1.6" marker-end="url(#a-green-s)"/>
+<line x1="590" y1="310" x2="590" y2="346" stroke="#8b949e" stroke-width="1.6" marker-end="url(#a-arrow)"/>
+<text x="298" y="332" font-family='-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif' font-size="12.5" fill="#7ee787" text-anchor="end" font-weight="600" >命中规则</text>
+<text x="602" y="332" font-family='-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif' font-size="12.5" fill="#9198a1" text-anchor="start" >未命中</text>
+<rect x="100" y="346" width="320" height="78" rx="12" fill="#0f2a1b" stroke="#2ea043" stroke-width="1.5"/>
+<text x="260.0" y="383.0" font-family='-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif' font-size="14.0" fill="#7ee787" text-anchor="middle" font-weight="600" >改从规则给出的地址拨号</text>
+<text x="260.0" y="399.35" font-family='-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif' font-size="11.5" fill="#7ee787" text-anchor="middle" opacity="0.85" >并行竞速 + 证书预检</text>
+<rect x="480" y="346" width="320" height="78" rx="12" fill="#21262d" stroke="#3d444d" stroke-width="1.5"/>
+<text x="640.0" y="383.0" font-family='-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif' font-size="14.0" fill="#e6edf3" text-anchor="middle" font-weight="600" >按 DNS 结果原样直连</text>
+<text x="640.0" y="399.35" font-family='-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif' font-size="11.5" fill="#e6edf3" text-anchor="middle" opacity="0.85" >不参与拨号，也不做证书预检</text>
+<line x1="310" y1="424" x2="310" y2="486" stroke="#2ea043" stroke-width="1.6" marker-end="url(#a-green-s)"/>
+<line x1="590" y1="424" x2="590" y2="486" stroke="#8b949e" stroke-width="1.6" marker-end="url(#a-arrow)"/>
+<rect x="170" y="486" width="560" height="56" rx="12" fill="#3a1f0d" stroke="#bd561d" stroke-width="1.5"/>
+<text x="450.0" y="512.0" font-family='-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif' font-size="14.0" fill="#ffa657" text-anchor="middle" font-weight="600" >上游服务器</text>
+<text x="450.0" y="528.35" font-family='-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif' font-size="11.5" fill="#ffa657" text-anchor="middle" opacity="0.85" >两条路都到这里，区别只在于「连的是哪个地址」</text>
+</svg>

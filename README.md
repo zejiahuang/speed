@@ -4,72 +4,136 @@
 
 **免 Root 的 Android 网络绕行工具**
 
-一份「域名 → 地址」规则表，把命中规则的流量从可达的地址拨出去，其余流量原样直连。
+规则表里命中的域名，改从规则给出的地址拨号；其余流量原样直连。
 
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Android%208.0%2B%20(API%2026)-3ddc84.svg)](#下载)
 [![ABI](https://img.shields.io/badge/ABI-arm64--v8a%20%7C%20x86__64-lightgrey.svg)](#下载)
+[![Release](https://img.shields.io/github/v/release/zejiahuang/speed?label=release&color=3ddc84)](../../releases/latest)
+
+[下载](#下载) · [工作原理](#工作原理) · [设计取舍](#设计取舍) · [从源码构建](#从源码构建)
 
 </div>
 
 ---
 
-## 这是什么
+## 解决什么问题
 
-`speed` 是一个 Android 应用（包名 `dev.detour`）。它自带一个**用户态 TCP/IP 协议栈**，
-通过系统 `VpnService` 接管整机流量（或只开一个本地 HTTP 代理端口），
-对规则表里命中的域名**不再按 DNS 解析结果连接，而是改从规则给出的地址拨号**。
+有些服务在你的网络里连不上，原因不是服务本身不可用，而是**域名解析出来的那个地址**在你这里不通。
+同一个服务通常在多个地址上都有入口，换一个地址就能连——问题只在于你不知道该换成哪个。
+
+`speed` 就是补上这一步：它带一份「域名 → 已知可用地址」的规则表，
+在系统把连接交出去之前截住它；域名在表里，就改从表里的地址拨号。
 
 不需要 Root，不需要安装证书，不需要框架。
 
 | 模式 | 接管范围 | 授权 |
 | --- | --- | --- |
 | **VPN 模式** | 整机全部流量 | 需要一次系统 VPN 授权 |
-| **代理模式** | 只对把 HTTP 代理指向 `127.0.0.1:<端口>` 的应用生效 | 不需要 |
+| **代理模式** | 只对把 HTTP 代理指向 `127.0.0.1:1080` 的应用生效 | 不需要 |
 
 默认代理端口 `1080`，可在设置里改。
 
+## 工作原理
+
+<div align="center">
+<picture>
+<source media="(prefers-color-scheme: dark)" srcset="assets/flow-dark.svg">
+<img src="assets/flow-light.svg" alt="speed 的流量路径：应用 → 接管点 → 内核 → 命中规则则改道、未命中则直连 → 上游服务器" width="900">
+</picture>
+</div>
+
+### 一次连接里发生了什么
+
+1. 应用照常发起连接，目标是一个域名——它不知道下面发生了什么。
+2. 系统把这条流量交给 `speed`：VPN 模式经 `VpnService` 的 `tun0` 接管整机，代理模式只接管把代理指向它的应用。
+3. 内核在**用户态**终止这条连接（自带一套 TCP/IP 协议栈），读出目标域名。
+4. 查规则表：
+   - **命中** → 不再理会系统 DNS 的结果，改从规则给出的地址里拨号；
+   - **未命中** → 按系统 DNS 的结果原样直连，不参与拨号。
+5. 两条路都通到上游服务器，区别只在于**连的是哪个地址**。
+
+整个内核跑在应用进程里，不加载内核模块，不修改系统分区——这是「免 Root」的全部含义。
+
+## 两个关键机制
+
+### 多候选并行竞速
+
+一个域名在规则表里往往有多个候选地址，但其中一部分是死的。如果逐个试，
+排在可用地址**前面**的那个死地址会让这个域名白等一整个超时。
+
+`speed` 改成同时开拨：同一时刻最多 `race_width` 个候选在拨，每 250 ms 再发射下一个，
+谁先握手成功就用谁，其余立刻关闭。
+
+<div align="center">
+<picture>
+<source media="(prefers-color-scheme: dark)" srcset="assets/race-dark.svg">
+<img src="assets/race-light.svg" alt="三个候选地址并行拨号的时间线：候选①在 300 毫秒握手成功并胜出，候选②因证书不覆盖域名被丢弃，候选③超时被丢弃" width="900">
+</picture>
+</div>
+
+最坏情况从「所有死地址的超时之和」压到「最快那个候选的握手时间」。
+`race_width = 1` 就退回逐个串行尝试，和传统做法一样。
+
+### 证书预检：地址能连，不等于地址是它
+
+拨号之前，内核会先确认这个地址出示的证书是否覆盖目标域名。这一步是必需的：
+
+<div align="center">
+<picture>
+<source media="(prefers-color-scheme: dark)" srcset="assets/cert-dark.svg">
+<img src="assets/cert-light.svg" alt="两个规则地址的对比：地址①的证书覆盖 example.com 被采用，地址②的证书是另一个域名被弃用" width="900">
+</picture>
+</div>
+
+少了这一步，一个证书不匹配的地址会被当成可用地址用很久，失败会以一种难以归因的形式暴露出来。
+应用提供「校验规则地址的证书」开关，关掉会快一些，但可能连到证书不对的地址。
+这是有意的取舍：**宁可让调用方看见一个明确的失败，也不要给它一个看起来成功、实际连错机器的连接。**
+
+## 规则从哪来
+
+<div align="center">
+<picture>
+<source media="(prefers-color-scheme: dark)" srcset="assets/rules-dark.svg">
+<img src="assets/rules-light.svg" alt="规则流水线：规则源 → 解析 → 路由表 → 内核，缓存以 sidecar 形式记录来源身份" width="900">
+</picture>
+</div>
+
+- 默认源是 `github-hosts`（[`maxiaof/github-hosts`](https://github.com/maxiaof/github-hosts) 的 hosts 文件）。
+  默认源在你的网络下不可达时，在规则页添加自定义源即可。
+- 三级下钻：**分组 → 域名 → 地址**；搜索覆盖域名、地址与分组名。
+- 分组级开关，以及全部开启 / 全部关闭；被关掉的规则不会进入内核。
+- 规则热替换不打断正在传输的连接。
+
+**缓存记录的是「它是哪一套规则」，不只是「它有多旧」。**
+缓存此前只按时间判有效，于是换了数据源或升级应用之后，一套形状完全不同的旧规则会被继续使用——
+界面显示规则正常，实际所有站点都在直连。现在缓存同时记下来源身份，身份不符即视为未命中并重新拉取。
+
 ## 界面
 
-| 连接 | 规则 | 设置 |
-| --- | --- | --- |
-| ![连接](docs/screenshots/home.png) | ![规则](docs/screenshots/rules.png) | ![设置](docs/screenshots/settings.png) |
+三个页面：
+
+- **连接** —— 总开关、模式切换（VPN / 代理）、实时上下行速率、本次会话流量与命中率、规则缓存新鲜度。
+- **规则** —— 分组 → 域名 → 地址三级下钻，搜索覆盖域名 / 地址 / 分组名，分组级开关与全开 / 全关。
+- **设置** —— 内核参数、规则源、外观（玻璃材质 / 主题色 / 深色模式 / 圆角 / 字号）、
+  数据导出导入、日志、关于与更新检查。
+
+界面截图不随仓库分发：它们会随本机的壁纸、规则规模与语言设置变化，
+放一张在仓库里，除了过时没有别的前途。
 
 ## 特性
 
-### 路由
+- **路由** —— 规则驱动改道 · 多候选并行竞速 · 证书预检 · 失败冷却与排序 · 命中时 DNS 本地应答 · UDP 流表满时淘汰最久未用 · 规则热替换
+- **规则** —— 三级下钻与搜索 · 分组开关 · 自定义规则源 · 缓存来源身份校验
+- **观测** —— 实时速率与命中率 · 实时 / 归档日志与过滤导出 · 开发者视图（候选地址、冷却、静默计数）· 内核命令行
+- **数据** —— 设置导出 / 导入（JSON 文档，导入前二次确认，来自更新版本的文档会被拒绝）
+- **外观** —— 玻璃材质两档与自定义壁纸 · 主题色 / 深色模式 / 圆角 / 字号 · 更新检查
 
-- **规则驱动**：hosts 形式的「域名 → 地址」表，命中即改道，未命中直连。
-- **多候选并行竞速**：一个连接同时拨 `race_width` 个候选地址，先握手成功的胜出，
-  不必为一个死地址付满超时。`race_width = 1` 退回逐个串行尝试。
-- **证书预检**：拨号前确认该地址出示的证书确实覆盖目标域名——**地址能连不等于地址是它**。
-- **失败冷却与排序**：被判失败的候选进冷却并降序；「连上但零字节」单独降序，不写失败记录。
-- **DNS 本地应答**：命中规则时内核直接应答，不转发上游。
-- **UDP 流表**：满时淘汰最久未用的一条，而不是拒绝新流。
+几个值得单独说的点：
 
-### 规则
-
-- 三级下钻：**分组 → 域名 → 地址**；搜索域名、地址或分组。
-- 分组开关、全部开启 / 全部关闭；关掉的规则不会进内核。
-- 自定义规则源，默认 `github-hosts`（`maxiaof/github-hosts` 的 hosts 文件）。
-  默认源在你的网络下不可达时，在规则页添加自定义源即可。
-- 缓存带**来源身份**校验：换了数据源或升级了应用，旧缓存不会被当成新规则复用。
-
-### 观测
-
-- 主页：实时上下行速率、本次会话流量、命中规则次数与命中率、规则缓存新鲜度。
-- 日志：实时 / 归档两个页签，按 全部 / 会话 / 错误 / DNS 过滤，支持搜索、复制、导出。
-- 开发者视图：候选地址、冷却、静默计数等内核细节。
-- **内核命令行**：与 adb 控制面同一套命令（`status`、`set mtu 1400`、`dump`、`help`），
-  直接在手机上驱动内核，不必连电脑。
-
-### 数据与外观
-
-- 设置导出 / 导入：一份 JSON 设置文档，导入前二次确认，来自更新版本的文档会被拒绝。
-- 玻璃材质两档：**液态玻璃**（折射 + 高光 + 描边，需 Android 13）与**磨砂模糊**；
-  支持自定义背景壁纸，玻璃会折射它。
-- 主题色、深色模式、圆角、字号。
-- 关于页：版本、内核加载状态、运行环境、规则规模、更新检查。
+- **失败分三类归因**：连接被拒 / 超时 / 「连上但零字节」。第三类只降低排序，不写失败记录——它是服务器侧的静默，不代表地址坏了。**不用启发式去猜**，因为「连上但零字节」可测，而证书不匹配不可测（服务器先发证书、客户端才拒绝，双向都有字节）。
+- **超时按语义拆分**：没有备选地址时给足预算，有备选地址时用一个短窗口快速试错。一个死候选等于一次必然失败，因为预算是客户端给的。
+- **内核命令行**：与 adb 控制面同一套命令（`status`、`set mtu 1400`、`dump`、`help`），直接在手机上驱动内核，不必连电脑。
 
 ## 设计取舍
 
@@ -80,14 +144,19 @@
 2. 该地址出示的证书**覆盖这个域名**。
 
 第二条是架构边界。规则表里一个地址再快，只要证书不覆盖目标域名就用不了它，只能换地址。
-有些 CDN 的边缘证书覆盖范围很宽（例如 Akamai 边缘证书覆盖 `*.akamaihd.net`），
-这类域名可以正常走；覆盖范围窄的，就只能靠规则表给出正确的地址。
-
-应用提供「校验规则地址的证书」开关。关掉会快一些，但可能连到证书不对的地址——
-那时失败会以 TLS 错误的形式出现在浏览器里，而不是被内核悄悄吞掉。这是有意的：
-**宁可让调用方看见一个明确的失败，也不要给它一个看起来成功、实际连错机器的连接。**
+有些 CDN 的边缘证书覆盖范围很宽（例如 Akamai 边缘证书覆盖 `*.akamaihd.net`），这类域名可以正常走；
+覆盖范围窄的，就只能靠规则表给出正确的地址。
 
 **规则质量决定成败。** 这套方案的实际瓶颈是规则表里地址的**正确性**，不是地址的数量。
+
+**不 Root。** 走 `VpnService` 而不是内核模块或 iptables，代价是接管点在内核之上、
+拿不到原始套接字；换来的是不用刷机、不用 Root、不修改系统分区，卸载即完全还原。
+
+### 已知限制
+
+- 规则表里地址过期时，对应域名会失败或直连——这是数据问题，不是内核问题。
+- 不解密 TLS 意味着无法处理「所有已知地址的证书都不覆盖该域名」的情况。
+- 最低 Android 8.0（API 26）。
 
 ## 下载
 
@@ -102,25 +171,75 @@
 「谁能签出构建」就是它的信任边界，所以密钥由维护者保管，经仓库 secret 交给 CI。
 若签名与你已装的版本不一致，Android 会拒绝覆盖安装；先卸载再装。
 
-最低要求 **Android 8.0（API 26）**。
-
 ## 从源码构建
 
 需要：Rust（含 `aarch64-linux-android` 与 `x86_64-linux-android` target）、
 Android NDK r30、Android SDK（platform 36 + build-tools 36.0.0）、JDK 17。
 
-```bash
-# 1) 编译内核：Rust → .so，落到 android/app/src/main/jniLibs/<abi>/
-PROFILE=release bash scripts/app-native-build.sh aarch64-linux-android x86_64-linux-android
+**仓库里没有 Gradle wrapper，也没有 `gradlew`。** 一个仓库里放一份没人能重新生成的二进制
+比一次下载更糟，所以 Gradle 发行包自己取：
 
-# 2) 打包 APK（首次运行会自动下载 Gradle 8.14.3 到 ~/.cache）
-SKIP_NATIVE=1 bash scripts/app-build.sh assembleRelease -PabiSplits
+```bash
+GRADLE_VERSION=8.14.3
+curl -fsSL -o /tmp/gradle.zip \
+  "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip"
+unzip -q /tmp/gradle.zip -d ~/.cache                      # -> ~/.cache/gradle-8.14.3
+export PATH="$HOME/.cache/gradle-${GRADLE_VERSION}/bin:$PATH"
 ```
 
-产物在 `android/app/build/outputs/apk/release/`。只调 UI 时用 `assembleDebug`。
+### 1) 编译内核：Rust → `.so`
 
-可调环境变量：`NDK_DIR`、`ANDROID_HOME`、`ANDROID_ABI`、`ANDROID_API`、
-`CARGO_TARGET_DIR`、`PROFILE`、`SKIP_NATIVE`。
+Cargo 对 Android target 没有默认链接器，必须显式指到 NDK 的 clang。
+只给 `--target` 会用主机的 `cc` 去链接，在 arm64 上报 `Relocations in generic ELF (EM: 183)`。
+
+下面两段都在**仓库根目录**执行：
+
+```bash
+NDK=$HOME/android/android-ndk-r30
+TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
+API=34                       # NDK 的 clang wrapper 按 API 级别分档
+export CARGO_TARGET_DIR=$HOME/.cache/watt-target
+
+# `watt-ffi` 的 crate-type 含 `staticlib`，归档静态库时会调 ar。指到 NDK 那一份，
+# 免得用主机的 GNU ar 去归档 Android 的目标文件（通常能过，但那是运气不是保证）。
+export AR=$TOOLCHAIN/bin/llvm-ar
+
+build_abi() {
+  abi=$1; dir=$2
+  # 变量名里的 ABI 要全大写、`-` 换成 `_`，否则 cargo 读不到这个设置。
+  export "CARGO_TARGET_$(echo "$abi" | tr 'a-z-' 'A-Z_')_LINKER=$TOOLCHAIN/bin/${abi}${API}-clang"
+
+  # `--manifest-path` 不能省：仓库根目录没有 Cargo.toml，workspace 在 core-rs/ 下，
+  # 而下面的 cp 目标又是相对仓库根的。这样两边都在同一个 cwd 里，不必来回 cd。
+  #
+  # `jni-bridge` 才生成 JNI 入口点（Java_dev_detour_core_Kernel_*）。
+  # 少了它 System.loadLibrary 照样成功，但每次调用都抛 UnsatisfiedLinkError。
+  cargo build -p watt-ffi --features jni-bridge --release \
+    --target "$abi" --manifest-path core-rs/Cargo.toml
+
+  mkdir -p "android/app/src/main/jniLibs/$dir"
+  cp "$CARGO_TARGET_DIR/$abi/release/libwatt_ffi.so" "android/app/src/main/jniLibs/$dir/"
+}
+
+build_abi aarch64-linux-android arm64-v8a
+build_abi x86_64-linux-android  x86_64
+```
+
+注意 cargo 的 target 名与 APK 的目录名不是一回事（`aarch64-linux-android` ↔ `arm64-v8a`）。
+弄错会得到一个编得出来、却永远不会被加载的库。`jniLibs/` 不入库——它必须来自
+它所挨着的那个提交，否则标签就不再描述二进制。
+
+### 2) 打包 APK
+
+```bash
+export ANDROID_HOME=$HOME/android-sdk       # 也可以写进 android/local.properties
+export ANDROID_SDK_ROOT=$ANDROID_HOME
+gradle -p android --no-daemon --console=plain -PabiSplits assembleRelease
+```
+
+`gradle` 自己从 `JAVA_HOME` 找 JDK（要 17）。非登录 shell 里它可能没设，那就先 `export JAVA_HOME=<jdk17 的路径>`。
+
+产物在 `android/app/build/outputs/apk/release/`。只调 UI 时把 `assembleRelease` 换成 `assembleDebug`。
 
 **签名完全由环境驱动，仓库里没有任何密钥。** 设好下面四个变量后 `assembleRelease`
 产出已签名包；不设则停在未签名状态——这是刻意的停止点，不是遗漏：
@@ -151,24 +270,35 @@ core-rs/            内核（Rust workspace）
   crates/watt-daemon  CLI 驱动
   crates/watt-ffi     C ABI 与 JNI 入口
 android/            Android 壳层（Kotlin + Jetpack Compose）
-scripts/            构建与测试的全部入口
-rules-puller/       独立的 PHP 小工具：定时拉取并聚合规则源
-docs/               设计文档与截图
+assets/             README 里的示意图
 ```
+
+`assets/` 里每张图都有浅色与深色两套（`*-light.svg` / `*-dark.svg`），README 用
+`<picture>` + `prefers-color-scheme` 切换。**GitHub 不会给 `<img>` 里的 SVG 重新上色**，
+所以深色模式必须自带一份深色文件——这是唯一手段。它们是手写的 SVG，改图直接改文件。
 
 ## 测试
 
+内核是纯 Rust，不需要设备。workspace 在 `core-rs/` 下，所以先切进去：
+
 ```bash
-scripts/cargo.sh test --workspace                    # 单元测试
-scripts/cargo.sh clippy --workspace --all-targets -- -D warnings
-bash scripts/tun-smoke.sh                            # 真实 TUN 端到端
-bash scripts/tun-stress.sh                           # 长稳
-bash scripts/daemon-smoke.sh                         # CLI 驱动
+cd core-rs
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-一条贯穿全仓库的约定：**网络行为只在设备上测量**。主机不经隧道，`adb shell` 在多数
-模拟器上还是 root，而 `VpnService` 按设计排除 root 流量——用主机或 root 身份去测，
-得到的是测量方法的错误，不是内核的结论。
+需要真实设备的端到端测试（真实 `tun0` 的连通与长稳、CLI 驱动、UI 探针）用的是内部 harness，
+**不随仓库分发**：它们要真实 TUN、`sudo`，以及一套只在本机成立的环境假设，
+放进公开仓库只会让读者以为照着跑就能复现。
+
+一条贯穿全仓库的约定：**网络行为只在设备上测量**。主机（含 WSL）不经 `tun0`，
+在主机上量到的「通 / 不通」与隧道无关，量出来的是测量方法的错误，不是内核的结论。
+
+在设备上测量时还要确认探针的 uid 真的被送进了隧道：`VpnService` 按设计排除本应用自己
+（防自环），所以从应用进程内部发起的请求永远不走隧道。用 `adb shell` 的 `curl` 当探针之前，
+先看 `ip rule show` 里 shell 的 uid 落在哪个区间——本项目是 `uidrange 0-10074` 进 `tun0`，
+`10075` 正是 `dev.detour` 自己。计数方向也容易读反：`rx_bytes` 是**下行**（服务器回来的页面），
+`tx_bytes` 是上行请求；一次正常的页面加载应当是 RX 大、TX 小，RX 为 0 只说明根本没有应用发过流量。
 
 ## 许可
 
@@ -180,4 +310,5 @@ GNU General Public License v3.0，见 [LICENSE](LICENSE)。
   代理设计的参考。
 - [maxiaof/github-hosts](https://github.com/maxiaof/github-hosts) —— 默认规则源。
 - [smoltcp](https://github.com/smoltcp-rs/smoltcp) —— 用户态 TCP/IP 协议栈。
-- [Kyant0/Backdrop](https://github.com/Kyant0/Backdrop) —— 玻璃材质的背景采样。
+- [Kyant0/AndroidLiquidGlass](https://github.com/Kyant0/AndroidLiquidGlass)（发布在 Maven 上的坐标是
+  `io.github.kyant0:backdrop`）—— 玻璃材质的背景采样。
