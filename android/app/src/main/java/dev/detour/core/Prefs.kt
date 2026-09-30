@@ -694,17 +694,50 @@ class Prefs private constructor(private val store: SharedPreferences) {
             // v7. Both of those set the flag because the document on disk came
             // from an endpoint the new build no longer understood. v8 is a
             // different situation: the cached document is a perfectly usable
-            // GitHub hosts file, merely from `maxiaof` rather than HelloGitHub,
-            // and the two documents overlap heavily. The identity sidecar will
-            // mismatch on its own (the source's URL changed, so
-            // `RulesRepository` sees `identityMatches == false`, treats the cache
-            // as absent, and refetches — falling back to the old cache only if
-            // that fetch fails), so no flag is needed to make it refresh.
+            // GitHub hosts file, merely from `maxiaof` rather than HelloGitHub.
+            // The sidecar mismatch forces a refetch on its own — the source URL
+            // is the identity, so `RulesRepository.load` sees
+            // `identityMatches == false` and takes the fetch branch
+            // (`RulesRepository.kt:273`) — so no flag is needed to make the cache
+            // refresh.
             //
-            // Setting the flag would be actively harmful: `discardCache` deletes
-            // the document, so a user who upgrades and is then offline would have
-            // **no rules at all**. Leaving it alone is strictly better — try the
-            // new source, and fall back to the old usable cache if that fails.
+            // ## What setting the flag would actually cost
+            //
+            // Setting it would be harmful, but **not for the reason that looks
+            // obvious.** It is not "the offline user loses their rules": an
+            // offline upgrade fails *either way*, because `load` refuses a
+            // mismatched sidecar in the offline branch too
+            // (`RulesRepository.kt:225-257`) — a document whose stamp positively
+            // identifies it as a different rule set is not served. The difference
+            // is what the user is left holding. `discardCache` deletes both files,
+            // so with the flag the offline user gets "离线模式，且本地还没有已下载的
+            // 规则" and nothing to act on. Without it the document survives, and the
+            // refusal names the way out — "请联网重新下载，或切回 <旧源>" — which
+            // actually works: `github-hosts` is still a selectable built-in, and
+            // switching back makes the sidecar match again, so the cache is served
+            // offline. Keeping the file is what keeps that remedy available.
+            //
+            // That remedy is not universal, and the exception is worth stating.
+            // It only works when the sidecar names the address `github-hosts`
+            // uses *now*. A device whose cache predates the mirror change
+            // (`GITHUB_HOSTS_URL` moving to the reverse proxy) carries the bare
+            // `raw.githubusercontent.com` URL, which no selectable source matches
+            // any more — for those users nothing on the source list matches the
+            // cache, and the only way out is a working connection. Deleting the
+            // file would not have helped them either; it would only have removed
+            // the chance.
+            //
+            // ## What this step does **not** do
+            //
+            // **There is no fallback to the old cache when the new fetch fails.**
+            // An earlier version of this comment claimed there was ("falling back
+            // to the old cache only if that fetch fails"); it was wrong.
+            // `RulesRepository.fetchInto` re-checks the sidecar *after* the
+            // failure (`RulesRepository.kt:329-346`) and re-throws on a mismatch
+            // instead of serving the document, deliberately — serving it would
+            // hand the tunnel exactly the document the stamp had just rejected.
+            // So an online upgrade with the new source down fails the connect; it
+            // does not silently fall back to the `maxiaof` document.
         }
 
         if (version < CURRENT_VERSION) {
