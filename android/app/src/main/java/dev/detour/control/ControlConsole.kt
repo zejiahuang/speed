@@ -472,6 +472,13 @@ object ControlConsole {
             // keeps "point the app at your own mirror" possible without a
             // rebuild. See `Prefs.updateUrl`.
             .put("update_url", prefs.updateUrl)
+            // The release channel, reported so `set update_channel beta` can be
+            // read back and confirmed. It is here for the same reason
+            // `update_url` is: without it the only way to reach the beta channel
+            // is a tap on a segmented row, and the channel decides which
+            // *endpoint* gets asked — a difference no other setting can stand in
+            // for.
+            .put("update_channel", prefs.updateChannel)
             // The auto-check switch is a preference and is reported like any
             // other, so `set auto_check_update false` can be read back and
             // confirmed.
@@ -558,6 +565,12 @@ object ControlConsole {
             // as `dark_mode` above: the value is handed to its setter untouched
             // (the setter trims it), with no parsing that could reject a URL.
             "update_url" -> prefs.updateUpdateUrl(value)
+            // The release channel, a plain string like `dark_mode` above. An
+            // unrecognised value is not rejected here — the setter collapses it
+            // to stable — so a `set` of a misspelled channel is a silent no-op
+            // that the read-back catches, which is why the dump reports this
+            // key. See `Prefs.normalizeUpdateChannel`.
+            "update_channel" -> prefs.updateUpdateChannel(value)
             // The auto-check switch, a plain boolean like `auto_connect` above.
             // `last_update_check_at` has no case here on purpose: it is runtime
             // state, not a preference, so `dump` reports it and `set` leaves it

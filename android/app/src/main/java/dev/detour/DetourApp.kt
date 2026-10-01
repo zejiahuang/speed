@@ -136,7 +136,7 @@ class DetourApp : Application() {
         // all. The user did not ask for one, so a dead network, a wrong URL or a
         // GitHub rate limit must not put anything on screen. On this whole path,
         // "there genuinely is an update" is the only outcome that later opens a
-        // window (see the `UpdateState.shouldPrompt` test in `MainActivity`).
+        // window (see the `UpdateState.pendingPrompt` test in `MainActivity`).
         //
         // The `shouldAutoCheck` test is inside the coroutine rather than done
         // synchronously here to decide whether to launch at all: it reads `Prefs`,

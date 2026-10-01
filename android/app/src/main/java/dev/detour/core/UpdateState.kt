@@ -44,9 +44,60 @@ object UpdateState {
      */
     const val MIN_AUTO_CHECK_INTERVAL_MS = 24L * 60 * 60 * 1000
 
-    /** The most recent result; `null` means this process has not checked yet. */
-    var result: UpdateChecker.Result? by mutableStateOf(null)
-        private set
+    /**
+     * The most recent result; `null` means this process has not checked yet.
+     *
+     * Private, and [resultFor] is the way to read it. The result and the channel
+     * it answers are one piece of information, so exposing the result alone would
+     * be handing out half of it — see [resultFor].
+     */
+    private var result: UpdateChecker.Result? by mutableStateOf(null)
+
+    /**
+     * The channel [result] was produced for; `null` when there is no result.
+     *
+     * Compose state rather than a plain field: two consecutive checks can produce
+     * the same result value — `UpToDate` twice is the common case — and if only
+     * this field changed, a reader subscribed to the result alone would not
+     * recompose and would keep rendering the previous channel's answer.
+     */
+    private var resultChannel: UpdateChecker.Channel? by mutableStateOf(null)
+
+    /**
+     * The last result, but only when it answers [channel].
+     *
+     * **Why the result is stored with the channel it came from.** A result answers
+     * one question — "is there a newer stable release" is not answered by "is there
+     * a newer prerelease" — so a result produced for one channel must never be
+     * rendered under the other's control.
+     *
+     * The first version of this cleared the result whenever the channel changed,
+     * which is correct only if *every* writer remembers to clear. The About page's
+     * segmented row did; the control channel's `set update_channel` did not, and
+     * measured on the device that left `有新版本 0.17.0-rc2` — a prerelease — sitting
+     * underneath a 稳定版 control. Pairing the result with its channel moves the rule
+     * to the read site, where no writer can forget it. It also covers a check that
+     * is still in flight when the channel changes: the answer still lands, but it
+     * lands as an answer to the question it actually asked, so switching to the
+     * other channel simply stops showing it.
+     *
+     * Switching away and back therefore re-shows the result rather than leaving the
+     * page blank. That is the honest behaviour — the result really does answer the
+     * channel that is on screen again.
+     */
+    fun resultFor(channel: UpdateChecker.Channel): UpdateChecker.Result? =
+        if (resultChannel == channel) result else null
+
+    /**
+     * [resultFor] narrowed to the one case that has something to show the user.
+     *
+     * Exists so the update dialog does not have to cast: it is entered only when
+     * there is an available release, and an explicit cast there is a claim the
+     * compiler cannot check. Returning `null` for the other two outcomes lets the
+     * caller test the value it actually needs.
+     */
+    fun availableFor(channel: UpdateChecker.Channel): UpdateChecker.Result.Available? =
+        resultFor(channel) as? UpdateChecker.Result.Available
 
     /** Whether a check is in flight. The manual button greys itself out on this. */
     var checking: Boolean by mutableStateOf(false)
@@ -70,13 +121,28 @@ object UpdateState {
         private set
 
     /**
-     * Whether the "a new version is available" dialog should be shown.
+     * The release the update dialog should offer on [channel], or `null` when no
+     * dialog belongs on screen.
      *
-     * Both conditions are required: an [UpdateChecker.Result.Available] result, and
-     * a process that has not shown the dialog yet. `promptShown` is tested first so
-     * the common "already shown" path short-circuits before the type test.
+     * Both conditions are required: a result that answers [channel] and is
+     * [UpdateChecker.Result.Available], and a process that has not shown the dialog
+     * yet. `promptShown` is tested first so the common "already shown" path
+     * short-circuits before the type test.
+     *
+     * Returning the release rather than a boolean is what removes the dialog's
+     * cast: "the flag is true" and "there is a release to show" are the same fact
+     * here, and a separate boolean would let a caller test one and then read the
+     * other.
+     *
+     * The channel is a parameter rather than being read from `Prefs` here for the
+     * same reason [resultFor] is a function: this object holds no `Context` and has
+     * no business resolving a preference, and the caller already has the value it
+     * is rendering the page with. Without it, a check that was in flight while the
+     * user switched channels could raise a dialog offering the *other* channel's
+     * release.
      */
-    val shouldPrompt: Boolean get() = !promptShown && result is UpdateChecker.Result.Available
+    fun pendingPrompt(channel: UpdateChecker.Channel): UpdateChecker.Result.Available? =
+        if (promptShown) null else availableFor(channel)
 
     fun markPromptShown() {
         promptShown = true
@@ -129,6 +195,7 @@ object UpdateState {
         // happens to hold the same instance.
         val prefs = Prefs.of(context)
         val url = prefs.updateUrl
+        val channel = prefs.updateChannelValue
 
         checking = true
         // `try`/`finally` rather than "set it back to false afterwards": the
@@ -141,7 +208,12 @@ object UpdateState {
         val outcome = try {
             withContext(Dispatchers.IO) {
                 runCatching {
-                    UpdateChecker.check(url, BuildConfig.VERSION_CODE, BuildConfig.VERSION_NAME)
+                    UpdateChecker.check(
+                        url,
+                        BuildConfig.VERSION_CODE,
+                        BuildConfig.VERSION_NAME,
+                        channel,
+                    )
                 }.getOrElse { error ->
                     UpdateChecker.Result.Failed(error.message ?: "未知错误")
                 }
@@ -150,7 +222,12 @@ object UpdateState {
             checking = false
         }
 
+        // Recorded as a pair — the answer and the question it answers. A check that
+        // is in flight when the channel changes still lands, but it lands as the
+        // *other* channel's answer, so `resultFor` stops showing it instead of the
+        // beta control displaying a stable version. See `resultFor`.
         result = outcome
+        resultChannel = channel
         // Written for success, failure and "already up to date" alike; see the
         // method note above.
         prefs.updateLastUpdateCheckAt(System.currentTimeMillis())
@@ -160,23 +237,29 @@ object UpdateState {
         // UI at all, so the log is its only observable trace: when someone asks why
         // no update prompt appeared, the first line here says whether the answer was
         // honestly "already up to date" or "the check failed, and here is where".
+        // The channel goes into the message rather than staying implicit. "已是最新
+        // 版本" on the beta channel means "no newer prerelease", which is a different
+        // claim from the same sentence on the stable channel; and this line is the
+        // only record of which endpoint a given check asked, since the About screen
+        // shows the channel only until the user changes it.
+        val channelTag = if (channel == UpdateChecker.Channel.BETA) "测试版" else "稳定版"
         when (outcome) {
             is UpdateChecker.Result.Available -> KernelState.log(
                 KernelState.LogEntry.Level.INFO,
                 "Update",
-                "发现新版本 ${outcome.release.versionName}",
+                "发现新版本 ${outcome.release.versionName}（$channelTag 通道）",
             )
 
             is UpdateChecker.Result.UpToDate -> KernelState.log(
                 KernelState.LogEntry.Level.INFO,
                 "Update",
-                "已是最新版本",
+                "已是最新版本（$channelTag 通道）",
             )
 
             is UpdateChecker.Result.Failed -> KernelState.log(
                 KernelState.LogEntry.Level.WARN,
                 "Update",
-                "检查更新失败：${outcome.message}",
+                "检查更新失败：${outcome.message}（$channelTag 通道）",
             )
         }
     }

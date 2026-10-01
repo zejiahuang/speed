@@ -4,6 +4,7 @@ import android.os.Build
 import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -24,6 +25,27 @@ import org.json.JSONObject
  * to render it.
  */
 object UpdateChecker {
+
+    /**
+     * Which stream of releases a check follows.
+     *
+     * **Two channels, and neither is a superset of the other.** GitHub defines
+     * `/releases/latest` as the newest release that is neither a draft nor a
+     * prerelease, so the stable channel is "everything except prereleases" and
+     * the beta channel is "prereleases only". Neither contains the other, which
+     * is why a channel cannot be expressed as a filter applied to one response —
+     * it decides which endpoint gets asked.
+     */
+    enum class Channel {
+        /** Stable releases only. */
+        STABLE,
+
+        /**
+         * Prereleases only; never falls back to a stable release. See
+         * `Prefs.updateChannel` for why the fallback is deliberately absent.
+         */
+        BETA,
+    }
 
     /**
      * The mirror prefix shared by the manifest fetch and the APK download.
@@ -68,12 +90,56 @@ object UpdateChecker {
         MIRROR_PREFIX + "https://api.github.com/repos/zejiahuang/speed/releases/latest"
 
     /**
+     * The path [DEFAULT_MANIFEST_URL] ends with, and the only shape
+     * [urlForChannel] knows how to rewrite for the beta channel.
+     */
+    private const val GITHUB_LATEST_PATH = "/releases/latest"
+
+    /**
+     * How many releases to ask for when listing. Five covers the newest
+     * prerelease in any realistic situation while keeping the response well
+     * under [MAX_BYTES]; the endpoint's default page is thirty, each with its
+     * own Markdown body.
+     */
+    private const val BETA_PAGE_SIZE = 5
+
+    /**
+     * The address to request for [channel].
+     *
+     * **Why the beta channel needs a different address at all.** GitHub defines
+     * `/releases/latest` as "the newest release that is neither a draft nor a
+     * prerelease", so a prerelease can never appear in its response — asking the
+     * same URL and filtering the answer would come back empty every time. The
+     * list endpoint is the only one that carries prereleases.
+     *
+     * **A suffix rewrite, not a second compiled-in constant.** A user who
+     * overrode `update_url` keeps their override on both channels, instead of
+     * silently falling back to this project's own Releases the moment they pick
+     * beta. A URL that does not end in `/releases/latest` is passed through
+     * unchanged: it is not the GitHub shape this rewrite understands — a
+     * hand-written manifest, or a mirror with its own layout — and inventing a
+     * different address for it would turn a working source into a 404.
+     */
+    private fun urlForChannel(url: String, channel: Channel): String {
+        if (channel == Channel.STABLE) return url
+        val trimmed = url.trim()
+        if (!trimmed.endsWith(GITHUB_LATEST_PATH)) return trimmed
+        return trimmed.removeSuffix("/latest") + "?per_page=$BETA_PAGE_SIZE"
+    }
+
+    /**
      * A manifest is a few hundred bytes; a GitHub release body is a few KB.
      * Without a ceiling, a user who pastes an APK URL would pull the whole file
      * into memory (tens of MB) before we ever get to parse it, so the read is
      * capped and oversized bodies are rejected rather than buffered.
+     *
+     * **Raised from 64 KB when the beta channel was added.** That channel asks
+     * the list endpoint, whose response is several release objects each carrying
+     * a Markdown body — legitimately a few tens of KB where the single-release
+     * endpoint is a few. The cap still does the job it was written for: what it
+     * exists to stop is measured in megabytes, not kilobytes.
      */
-    private const val MAX_BYTES = 64 * 1024
+    private const val MAX_BYTES = 256 * 1024
 
     // Shorter than RulesRepository.fetchText's 20s/90s: this is a tiny JSON
     // document, not a multi-thousand-line rules file.
@@ -110,8 +176,16 @@ object UpdateChecker {
      *   by the custom manifest format, which still compares integers.
      * @param currentVersionName the installed build's `versionName` (e.g.
      *   "0.1.0"); used by the GitHub format, which has no integer to compare.
+     * @param channel which release stream to ask for; see [Channel]. Defaults to
+     *   [Channel.STABLE] so a caller with no channel concept still behaves
+     *   exactly as it did before the channel existed.
      */
-    fun check(url: String, currentVersionCode: Int, currentVersionName: String): Result {
+    fun check(
+        url: String,
+        currentVersionCode: Int,
+        currentVersionName: String,
+        channel: Channel = Channel.STABLE,
+    ): Result {
         // Catch Throwable around the whole body: a malformed manifest, a
         // non-JSON body, a wrong-typed field or a socket error must all surface
         // as `Failed` rather than propagate. That is exactly why `Failed` is a
@@ -145,7 +219,8 @@ object UpdateChecker {
                 return Result.Failed("系统不允许明文 HTTP，请改用 https://")
             }
 
-            val connection = (URL(trimmed).openConnection() as HttpURLConnection).apply {
+            val target = urlForChannel(trimmed, channel)
+            val connection = (URL(target).openConnection() as HttpURLConnection).apply {
                 connectTimeout = CONNECT_TIMEOUT_MS
                 readTimeout = READ_TIMEOUT_MS
                 instanceFollowRedirects = true
@@ -161,7 +236,7 @@ object UpdateChecker {
                 }
 
                 val body = readCapped(connection) ?: return Result.Failed("响应过大")
-                parse(body, currentVersionCode, currentVersionName)
+                parse(body, currentVersionCode, currentVersionName, channel)
             } finally {
                 connection.disconnect()
             }
@@ -211,12 +286,26 @@ object UpdateChecker {
      * custom manifest simply has no `tag_name` and falls through to the old
      * path unchanged.
      */
-    private fun parse(body: String, currentVersionCode: Int, currentVersionName: String): Result {
+    private fun parse(
+        body: String,
+        currentVersionCode: Int,
+        currentVersionName: String,
+        channel: Channel,
+    ): Result {
+        // The beta channel's list endpoint answers with an array; every other
+        // source answers with one object. Dispatch on the first non-whitespace
+        // character rather than "try the object parser and catch": constructing a
+        // `JSONObject` from an array throws, and that throw would reach the user
+        // as a parse failure for a perfectly valid response.
+        if (body.trimStart().startsWith("[")) {
+            return parseGitHubList(JSONArray(body), currentVersionName, channel)
+        }
+
         val json = JSONObject(body)
 
         val tagName = json.optString("tag_name", "")
         return if (tagName.isNotBlank()) {
-            parseGitHub(json, tagName, currentVersionName)
+            parseGitHub(json, tagName, currentVersionName, channel)
         } else {
             parseCustom(json, currentVersionCode)
         }
@@ -251,15 +340,27 @@ object UpdateChecker {
      *
      * @param tagName the already-read `tag_name`.
      */
-    private fun parseGitHub(json: JSONObject, tagName: String, currentVersionName: String): Result {
-        // Defence, not a normal path: `/releases/latest` never returns a draft
-        // or a prerelease by GitHub's own contract, so this branch should be
-        // dead. It exists because the *consequence* of being wrong is bad in a
-        // specific way — a draft is an unfinished build and a prerelease is
-        // explicitly not for general use, so treating either as "a new version
-        // is out" would push users at a download that should not be offered
-        // yet. Bailing to UpToDate is the quiet, safe answer.
-        if (json.optBoolean("draft", false) || json.optBoolean("prerelease", false)) {
+    private fun parseGitHub(
+        json: JSONObject,
+        tagName: String,
+        currentVersionName: String,
+        channel: Channel,
+    ): Result {
+        // A draft is never offered on any channel: it is an unfinished build that
+        // GitHub itself keeps out of every public listing. A prerelease is
+        // offered on exactly one channel, so the test is an equality against what
+        // the channel asked for rather than the single "reject prereleases"
+        // branch this used to be — back when the only endpoint in use could not
+        // return one, and the branch was accordingly documented as dead. It is
+        // not dead now, and the two directions are not symmetric: on the stable
+        // channel a prerelease must be refused, because offering it would hand a
+        // test build to someone who never asked for one; on the beta channel a
+        // *stable* release must be refused, because the user asked for
+        // prereleases only.
+        if (json.optBoolean("draft", false)) {
+            return Result.UpToDate
+        }
+        if (json.optBoolean("prerelease", false) != (channel == Channel.BETA)) {
             return Result.UpToDate
         }
 
@@ -274,15 +375,13 @@ object UpdateChecker {
         val remote = parseVersion(versionName)
             ?: return Result.Failed("版本号无法解析：$versionName")
 
-        // Compare the parsed (major, minor, patch) triples, never the strings:
-        // lexicographically "0.10.0" sorts *before* "0.9.0", so a string compare
-        // would call a newer release older and hide the update.
-        val newer = when {
-            remote.first != current.first -> remote.first > current.first
-            remote.second != current.second -> remote.second > current.second
-            else -> remote.third > current.third
-        }
-        if (!newer) {
+        // Compare the parsed versions, never the strings: lexicographically
+        // "0.10.0" sorts *before* "0.9.0", so a string compare would call a newer
+        // release older and hide the update. `Version` additionally carries the
+        // SemVer rule that a prerelease precedes the release it leads to, which
+        // is what stops the beta channel from offering `0.2.4-beta.1` to a device
+        // already running `0.2.4` — a downgrade dressed as an update.
+        if (remote <= current) {
             return Result.UpToDate
         }
 
@@ -299,6 +398,50 @@ object UpdateChecker {
         val notes = json.optString("body", "").takeIf { it.isNotBlank() }
 
         return Result.Available(Release(versionName, downloadUrl, notes))
+    }
+
+    /**
+     * Picks the newest acceptable release out of a `/releases` array.
+     *
+     * **The array is scanned in full rather than taking the first entry.** The
+     * list is ordered by creation time, not by version, so the newest *version*
+     * is not necessarily the first *element* — a patch to an older line
+     * published after a newer prerelease would sit in front of it. Comparing
+     * every entry with the same [parseVersion] the single-object path uses is
+     * also what keeps the two shapes from disagreeing about which of two
+     * versions is newer.
+     *
+     * **An unparseable entry is skipped, not fatal.** A list is a set of
+     * independent releases, and one mislabelled tag among them must not hide the
+     * rest. The single-object path deliberately does the opposite — see its note
+     * — because there the one bad tag *is* the whole response.
+     */
+    private fun parseGitHubList(array: JSONArray, currentVersionName: String, channel: Channel): Result {
+        var best: JSONObject? = null
+        var bestVersion: Version? = null
+
+        for (i in 0 until array.length()) {
+            val item = array.optJSONObject(i) ?: continue
+            if (item.optBoolean("draft", false)) continue
+            if (item.optBoolean("prerelease", false) != (channel == Channel.BETA)) continue
+
+            val tag = item.optString("tag_name", "").removePrefix("v").removePrefix("V")
+            val version = parseVersion(tag) ?: continue
+
+            val previous = bestVersion
+            if (previous == null || version > previous) {
+                best = item
+                bestVersion = version
+            }
+        }
+
+        val winner = best ?: return Result.UpToDate
+        // Hand the winner to the single-object path instead of repeating its work
+        // here, so both shapes share one implementation of the version
+        // comparison, the mirror rewrite and the notes handling. The channel
+        // checks are re-run inside and pass, since this loop applied the same
+        // test to the same entry.
+        return parseGitHub(winner, winner.optString("tag_name", ""), currentVersionName, channel)
     }
 
     /**
@@ -390,22 +533,5 @@ object UpdateChecker {
             .lowercase()
         return host == "github.com" || host.endsWith(".github.com") ||
             host == "githubusercontent.com" || host.endsWith(".githubusercontent.com")
-    }
-
-    /**
-     * Parses a `major.minor.patch` version into three ints, or returns `null`
-     * if the value is not exactly that shape.
-     *
-     * Anything that is not three dot-separated non-negative integers — a
-     * `v`-less tag like "1.2", a date tag, or a tag with a suffix such as
-     * "1.0.0-rc1" — is not comparable, so it is rejected here and the caller
-     * turns that into a failure rather than guessing.
-     */
-    private fun parseVersion(value: String): Triple<Int, Int, Int>? {
-        val parts = value.split(".")
-        if (parts.size != 3) return null
-        val numbers = parts.map { it.toIntOrNull() ?: return null }
-        if (numbers.any { it < 0 }) return null
-        return Triple(numbers[0], numbers[1], numbers[2])
     }
 }

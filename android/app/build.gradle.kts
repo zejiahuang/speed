@@ -15,6 +15,39 @@ plugins {
  */
 val disclaimerResDir = layout.buildDirectory.dir("generated/disclaimer/res")
 
+/**
+ * The version this repository records — the only place it is written.
+ *
+ * [appVersionName] and [appVersionCode] below read these, and the
+ * `defaultConfig` block reads those, so there is one literal per number rather
+ * than two that can disagree.
+ */
+val repoVersionName = "0.2.3"
+val repoVersionCode = 5
+
+/**
+ * The version the build actually carries, overridable per invocation.
+ *
+ * **Why an override exists at all.** The daily beta workflow tags a build
+ * `v0.2.3-beta.7`, and `release.yml`'s artifact check requires a tag to equal
+ * the packaged `versionName` — so a beta cannot keep the repository's version
+ * and still pass its own validation. Rewriting this file inside CI would work
+ * too, but it makes the build mutate tracked source; a property keeps the
+ * checkout pristine. It also means a local build can claim any version
+ * (`-PappVersionName=9.9.9`), which is how the update UI is exercised without
+ * cutting a release.
+ *
+ * **`versionCode` is deliberately not raised for a beta.** Android refuses to
+ * install a lower `versionCode`, so a beta numbered above the release it
+ * precedes would strand every tester on the beta — the stable build could no
+ * longer replace it. Carrying the repository's code means the beta installs
+ * over the previous release and the release installs over the beta, in both
+ * directions. The name is what tells the two apart, and the name is what the
+ * update check compares.
+ */
+val appVersionName: String = providers.gradleProperty("appVersionName").orNull ?: repoVersionName
+val appVersionCode: Int = providers.gradleProperty("appVersionCode").orNull?.toInt() ?: repoVersionCode
+
 android {
     namespace = "dev.detour"
     compileSdk = 36
@@ -26,8 +59,8 @@ android {
         // code paths for the tunnel and the foreground service.
         minSdk = 26
         targetSdk = 36
-        versionCode = 4
-        versionName = "0.2.2"
+        versionCode = appVersionCode
+        versionName = appVersionName
     }
 
     // --- ABI splits ---------------------------------------------------------
@@ -248,4 +281,17 @@ dependencies {
     // this app needs are all in `material-icons-core`, which `material3` already
     // brings.
     debugImplementation("androidx.compose.ui:ui-tooling")
+
+    // Unit tests for the pure logic that has no Android dependency — today, just
+    // `Version`'s ordering. JUnit 4 rather than 5 because AGP's default `test`
+    // task wires JUnit 4 with no extra configuration and nothing here needs the
+    // newer runner.
+    //
+    // Deliberately no `androidTestImplementation`. The behaviours worth testing
+    // in this project are either pure functions (covered here) or measurable only
+    // on a real device — see the standing rule that network behaviour is measured
+    // on the emulator. An instrumentation harness would add a second, weaker way
+    // to check the same things, and a weaker test that passes is worse than no
+    // test, because it is believed.
+    testImplementation("junit:junit:4.13.2")
 }

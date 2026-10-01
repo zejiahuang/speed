@@ -279,6 +279,7 @@ object SettingsBackup {
         string("rule_source_id", { it.ruleSourceId }, { p, v -> p.updateRuleSource(v) }),
         string("update_url", { it.updateUrl }, { p, v -> p.updateUpdateUrl(v) }),
         bool("auto_check_update", { it.autoCheckUpdate }, { p, v -> p.updateAutoCheckUpdate(v) }),
+        string("update_channel", { it.updateChannel }, { p, v -> p.updateUpdateChannel(v) }),
         // `last_update_check_at` is deliberately absent, the second exception to
         // the membership rule stated in the class comment. It records when *this*
         // device last attempted a check, which is a fact about the device and not

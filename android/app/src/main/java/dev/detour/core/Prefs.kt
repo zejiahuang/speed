@@ -222,6 +222,63 @@ class Prefs private constructor(private val store: SharedPreferences) {
         private set
 
     /**
+     * Which release channel the update check follows: [UPDATE_CHANNEL_STABLE]
+     * (the default) or [UPDATE_CHANNEL_BETA].
+     *
+     * **Why this is a user-facing preference at all.** The app is distributed
+     * through GitHub Releases, where a prerelease is a build the author has
+     * deliberately not offered to everyone. Reading only stable releases is
+     * therefore the right default — but without a control, a user who wants to
+     * help test has no way to say so, and a channel nobody can choose is
+     * indistinguishable from a channel that does not exist.
+     *
+     * **Strict, not "prefer".** Choosing [UPDATE_CHANNEL_BETA] asks for
+     * prereleases *only*; it does not fall back to a stable release. A fallback
+     * would mean someone who deliberately opted into testing still receives the
+     * stable build, and the setting would then describe something other than
+     * what it says. The cost is accepted and stated in the UI rather than hidden:
+     * with no prerelease published, the beta channel honestly reports "已是最新版本".
+     *
+     * The default is the stable channel, which is exactly what an upgraded
+     * install already does, so `migrate` gains no step — the same reason
+     * `applied_kernel_settings` needs none.
+     */
+    var updateChannel by mutableStateOf(normalizeUpdateChannel(store.getString(KEY_UPDATE_CHANNEL, null)))
+        private set
+
+    /**
+     * [updateChannel] as the type `UpdateChecker` works in.
+     *
+     * The conversion lives here so it happens in one place. It is now a total
+     * function of a two-valued input — [normalizeUpdateChannel] has already
+     * collapsed anything else at both the read and the write — but the mapping
+     * still belongs here rather than at the call site, so `UpdateState` never
+     * has to know how the preference spells "beta".
+     */
+    val updateChannelValue: UpdateChecker.Channel
+        get() = if (updateChannel == UPDATE_CHANNEL_BETA) {
+            UpdateChecker.Channel.BETA
+        } else {
+            UpdateChecker.Channel.STABLE
+        }
+
+    /**
+     * Collapses a stored or supplied channel onto one of the two known values.
+     *
+     * Applied on the way in *and* on the way out, because the About page renders
+     * this value as the selected segment of a two-option row: a third value
+     * would leave the control with nothing selected while the check silently
+     * behaved as stable — a switch that displays a state the app is not in.
+     * Unknown input reads as stable, which is the conservative direction:
+     * reading it as beta would opt a device into prereleases on the strength of
+     * a typo. `null` is a value `SharedPreferences` can hand back even for a
+     * key that was written with a default, so it is handled rather than
+     * dereferenced.
+     */
+    private fun normalizeUpdateChannel(value: String?): String =
+        if (value == UPDATE_CHANNEL_BETA) UPDATE_CHANNEL_BETA else UPDATE_CHANNEL_STABLE
+
+    /**
      * When this device last *attempted* an update check, as
      * `System.currentTimeMillis()`; `0L` means "never".
      *
@@ -946,6 +1003,10 @@ class Prefs private constructor(private val store: SharedPreferences) {
     fun updateAutoConnect(value: Boolean) { autoConnect = value; edit { putBoolean(KEY_AUTO_CONNECT, value) } }
     fun updateUpdateUrl(value: String) { updateUrl = value.trim(); edit { putString(KEY_UPDATE_URL, updateUrl) } }
     fun updateAutoCheckUpdate(value: Boolean) { autoCheckUpdate = value; edit { putBoolean(KEY_AUTO_CHECK_UPDATE, value) } }
+    fun updateUpdateChannel(value: String) {
+        updateChannel = normalizeUpdateChannel(value)
+        edit { putString(KEY_UPDATE_CHANNEL, updateChannel) }
+    }
     fun updateLastUpdateCheckAt(value: Long) { lastUpdateCheckAt = value; edit { putLong(KEY_LAST_UPDATE_CHECK_AT, value) } }
     fun updateDisclaimerAcceptedDigest(value: String) { disclaimerAcceptedDigest = value; edit { putString(KEY_DISCLAIMER_ACCEPTED, value) } }
     fun updateStatsInterval(value: Int) { statsIntervalSeconds = value; edit { putInt(KEY_STATS_INTERVAL, value) } }
@@ -1049,6 +1110,9 @@ class Prefs private constructor(private val store: SharedPreferences) {
         // comment above this method says these lines are copied from.
         updateUpdateUrl(UpdateChecker.DEFAULT_MANIFEST_URL)
         updateAutoCheckUpdate(true)
+        // Back to stable, the factory channel. A restored device should not keep
+        // receiving prereleases because of a choice made by its previous owner.
+        updateUpdateChannel(UPDATE_CHANNEL_STABLE)
         // Reset even though it is not a preference. A restored device should be
         // free to check immediately rather than inherit the previous owner's
         // throttle window; that is a local action, and it is exactly why this key
@@ -1246,6 +1310,21 @@ class Prefs private constructor(private val store: SharedPreferences) {
         private const val KEY_CONFIRM_DISCONNECT = "confirm_disconnect"
     private const val KEY_MODE = "mode"
     private const val KEY_AUTO_CONNECT = "auto_connect"
+
+    /**
+     * The update channel that follows stable releases only; see `updateChannel`.
+     *
+     * Public because the About screen's segmented row is built from these two
+     * values — a UI that spelled "stable" itself would be a second definition of
+     * the same thing, and the two would drift.
+     */
+    const val UPDATE_CHANNEL_STABLE = "stable"
+
+    /** The update channel that follows prereleases only; see `updateChannel`. */
+    const val UPDATE_CHANNEL_BETA = "beta"
+
+    /** Which channel the update check follows; see `updateChannel`. */
+    private const val KEY_UPDATE_CHANNEL = "update_channel"
 
     /** URL of the update version manifest; `""` means "do not check". */
     private const val KEY_UPDATE_URL = "update_url"

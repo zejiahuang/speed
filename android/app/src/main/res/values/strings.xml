@@ -474,6 +474,10 @@
     <string name="about_update_failed">检查失败：%1$s</string>
     <string name="about_update_auto_check">启动时自动检查</string>
     <string name="about_update_auto_check_hint">每天最多一次，只在有更新时提醒</string>
+    <string name="about_update_channel">更新通道</string>
+    <string name="about_update_channel_hint">测试版只查找预发布版本，不含稳定版</string>
+    <string name="about_update_channel_stable">稳定版</string>
+    <string name="about_update_channel_beta">测试版</string>
     <string name="update_dialog_title">有新版本</string>
     <string name="update_dialog_version">版本 %1$s</string>
     <string name="update_dialog_later">稍后</string>

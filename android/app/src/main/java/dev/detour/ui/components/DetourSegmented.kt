@@ -29,6 +29,11 @@ import dev.detour.ui.theme.DetourTheme
  *
  * The label and the surrounding padding match [DetourChoiceRow] exactly, so a
  * call site can move between the two by changing one function name.
+ *
+ * [hint] exists for the same reason [DetourToggleRow] has one: a setting whose
+ * meaning is not obvious from its options needs a line of explanation, and the
+ * alternative — folding the explanation into the label — makes the label long
+ * enough that the options below it stop reading as its answer.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -38,9 +43,17 @@ fun DetourSegmentedRow(
     selected: String,
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
+    hint: String? = null,
 ) {
     Column(modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
         Text(label, style = MaterialTheme.typography.bodyLarge)
+        if (hint != null) {
+            Text(
+                hint,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         Spacer(Modifier.height(8.dp))
         SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
             options.forEachIndexed { index, (value, labelRes) ->

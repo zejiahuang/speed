@@ -43,6 +43,7 @@ import dev.detour.ui.components.DetourDivider
 import dev.detour.ui.components.DetourKeyValueRow
 import dev.detour.ui.components.DetourPageHeader
 import dev.detour.ui.components.DetourSectionCard
+import dev.detour.ui.components.DetourSegmentedRow
 import dev.detour.ui.components.DetourToggleRow
 import dev.detour.ui.components.MarkdownText
 import kotlinx.coroutines.Dispatchers
@@ -295,6 +296,31 @@ fun AboutScreen(onClose: () -> Unit) {
                 // one — so the guard is kept rather than dropped along with the
                 // address row that used to be able to clear it.
                 if (updateUrl.isNotBlank()) {
+                    // The channel row lives inside the same guard as the button
+                    // below it, for the same reason the button does: with no
+                    // address there is no check for a channel to apply to, so
+                    // every setting of this control would be equally inert. That
+                    // is the "a control that cannot have an effect must not be
+                    // shown" rule applied to a second control.
+                    DetourDivider()
+                    DetourSegmentedRow(
+                        label = stringResource(R.string.about_update_channel),
+                        hint = stringResource(R.string.about_update_channel_hint),
+                        options = listOf(
+                            Prefs.UPDATE_CHANNEL_STABLE to R.string.about_update_channel_stable,
+                            Prefs.UPDATE_CHANNEL_BETA to R.string.about_update_channel_beta,
+                        ),
+                        selected = prefs.updateChannel,
+                        // No explicit clearing here. The result row below reads
+                        // through `UpdateState.resultFor(prefs.updateChannelValue)`,
+                        // so a result produced for the other channel stops being
+                        // rendered the moment this value changes — including when
+                        // the change comes from somewhere other than this control
+                        // (the control channel's `set update_channel`, a restored
+                        // settings document). Clearing here would cover only this
+                        // one path.
+                        onSelect = { value -> prefs.updateUpdateChannel(value) },
+                    )
                     DetourDivider()
                     Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
                         DetourButton(
@@ -334,7 +360,11 @@ fun AboutScreen(onClose: () -> Unit) {
                         }
                     }
 
-                    val result = UpdateState.result
+                    // Read through `resultFor`, never as the raw `result`: a result
+                    // answers one channel's question, and the row below is drawn
+                    // under this page's channel control. See `UpdateState.resultFor`
+                    // for the device measurement that made the raw read a bug.
+                    val result = UpdateState.resultFor(prefs.updateChannelValue)
                     if (result != null) {
                         DetourDivider()
                         // The three outcomes are rendered as themselves rather

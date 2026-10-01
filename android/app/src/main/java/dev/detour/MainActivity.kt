@@ -48,7 +48,6 @@ import dev.detour.core.Disclaimer
 import dev.detour.core.KernelState
 import dev.detour.core.Prefs
 import dev.detour.core.Rate
-import dev.detour.core.UpdateChecker
 import dev.detour.core.UpdateState
 import dev.detour.core.WallpaperStore
 import dev.detour.ui.AboutScreen
@@ -437,23 +436,23 @@ private fun DetourAppBody(onRequestNotifications: () -> Unit = {}) {
         // in it has nothing to refract, and this dialog therefore uses a plain
         // Material surface — see `ReleaseNotes.kt`.
         //
-        // **Gated on `disclaimerAccepted` as well as `shouldPrompt`.** Both windows
+        // **Gated on `disclaimerAccepted` as well as the pending prompt.** Both windows
         // can want to be up at once on the launch after an upgrade — the update check
         // runs from `Application.onCreate`, before this screen exists — and a second
         // dialog over the consent gate turns a choice about the app into a choice
         // between two documents, one of which is not readable while the other is in
-        // front of it. The gate wins; the update prompt is still `shouldPrompt`, so it
+        // front of it. The gate wins; the update prompt is still pending, so it
         // appears the moment the gate is answered.
         //
-        // The branch is only entered when `shouldPrompt` is true, which implies
-        // `result` is `Available`, so the cast below is safe — `result` is mutable
-        // state, Kotlin does not smart-cast it, and an explicit cast is the only way
-        // to say that. `release` is hoisted into a local because both callbacks below
-        // need it, and a lambda should capture the result this frame saw.
-        if (disclaimerAccepted && UpdateState.shouldPrompt) {
-            val release = (UpdateState.result as UpdateChecker.Result.Available).release
+        // The release comes back from `UpdateState` already narrowed to the channel
+        // on screen, so this is a null test rather than a boolean test followed by a
+        // cast: an `Available` result produced for the *other* channel must not raise
+        // a dialog here, and a version number offered for a channel the user is not
+        // on is the one thing this dialog must never show.
+        val promptRelease = UpdateState.pendingPrompt(prefs.updateChannelValue)?.release
+        if (disclaimerAccepted && promptRelease != null) {
             UpdateAvailableDialog(
-                release = release,
+                release = promptRelease,
                 // 稍后 and a tap outside both mean "not this time", not "never remind
                 // me again" — the flag is scoped to this process, for the reason given
                 // on `UpdateState.promptShown`.
@@ -463,7 +462,7 @@ private fun DetourAppBody(onRequestNotifications: () -> Unit = {}) {
                     // that can open a link (`openInBrowser` swallows that exception),
                     // the user has seen the dialog and made a choice, and it must not
                     // come back just because the link would not open.
-                    openInBrowser(context, release.url)
+                    openInBrowser(context, promptRelease.url)
                     UpdateState.markPromptShown()
                 },
             )
