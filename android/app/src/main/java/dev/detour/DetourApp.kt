@@ -5,6 +5,7 @@ import android.net.VpnService
 import androidx.core.content.ContextCompat
 import dev.detour.core.BuildFlags
 import dev.detour.core.DetourVpnService
+import dev.detour.core.Disclaimer
 import dev.detour.core.Kernel
 import dev.detour.core.KernelState
 import dev.detour.core.LogArchive
@@ -159,9 +160,35 @@ class DetourApp : Application() {
      * connecting, so a missing consent is logged and skipped rather than forced.
      *
      * Proxy mode needs no consent at all, so the gate applies only to VPN.
+     *
+     * **The disclaimer gate comes before all of that, and is not mode-specific.**
+     * The disclaimer is about the software rather than about a permission, so it
+     * covers both modes — starting a tunnel for someone who has never been shown
+     * the notice would make the notice decorative. This runs from
+     * `Application.onCreate`, i.e. strictly before `MainActivity` can put the dialog
+     * on screen, which is exactly why the check has to be here: the window appears a
+     * frame or two later, and a tunnel that came up in the meantime would already be
+     * carrying traffic.
      */
     private fun maybeAutoConnect() {
-        if (!Prefs.of(this).autoConnect) return
+        val prefs = Prefs.of(this)
+        if (!prefs.autoConnect) return
+
+        // After the `autoConnect` test rather than before it, so the WARN below is
+        // only ever emitted when a connection was actually wanted and withheld.
+        // Logging it on every launch of every install that never enabled
+        // auto-connect would be noise, and noise is what makes a real WARN hard to
+        // find. `isAccepted` reads the bundled text; an unreadable resource counts
+        // as accepted (see `Disclaimer`), so a packaging defect does not silently
+        // disable auto-connect as a second symptom.
+        if (!Disclaimer.isAccepted(Disclaimer.text(this), prefs)) {
+            KernelState.log(
+                KernelState.LogEntry.Level.WARN,
+                "DetourApp",
+                "启动自动连接跳过：还没有接受免责声明",
+            )
+            return
+        }
 
         val mode = KernelState.status.value.mode
         val needsConsent = runCatching { VpnService.prepare(this) }.getOrNull() != null

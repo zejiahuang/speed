@@ -44,7 +44,7 @@ import dev.detour.ui.components.DetourKeyValueRow
 import dev.detour.ui.components.DetourPageHeader
 import dev.detour.ui.components.DetourSectionCard
 import dev.detour.ui.components.DetourToggleRow
-import dev.detour.ui.components.ReleaseNotesText
+import dev.detour.ui.components.MarkdownText
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -376,14 +376,14 @@ fun AboutScreen(onClose: () -> Unit) {
                                         Spacer(Modifier.height(4.dp))
                                         // The upper bound is not optional: this whole
                                         // page scrolls vertically, and without a bound
-                                        // the scroll inside `ReleaseNotesText` would
+                                        // the scroll inside `MarkdownText` would
                                         // receive an infinite constraint and throw.
                                         // 240dp is the compromise between "several
                                         // lines visible at a glance" and "does not
                                         // push the download button off the screen";
                                         // anything longer scrolls inside the component.
-                                        ReleaseNotesText(
-                                            notes = notes,
+                                        MarkdownText(
+                                            markdown = notes,
                                             modifier = Modifier
                                                 .fillMaxWidth()
                                                 .heightIn(max = 240.dp),

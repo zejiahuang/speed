@@ -1,6 +1,7 @@
 package dev.detour
 
 import android.Manifest
+import android.app.Activity
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
@@ -43,6 +44,7 @@ import androidx.core.content.ContextCompat
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import dev.detour.core.DetourVpnService
+import dev.detour.core.Disclaimer
 import dev.detour.core.KernelState
 import dev.detour.core.Prefs
 import dev.detour.core.Rate
@@ -55,6 +57,7 @@ import dev.detour.ui.HomeScreen
 import dev.detour.ui.LogsScreen
 import dev.detour.ui.RulesScreen
 import dev.detour.ui.SettingsScreen
+import dev.detour.ui.components.DisclaimerDialog
 import dev.detour.ui.components.FloatingGlassBar
 import dev.detour.ui.components.LocalBottomBarClearance
 import dev.detour.ui.components.LocalLayerBackdrop
@@ -113,7 +116,18 @@ class MainActivity : ComponentActivity() {
             Rate.clear()
         }
 
-        askForNotifications()
+        // `askForNotifications` is **not** called here, and the reason is measured
+        // rather than theoretical. On Android 13+ this Activity's `onCreate` runs a
+        // few frames before the first composition, so requesting here put the
+        // system's permission window on top of the first-launch disclaimer — a
+        // `dumpsys window` during a fresh install showed
+        // `GrantPermissionsActivity` focused and `dev.detour.MainActivity` behind
+        // it, and `uiautomator` saw only the permission dialog. The consequence was
+        // not cosmetic: the disclaimer's countdown had already started, so those
+        // ten seconds ran down while the user was looking at a different window and
+        // the notice could be dismissed on the first frame it was ever visible. It
+        // is requested from the composition instead, once the gate is answered —
+        // see `DetourAppBody`.
 
         setContent {
             val prefs = Prefs.of(this)
@@ -136,7 +150,7 @@ class MainActivity : ComponentActivity() {
                 fontScale = prefs.fontScale,
                 cornerStyle = prefs.cornerStyle,
             ) {
-                DetourAppBody()
+                DetourAppBody(onRequestNotifications = ::askForNotifications)
             }
         }
     }
@@ -190,8 +204,17 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/**
+ * The app's content, and the one place that owns the first-launch consent gate.
+ *
+ * [onRequestNotifications] is a parameter rather than a call to a helper because
+ * asking for a runtime permission needs an Activity, and the point of the
+ * parameter is *when* it is called — see the `LaunchedEffect` below. It defaults
+ * to doing nothing so the `@Preview` above can render this without an Activity to
+ * ask from.
+ */
 @Composable
-private fun DetourAppBody() {
+private fun DetourAppBody(onRequestNotifications: () -> Unit = {}) {
     var selected by rememberSaveable { mutableIntStateOf(0) }
     // Whether 关于 is on top of everything. A boolean rather than a fifth
     // `Destination`, and `rememberSaveable` for the same reason `selected` uses
@@ -202,6 +225,42 @@ private fun DetourAppBody() {
     val scheme = MaterialTheme.colorScheme
     val context = LocalContext.current
     val prefs = Prefs.of(context)
+
+    // The first-launch consent gate.
+    //
+    // The text is read once per `Context` and held rather than read on each
+    // recomposition: it is a ~10 KB raw resource and this body recomposes on
+    // every state change in the app, so re-reading it would be steady work with
+    // no result. `remember(context)` rather than a bare `remember` so that a
+    // configuration change re-reads through the new context.
+    //
+    // **Acceptance is a property of the text, not a flag.** `Disclaimer` stores
+    // the digest of what was agreed to, so editing `DISCLAIMER.md` re-asks — see
+    // that object for why a stored boolean would be wrong. The read of
+    // `prefs.disclaimerAcceptedDigest` inside `isAccepted` happens during
+    // composition, so accepting recomposes this body and the dialog leaves on its
+    // own; there is no local "dismissed" state to keep in step with the record.
+    //
+    // `null` text means the build never ran `syncDisclaimer`; `isAccepted` reports
+    // that as accepted, so a packaging defect shows no dialog rather than a dialog
+    // with an empty body. `DetourApp` logs it.
+    val disclaimerText = remember(context) { Disclaimer.text(context) }
+    val disclaimerAccepted = Disclaimer.isAccepted(disclaimerText, prefs)
+
+    // The notification permission, asked for only once the gate is answered.
+    //
+    // **Why this is here and not in `onCreate`.** Measured on a fresh install:
+    // requesting from `onCreate` put the system's permission window on top of the
+    // disclaimer, and because the disclaimer's countdown starts when it is
+    // composed, the ten seconds expired behind a window the user was not looking
+    // at. Keying on `disclaimerAccepted` makes the request fire either immediately
+    // (an install that has already agreed — same timing as before) or the moment
+    // the user agrees, which is the earliest point at which the notice has been
+    // read. `LaunchedEffect` and not a plain call in composition: this launches a
+    // system Activity, which is a side effect and must not run during composition.
+    LaunchedEffect(disclaimerAccepted) {
+        if (disclaimerAccepted) onRequestNotifications()
+    }
 
     // The wallpaper is decoded off the main thread and re-read whenever the pref's
     // identity changes, so picking a photo lands on the next frame rather than on
@@ -369,21 +428,29 @@ private fun DetourAppBody() {
             AboutScreen(onClose = { showAbout = false })
         }
 
-        // The "a new version is available" dialog, drawn last and beside 关于.
+        // The "a new version is available" dialog, drawn near the end and beside 关于.
         //
         // It is a `Dialog`, i.e. a separate window, so its position in the
-        // composition tree does not decide its stacking — being the last child of the
+        // composition tree does not decide its stacking — being a late child of the
         // `Box` only keeps it readable next to the other overlay. The real constraint
         // is inside the window: a `Dialog` cannot sample the page's pixels, so glass
         // in it has nothing to refract, and this dialog therefore uses a plain
         // Material surface — see `ReleaseNotes.kt`.
+        //
+        // **Gated on `disclaimerAccepted` as well as `shouldPrompt`.** Both windows
+        // can want to be up at once on the launch after an upgrade — the update check
+        // runs from `Application.onCreate`, before this screen exists — and a second
+        // dialog over the consent gate turns a choice about the app into a choice
+        // between two documents, one of which is not readable while the other is in
+        // front of it. The gate wins; the update prompt is still `shouldPrompt`, so it
+        // appears the moment the gate is answered.
         //
         // The branch is only entered when `shouldPrompt` is true, which implies
         // `result` is `Available`, so the cast below is safe — `result` is mutable
         // state, Kotlin does not smart-cast it, and an explicit cast is the only way
         // to say that. `release` is hoisted into a local because both callbacks below
         // need it, and a lambda should capture the result this frame saw.
-        if (UpdateState.shouldPrompt) {
+        if (disclaimerAccepted && UpdateState.shouldPrompt) {
             val release = (UpdateState.result as UpdateChecker.Result.Available).release
             UpdateAvailableDialog(
                 release = release,
@@ -398,6 +465,46 @@ private fun DetourAppBody() {
                     // come back just because the link would not open.
                     openInBrowser(context, release.url)
                     UpdateState.markPromptShown()
+                },
+            )
+        }
+
+        // The consent gate. Last in the `Box` so its window is created after the
+        // update prompt's and therefore sits above it — though in practice only one
+        // of the two is ever up, because that prompt is gated on this one having
+        // been answered.
+        //
+        // **Why declining exits the app.** The alternative is a dialog that closes
+        // and leaves a running app whose tunnel will never start — a window that
+        // asked a question and then ignored the answer. Leaving is the honest
+        // outcome, and it costs nothing: nothing has been written, so the next
+        // launch asks again. `finish` rather than `finishAffinity` because this is
+        // the app's only Activity.
+        //
+        // The `disclaimerText != null` test is not redundant with `isAccepted`: a
+        // missing resource reports "accepted", but if that ever changed, this is
+        // what keeps a body-less dialog off the screen.
+        if (!disclaimerAccepted && disclaimerText != null) {
+            DisclaimerDialog(
+                text = disclaimerText,
+                onAccept = {
+                    // Writing the digest *is* accepting: the gate above is a
+                    // comparison against this value, so the dialog leaves on the
+                    // next recomposition with no local state to clear. Logged
+                    // because a consent record that lives only in
+                    // `SharedPreferences` is invisible to the archive the owner
+                    // reads when reconstructing what happened.
+                    prefs.updateDisclaimerAcceptedDigest(Disclaimer.digest(disclaimerText))
+                    KernelState.log(
+                        KernelState.LogEntry.Level.INFO, "MainActivity", "用户已接受免责声明",
+                    )
+                },
+                onDecline = {
+                    KernelState.log(
+                        KernelState.LogEntry.Level.WARN, "MainActivity",
+                        "用户不同意免责声明，退出应用",
+                    )
+                    (context as? Activity)?.finish()
                 },
             )
         }

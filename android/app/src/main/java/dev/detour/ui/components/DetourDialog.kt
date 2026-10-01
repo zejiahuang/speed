@@ -5,6 +5,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.window.DialogProperties
 import dev.detour.ui.theme.DetourTheme
 
 /**
@@ -14,6 +15,11 @@ import dev.detour.ui.theme.DetourTheme
  * getting subtly wrong: the title is always a `Text` at the theme's title style,
  * and the body is a nullable slot so a confirmation with no body does not need a
  * fake empty `text = {}`.
+ *
+ * [properties] is passed through rather than decided here. The default is
+ * Material's — dismissible from the back gesture and from a tap outside — which is
+ * right for every dialog that asks something the user may decline. It is exposed
+ * for the one dialog that must not be dismissed at all; see `DisclaimerDialog`.
  */
 @Composable
 fun DetourAlertDialog(
@@ -23,6 +29,7 @@ fun DetourAlertDialog(
     modifier: Modifier = Modifier,
     text: (@Composable () -> Unit)? = null,
     dismissButton: (@Composable () -> Unit)? = null,
+    properties: DialogProperties = DialogProperties(),
 ) {
     AlertDialog(
         onDismissRequest = onDismissRequest,
@@ -31,6 +38,7 @@ fun DetourAlertDialog(
         text = text,
         confirmButton = confirmButton,
         dismissButton = dismissButton,
+        properties = properties,
     )
 }
 

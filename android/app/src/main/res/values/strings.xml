@@ -478,4 +478,21 @@
     <string name="update_dialog_version">版本 %1$s</string>
     <string name="update_dialog_later">稍后</string>
     <string name="about_close">关闭</string>
+
+    <!-- First-launch disclaimer. The body is not here: it is DISCLAIMER.md at the
+         repository root, copied into res/raw at build time, so the app shows
+         exactly what the repository publishes. Only the frame around it lives
+         here.
+
+         `disclaimer_title` is a fallback, not the title in normal use: the dialog
+         takes its title from the document's own opening heading (see
+         `Disclaimer.titleAndBody`), so the heading is not drawn twice and the
+         window cannot announce a heading the document no longer has. This string
+         is what shows if the document ever opens with something else. -->
+    <string name="disclaimer_title">免责声明</string>
+    <string name="disclaimer_intro">使用前请阅读以下声明。本应用不提供任何网络出口、不解密 TLS，也不对你的使用方式作出任何担保；继续使用即表示你接受其中的全部条款。</string>
+    <string name="disclaimer_accept">我已阅读并同意</string>
+    <!-- %1$d is the seconds left; see DISCLAIMER_LOCK_SECONDS. -->
+    <string name="disclaimer_accept_locked">我已阅读并同意（%1$d）</string>
+    <string name="disclaimer_decline">不同意并退出</string>
 </resources>

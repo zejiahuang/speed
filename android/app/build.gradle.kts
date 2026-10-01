@@ -6,6 +6,15 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+/**
+ * Where the first-launch disclaimer is materialised as a resource.
+ *
+ * Declared out here because two places need the same path — the `res.srcDir`
+ * inside the `android` block and the task below that fills it — and a path
+ * written twice is a path that drifts.
+ */
+val disclaimerResDir = layout.buildDirectory.dir("generated/disclaimer/res")
+
 android {
     namespace = "dev.detour"
     compileSdk = 36
@@ -113,6 +122,50 @@ android {
     // and keeping the two apart means the Rust build can be run and debugged on
     // its own.
     sourceSets["main"].jniLibs.srcDirs("src/main/jniLibs")
+
+    // --- the disclaimer the app shows on first launch -----------------------
+    //
+    // `DISCLAIMER.md` at the repository root is the **only** copy of that text,
+    // and it is materialised here as a resource so the app can show exactly what
+    // the repository publishes.
+    //
+    // Generated rather than checked in, for two separate reasons. A checked-in
+    // copy under `src/` would be a second version of a legal document to keep in
+    // step with the first, which is the same drift this project has already paid
+    // for three times with values that outlived what they described. And a build
+    // step that writes into the source tree dirties the working tree, which is
+    // how a stray file ends up in the next `git add`.
+    sourceSets["main"].res.srcDir(disclaimerResDir)
+}
+
+/**
+ * Copies `DISCLAIMER.md` in as `res/raw/disclaimer.md`.
+ *
+ * The rename is not cosmetic: a `res/raw` name has to be a lowercase identifier,
+ * so `DISCLAIMER.md` could not be a resource name at all. `R.raw.disclaimer` is
+ * what the app opens.
+ *
+ * The `into("raw")` inside the `from` block — rather than on the task — is what
+ * puts the file in a resource *type* directory. `res.srcDir` is a resource root,
+ * and a file sitting directly in one is not a resource: `res/disclaimer.md` has no
+ * type, so the merger either rejects it or ignores it and `R.raw.disclaimer` never
+ * appears. The task's own `into` is the root; the child `into` is the `raw/`
+ * inside it.
+ *
+ * Hooked to `preBuild` rather than to a resource-merge task by name, because every
+ * merge task depends on `preBuild` transitively while AGP's own task names are an
+ * implementation detail that has changed between releases.
+ */
+val syncDisclaimer = tasks.register<Sync>("syncDisclaimer") {
+    from(rootProject.file("../DISCLAIMER.md")) {
+        rename { "disclaimer.md" }
+        into("raw")
+    }
+    into(disclaimerResDir)
+}
+
+tasks.named("preBuild") {
+    dependsOn(syncDisclaimer)
 }
 
 dependencies {
@@ -164,6 +217,32 @@ dependencies {
 
     // Not brought in by material3 transitively; the navigation bar icons need it.
     implementation("androidx.compose.material:material-icons-core:1.7.8")
+
+    // Markdown rendering, for the first-launch disclaimer and the release notes.
+    //
+    // This replaces a hand-rolled flattener that deleted Markdown markers
+    // character by character (`#`, `>`, `**`, backticks). That was defensible while
+    // the only document was a GitHub release body; the disclaimer is a 23 KB
+    // structured document, and the flattener left its markup visible — inline links
+    // rendered as `[LICENSE](LICENSE)` and italic markers as `*which address*`,
+    // because the whole approach could only ever delete the markers it had been
+    // taught about. Rendering is the point now, not stripping.
+    //
+    // The `-m3` artifact carries Material 3 colours, typography and components, so
+    // the output follows the app's theme instead of arriving with its own palette.
+    //
+    // **0.41.0, and not the latest (0.45.0). This is a compileSdk ceiling, not a
+    // preference** — the same wall `backdrop` hit above. 0.42.0 and later declare
+    // `minCompileSdk=37` in their AAR metadata, so `:app:checkDebugAarMetadata`
+    // refuses them: this module compiles against 36 and AGP 8.13.2 tops out there.
+    // 0.41.0 is the newest release that declares 36. Check the AAR's
+    // `META-INF/com/android/build/gradle/aar-metadata.properties` before bumping,
+    // not the version number.
+    //
+    // It pulls `org.jetbrains:markdown` (the parser) and does **not** move Compose:
+    // with it on the classpath, `androidx.compose.ui:ui` still resolves to 1.10.3
+    // from the BOM above.
+    implementation("com.mikepenz:multiplatform-markdown-renderer-m3:0.41.0")
 
     // `material-icons-extended` is not pulled in. It was deprecated and the icons
     // this app needs are all in `material-icons-core`, which `material3` already

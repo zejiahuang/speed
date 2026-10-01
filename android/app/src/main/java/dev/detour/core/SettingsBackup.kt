@@ -38,6 +38,16 @@ import org.json.JSONObject
  *   mode its UI cannot show or undo — a state the user has no control left to
  *   leave. The app's own restore refuses it for that reason.
  *
+ * `disclaimer_accepted_digest` is excluded for a third reason, and it is the only
+ * key here that is excluded without [Prefs.restoreDefaults] touching it at all:
+ * it records that *this person on this device* accepted the disclaimer, which is
+ * neither a preference nor a fact about the device's configuration. Carrying it in
+ * a file would let one device assert another device's consent, and a document that
+ * travels is exactly the wrong shape for a consent record. Because the membership
+ * rule above is "what [restoreDefaults] resets", keeping it out of that function
+ * keeps it out of this file with no second list to maintain — see
+ * `Prefs.disclaimerAcceptedDigest`.
+ *
  * `wallpaper` is reset by [Prefs.restoreDefaults] but is excluded here because
  * its value is the SHA-256 identity of an image file in `filesDir`, and this
  * document does not carry the image. Importing the identity without the bytes

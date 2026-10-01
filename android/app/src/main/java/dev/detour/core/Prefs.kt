@@ -242,6 +242,28 @@ class Prefs private constructor(private val store: SharedPreferences) {
     var lastUpdateCheckAt by mutableStateOf(store.getLong(KEY_LAST_UPDATE_CHECK_AT, 0L))
         private set
 
+    /**
+     * The SHA-256 of the disclaimer text this user accepted, or `""` for never.
+     *
+     * **A record, not a preference, and that is why it is not in
+     * [restoreDefaults].** "Restore defaults" means "put the settings back to how
+     * a new install would have them"; it does not mean "forget that this person
+     * agreed to something". Re-asking on a settings reset would be asking a
+     * question that has already been answered, and the answer would be the same.
+     * Nothing here is a value a user picked, so there is nothing to restore.
+     *
+     * For the same reason [SettingsBackup] does not carry it: its membership rule
+     * is "what [restoreDefaults] resets", so leaving this key out of the reset set
+     * leaves it out of the file automatically, and a consent given on one device
+     * should not be asserted on another by a file.
+     *
+     * **It is a digest rather than a boolean on purpose** — see [Disclaimer]. A
+     * stored `true` would outlive the text it was given for, and the app would go
+     * on reporting consent to a document the user has never seen.
+     */
+    var disclaimerAcceptedDigest by mutableStateOf(store.getString(KEY_DISCLAIMER_ACCEPTED, "").orEmpty())
+        private set
+
     var statsIntervalSeconds by mutableStateOf(store.getInt(KEY_STATS_INTERVAL, 5))
         private set
 
@@ -925,6 +947,7 @@ class Prefs private constructor(private val store: SharedPreferences) {
     fun updateUpdateUrl(value: String) { updateUrl = value.trim(); edit { putString(KEY_UPDATE_URL, updateUrl) } }
     fun updateAutoCheckUpdate(value: Boolean) { autoCheckUpdate = value; edit { putBoolean(KEY_AUTO_CHECK_UPDATE, value) } }
     fun updateLastUpdateCheckAt(value: Long) { lastUpdateCheckAt = value; edit { putLong(KEY_LAST_UPDATE_CHECK_AT, value) } }
+    fun updateDisclaimerAcceptedDigest(value: String) { disclaimerAcceptedDigest = value; edit { putString(KEY_DISCLAIMER_ACCEPTED, value) } }
     fun updateStatsInterval(value: Int) { statsIntervalSeconds = value; edit { putInt(KEY_STATS_INTERVAL, value) } }
     fun updateLogArchive(value: Boolean) { logArchive = value; edit { putBoolean(KEY_LOG_ARCHIVE, value) } }
     fun updateDynamicColor(value: Boolean) { dynamicColor = value; edit { putBoolean(KEY_DYNAMIC_COLOR, value) } }
@@ -1235,6 +1258,15 @@ class Prefs private constructor(private val store: SharedPreferences) {
      * check; see `lastUpdateCheckAt`.
      */
     private const val KEY_LAST_UPDATE_CHECK_AT = "last_update_check_at"
+
+    /**
+     * Digest of the accepted disclaimer text; see `disclaimerAcceptedDigest`.
+     *
+     * Deliberately absent from [restoreDefaults] and therefore from
+     * `SettingsBackup`'s export set — see the property's note for why a consent
+     * record is not a setting.
+     */
+    private const val KEY_DISCLAIMER_ACCEPTED = "disclaimer_accepted_digest"
 
         @Volatile
         private var instance: Prefs? = null
