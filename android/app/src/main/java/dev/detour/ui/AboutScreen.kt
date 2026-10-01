@@ -19,16 +19,12 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -41,8 +37,6 @@ import dev.detour.core.Prefs
 import dev.detour.core.RuleIndex
 import dev.detour.core.UpdateChecker
 import dev.detour.core.UpdateState
-import dev.detour.ui.components.DetourActionRow
-import dev.detour.ui.components.DetourAlertDialog
 import dev.detour.ui.components.DetourButton
 import dev.detour.ui.components.DetourButtonVariant
 import dev.detour.ui.components.DetourDivider
@@ -97,8 +91,12 @@ fun AboutScreen(onClose: () -> Unit) {
     val prefs = Prefs.of(context)
     val scope = rememberCoroutineScope()
 
+    // The manifest address is still read here even though this page no longer
+    // shows it. It is what decides whether the check button exists at all, and it
+    // can still be blank: the control channel's `set update_url ""` and a
+    // restored settings document both reach it. The guard below is therefore not
+    // dead code even though nothing on this page can clear the value any more.
     val updateUrl = prefs.updateUrl
-    var showUrlDialog by remember { mutableStateOf(false) }
     // The check state is no longer held by this page. `checking` and `result` both
     // come from `UpdateState`: this page's manual button and the silent startup check
     // are one entry point and one piece of state, so this reads it rather than
@@ -244,24 +242,7 @@ fun AboutScreen(onClose: () -> Unit) {
                 title = stringResource(R.string.about_section_update),
                 modifier = Modifier.padding(horizontal = 20.dp),
             ) {
-                DetourActionRow(
-                    label = stringResource(R.string.about_update_url),
-                    hint = if (updateUrl.isBlank()) {
-                        stringResource(R.string.about_update_unset)
-                    } else {
-                        updateUrl
-                    },
-                    actionLabel = stringResource(
-                        if (updateUrl.isBlank()) {
-                            R.string.about_update_set
-                        } else {
-                            R.string.about_update_change
-                        },
-                    ),
-                    onAction = { showUrlDialog = true },
-                )
-
-                // The 启动时自动检查 switch.
+                // The 启动时自动检查 switch, and now the card's first row.
                 //
                 // **It has to exist.** The startup check is a behaviour that issues a
                 // network request on its own: the user taps nothing and the app sends
@@ -273,10 +254,25 @@ fun AboutScreen(onClose: () -> Unit) {
                 // something, and a behaviour that genuinely does something must come
                 // with a control that genuinely stops it.
                 //
-                // It sits under 版本清单地址 because the two are halves of one
-                // subject: the address decides *where* to check, the switch decides
-                // *whether* to check by itself.
-                DetourDivider()
+                // **The 版本清单地址 row that used to sit above this is gone, and
+                // the consequence is accepted rather than overlooked.** That row
+                // printed the manifest URL in full — two wrapped lines on every
+                // device — and its 修改 button opened a dialog whose only purpose was
+                // to point the app at a mirror of the user's own. Nothing about
+                // checking for updates requires reading or editing the address, so
+                // the row was a permanent piece of developer-facing detail in a
+                // user-facing page. What is lost with it is the in-app way to change
+                // the source: the default is compiled in
+                // (`UpdateChecker.DEFAULT_MANIFEST_URL`), and the only override left
+                // is the control channel's `set update_url <url>`.
+                //
+                // **The https-only rule did not go with the dialog.** It lives in
+                // `UpdateChecker.check`, which refuses a non-`https` scheme before
+                // opening anything, so an `http://` address written over the control
+                // channel still fails with the same message the dialog used to
+                // prevent. The dialog was the earlier of two checks, never the only
+                // one — which is why deleting it cannot make a bad address reach the
+                // network.
                 DetourToggleRow(
                     label = stringResource(R.string.about_update_auto_check),
                     hint = stringResource(R.string.about_update_auto_check_hint),
@@ -289,10 +285,15 @@ fun AboutScreen(onClose: () -> Unit) {
                 // This is the project's "a control that cannot have an effect
                 // must not be shown" rule. With a blank URL, `UpdateChecker.check`
                 // returns `Failed("未配置更新地址")` before it opens anything — so
-                // the button's only possible outcome is a failure message about
-                // the thing the row directly above already says is unset. A button
-                // whose every press is a guaranteed error is worse than no button:
-                // it invites the press and then blames the user for it.
+                // the button's only possible outcome is a failure message about a
+                // value this page no longer displays. A button whose every press is
+                // a guaranteed error is worse than no button: it invites the press
+                // and then blames the user for it.
+                //
+                // A blank address is still reachable from outside this page — the
+                // control channel and a restored settings document can both write
+                // one — so the guard is kept rather than dropped along with the
+                // address row that used to be able to clear it.
                 if (updateUrl.isNotBlank()) {
                     DetourDivider()
                     Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
@@ -341,19 +342,24 @@ fun AboutScreen(onClose: () -> Unit) {
                         // never look like `UpToDate`, or a wrong URL would read as
                         // a confident "已是最新版本" — see `UpdateChecker`'s own
                         // note on why `Failed` is a first-class result.
+                        //
+                        // None of the three carries a label. They used to be
+                        // key-value rows labelled 检查更新, which printed the
+                        // button's own two words a second time one line below the
+                        // button. The button is the only thing that can produce
+                        // this line, so the label identified nothing — see
+                        // `UpdateResultText`.
                         when (result) {
-                            is UpdateChecker.Result.UpToDate -> DetourKeyValueRow(
-                                label = stringResource(R.string.about_update_check),
-                                value = stringResource(R.string.about_update_latest),
+                            is UpdateChecker.Result.UpToDate -> UpdateResultText(
+                                stringResource(R.string.about_update_latest),
                             )
 
                             is UpdateChecker.Result.Available -> {
                                 // Held in locals so the smart cast to `Available`
                                 // is not relied on across the nested lambdas below.
                                 val release = result.release
-                                DetourKeyValueRow(
-                                    label = stringResource(R.string.about_update_check),
-                                    value = stringResource(
+                                UpdateResultText(
+                                    stringResource(
                                         R.string.about_update_available,
                                         release.versionName,
                                     ),
@@ -395,9 +401,8 @@ fun AboutScreen(onClose: () -> Unit) {
                                 }
                             }
 
-                            is UpdateChecker.Result.Failed -> DetourKeyValueRow(
-                                label = stringResource(R.string.about_update_check),
-                                value = stringResource(
+                            is UpdateChecker.Result.Failed -> UpdateResultText(
+                                stringResource(
                                     R.string.about_update_failed,
                                     result.message,
                                 ),
@@ -406,30 +411,7 @@ fun AboutScreen(onClose: () -> Unit) {
                     }
                 }
             }
-
-            DetourSectionCard(
-                title = stringResource(R.string.about_section_what),
-                modifier = Modifier.padding(horizontal = 20.dp),
-            ) {
-                Text(
-                    stringResource(R.string.about_description),
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
         }
-    }
-
-    if (showUrlDialog) {
-        UpdateUrlDialog(
-            initial = updateUrl,
-            onDismiss = { showUrlDialog = false },
-            onConfirm = { url ->
-                prefs.updateUpdateUrl(url)
-                showUrlDialog = false
-            },
-        )
     }
 }
 
@@ -474,110 +456,38 @@ internal fun openInBrowser(context: Context, url: String) {
 }
 
 /**
- * The version-manifest address editor.
+ * One outcome line of the update check, with no label.
  *
- * Same shape as `SliderInputDialog` in `DetourListItem.kt` — a field, a caption
- * under it, and a confirm that refuses bad input instead of coercing it — so the
- * two dialogs in this app that take typed input behave the same way.
+ * **Why there is no label.** The three outcomes used to be `DetourKeyValueRow`s
+ * labelled 检查更新, so the card read:
  *
- * **The caption is the hint until the input is rejected, then it is the error.**
- * One line rather than two, because the hint and the error are answering the same
- * question ("what do I put here"), and stacking them would push the field around
- * while the user is reading it.
+ *     检查更新                     <- the button's label
+ *     --------------------------
+ *     检查更新      已是最新版本      <- the result row: the same two words again
+ *
+ * One line apart, and the label identified nothing the reader did not already
+ * know from the line above it. The button is the only thing that can produce
+ * this line. On a phone the label also took the left half of the row, which is
+ * part of why the address row above it wrapped onto two lines.
+ *
+ * **It is deliberately not a `DetourKeyValueRow` with an empty label.** That row
+ * puts its label in a `Column` carrying `weight(1f)`, so an empty label would
+ * leave the value pushed to the right edge of the card, reading as a value whose
+ * label failed to load. A plain full-width line is what "no label" means.
+ *
+ * The padding is the section card's own row rhythm — 16 dp gutter, 12 dp above
+ * and below — so this line still lines up with the rows in the cards above it,
+ * and the colour is the one `DetourKeyValueRow` uses for its values, so the
+ * outcome still reads as a value rather than as a heading.
  */
 @Composable
-private fun UpdateUrlDialog(
-    initial: String,
-    onDismiss: () -> Unit,
-    onConfirm: (String) -> Unit,
-) {
-    // Seeded with the stored URL, keyed on it so a value that changes underneath
-    // (a backup restore, the control channel) re-seeds the field rather than
-    // leaving the old text in place — the same reason `SliderInputDialog` keys
-    // its `remember` on the incoming value.
-    var text by remember(initial) { mutableStateOf(initial) }
-    var invalid by remember { mutableStateOf(false) }
-
-    DetourAlertDialog(
-        onDismissRequest = onDismiss,
-        title = stringResource(R.string.about_update_url_title),
-        text = {
-            Column {
-                OutlinedTextField(
-                    value = text,
-                    onValueChange = {
-                        text = it
-                        // Clear the error as soon as the user edits: the message
-                        // is about the value that was rejected, and leaving it up
-                        // while they retype would be judging input not yet given.
-                        invalid = false
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    isError = invalid,
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    stringResource(
-                        if (invalid) {
-                            R.string.about_update_url_invalid
-                        } else {
-                            R.string.about_update_url_hint
-                        },
-                    ),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (invalid) {
-                        MaterialTheme.colorScheme.error
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                )
-            }
-        },
-        confirmButton = {
-            DetourButton(
-                onClick = {
-                    val trimmed = text.trim()
-                    // Blank is accepted, and it is the one case where the field
-                    // is not required to look like a URL. The hint above promises
-                    // "留空则不检查更新", and blank is a state the whole feature
-                    // already understands: it hides the check button and makes
-                    // `UpdateChecker.check` refuse before opening a socket. A
-                    // validator that rejected it would make the unset state
-                    // unreachable through the UI once an address had ever been
-                    // set — the only way back to "no update source" would be to
-                    // clear the app's data.
-                    //
-                    // `http://` is refused for the same reason `UpdateChecker`
-                    // refuses it, and the two must agree: a dialog that accepted
-                    // an address the checker rejects would store a value that
-                    // fails only later, at the check button, as the platform's
-                    // English cleartext message instead of this hint. The scheme
-                    // is not a matter of taste here — the app targets SDK 36 and
-                    // grants no cleartext exemption, so `http://` cannot work.
-                    //
-                    // The scheme test is case-insensitive on purpose.
-                    // `UpdateChecker` lowercases the scheme before comparing it,
-                    // so `HTTPS://…` is a URL it would accept; rejecting it here
-                    // would be this dialog refusing an address the checker is
-                    // happy with.
-                    val lower = trimmed.lowercase()
-                    if (trimmed.isEmpty() || lower.startsWith("https://")) {
-                        onConfirm(trimmed)
-                    } else {
-                        // Keep the dialog open, and say why. Closing it and
-                        // storing nothing would look identical to success.
-                        invalid = true
-                    }
-                },
-            ) {
-                Text(stringResource(R.string.common_confirm))
-            }
-        },
-        dismissButton = {
-            DetourButton(onClick = onDismiss, variant = DetourButtonVariant.Text) {
-                Text(stringResource(R.string.common_cancel))
-            }
-        },
+private fun UpdateResultText(text: String) {
+    Text(
+        text,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
 }

@@ -57,9 +57,13 @@ import org.json.JSONObject
  * about one device does not travel inside a file of another device's
  * preferences, so the key is not written.
  *
- * `updateUrl` is the one addition: it is a new setting that [Prefs.restoreDefaults]
+ * `updateUrl` is the one addition: it is a setting that [Prefs.restoreDefaults]
  * resets, so it is in the reset set too, and it is added explicitly here so the
- * export set stays readable against the rule rather than being inferred.
+ * export set stays readable against the rule rather than being inferred. The
+ * About page no longer displays it (see `AboutScreen`), and that does not change
+ * the rule: membership here is decided by [Prefs.restoreDefaults], not by whether
+ * some screen currently shows the value. Dropping it from the file because its
+ * row was deleted would silently lose a fork-user's mirror on the next import.
  *
  * ## Why the JSON keys are spelled out
  *

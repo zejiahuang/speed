@@ -168,30 +168,34 @@ class Prefs private constructor(private val store: SharedPreferences) {
      * ships its own releases but starts with checking switched off has an update
      * channel that exists only on paper.
      *
-     * **Still a setting rather than a constant, because the source has to be
-     * movable without a rebuild.** The default names this repository, but a user
-     * may run a fork, mirror the manifest behind a proxy of their own, or point
-     * the app at a test manifest for an afternoon — and none of those should
-     * require a new APK. The old wording ("the app has no server of its own") is
-     * still the right idea, just no longer the whole story: the URL is a value,
-     * not a constant, precisely so it can be changed from the settings screen.
+     * **Still a setting rather than a constant, even though nothing in the UI
+     * writes it any more.** The default names this repository, but a fork may want
+     * its own manifest, and running a mirror of the manifest behind a proxy is a
+     * real thing to do — so the URL stays a value instead of being folded into
+     * `UpdateChecker.DEFAULT_MANIFEST_URL`. Two writers remain: the control
+     * channel's `set update_url <url>`, and a restored settings document. The
+     * About page's address row was removed (see `AboutScreen` for why), so the key
+     * survives because the *capability* is still wanted, not because a row still
+     * shows it.
      *
-     * **Empty still means "do not check".** Clearing the row calls
-     * `updateUpdateUrl("")`, which stores a real empty string; the UI then reads
-     * 未配置, and `UpdateChecker.check` returns 未配置更新地址 instead of fetching
-     * anything. That is the user saying "I want no update source", and it is
-     * honoured as such — which is also why no migration rewrites it (below).
+     * **Empty still means "do not check".** `updateUpdateUrl("")` stores a real
+     * empty string, and `UpdateChecker.check` returns 未配置更新地址 instead of
+     * fetching anything. That is the user saying "I want no update source", and it
+     * is honoured as such — which is also why no migration rewrites it (below).
+     * The About page no longer prints 未配置 for it, but it does still hide the
+     * check button, so the state keeps its meaning even though it is now reached
+     * over the control channel rather than through a row.
      *
      * **No migration step, and no `CURRENT_VERSION` bump.** `SharedPreferences`
      * returns a *stored* value over a changed default, so the only question is
-     * who has one. A device that never touched this row has no `update_url` key
-     * at all, so `store.getString` hands it the new default on the next launch —
-     * it gains the source for free. The only devices that read `""` are those
-     * whose owner cleared the row, and that empty string is the user's own "I
-     * want no update source", which a migration must not overwrite. Nothing needs
-     * repairing, so `migrate` gains no step: a step that changes nothing is
-     * ceremony every future reader has to read and trust — the same reason
-     * `applied_kernel_settings` needs no bump (see `migrate`).
+     * who has one. A device that never touched this setting has no `update_url`
+     * key at all, so `store.getString` hands it the new default on the next launch
+     * — it gains the source for free. The only devices that read `""` are those
+     * whose owner cleared it while the row still existed, and that empty string is
+     * the user's own "I want no update source", which a migration must not
+     * overwrite. Nothing needs repairing, so `migrate` gains no step: a step that
+     * changes nothing is ceremony every future reader has to read and trust — the
+     * same reason `applied_kernel_settings` needs no bump (see `migrate`).
      */
     var updateUrl by mutableStateOf(store.getString(KEY_UPDATE_URL, UpdateChecker.DEFAULT_MANIFEST_URL) ?: "")
         private set

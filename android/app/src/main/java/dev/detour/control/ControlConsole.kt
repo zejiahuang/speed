@@ -467,6 +467,11 @@ object ControlConsole {
             // can be read back and confirmed. An empty value is the real
             // "not configured" state, not a missing key, which is why it is
             // dumped unconditionally rather than omitted when blank.
+            //
+            // It is also the only way left to change the address: the About
+            // page's 版本清单地址 row was removed, so this `set` case is what
+            // keeps "point the app at your own mirror" possible without a
+            // rebuild. See `Prefs.updateUrl`.
             .put("update_url", prefs.updateUrl)
             // The auto-check switch is a preference and is reported like any
             // other, so `set auto_check_update false` can be read back and
