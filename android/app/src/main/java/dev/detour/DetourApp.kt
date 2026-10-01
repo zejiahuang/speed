@@ -10,6 +10,7 @@ import dev.detour.core.KernelState
 import dev.detour.core.LogArchive
 import dev.detour.core.Prefs
 import dev.detour.core.RulesRepository
+import dev.detour.core.UpdateState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -116,6 +117,33 @@ class DetourApp : Application() {
                         "启动时预取规则失败：${error.message}",
                     )
                 }
+        }
+
+        // One silent update check at startup.
+        //
+        // **Why this lives in `Application.onCreate` and not in an Activity.** The
+        // same reason as the rules prefetch above: this belongs to "the process
+        // started", not to "some screen was opened". Putting it on the About page
+        // would make "is there a new version" depend on whether the user happened to
+        // open that page, and `MainActivity` is still too late — what has to be
+        // covered is the act of opening the app. This scope's lifetime is the
+        // process, so the check is not cancelled by any screen being destroyed and
+        // always gets to finish after a cold start.
+        //
+        // **Why it is silent.** A failure is logged and nothing is shown: an update
+        // check that reports an error at startup is more annoying than no check at
+        // all. The user did not ask for one, so a dead network, a wrong URL or a
+        // GitHub rate limit must not put anything on screen. On this whole path,
+        // "there genuinely is an update" is the only outcome that later opens a
+        // window (see the `UpdateState.shouldPrompt` test in `MainActivity`).
+        //
+        // The `shouldAutoCheck` test is inside the coroutine rather than done
+        // synchronously here to decide whether to launch at all: it reads `Prefs`,
+        // and `Prefs.of` performs a SharedPreferences read plus migration, so keeping
+        // it on the IO context keeps even that read off the main thread.
+        scope.launch {
+            val prefs = Prefs.of(this@DetourApp)
+            if (UpdateState.shouldAutoCheck(prefs)) UpdateState.run(this@DetourApp)
         }
     }
 

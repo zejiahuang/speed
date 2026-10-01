@@ -468,6 +468,16 @@ object ControlConsole {
             // "not configured" state, not a missing key, which is why it is
             // dumped unconditionally rather than omitted when blank.
             .put("update_url", prefs.updateUrl)
+            // The auto-check switch is a preference and is reported like any
+            // other, so `set auto_check_update false` can be read back and
+            // confirmed.
+            .put("auto_check_update", prefs.autoCheckUpdate)
+            // Reported although it is not settable — there is no `set` case for
+            // it. It is runtime state rather than a preference, like
+            // `applied_kernel_settings` below, and reading this number is the
+            // only way to tell whether the 24-hour throttle is what is
+            // suppressing a startup check.
+            .put("last_update_check_at", prefs.lastUpdateCheckAt)
             .put("disabled_rules", prefs.disabledRules.size)
             .put("kernel_settings", prefs.kernelSettingsJson())
             // Two different questions, and the pair is what makes each unambiguous.
@@ -545,6 +555,11 @@ object ControlConsole {
             // as `dark_mode` above: the value is handed to its setter untouched
             // (the setter trims it), with no parsing that could reject a URL.
             "update_url" -> prefs.updateUpdateUrl(value)
+            // The auto-check switch, a plain boolean like `auto_connect` above.
+            // `last_update_check_at` has no case here on purpose: it is runtime
+            // state, not a preference, so `dump` reports it and `set` leaves it
+            // alone — the same split as `applied_kernel_settings`.
+            "auto_check_update" -> asBool?.let { prefs.updateAutoCheckUpdate(it) } ?: return bad("bool")
             else -> return JSONObject().put("error", "unknown setting: $key")
         }.let { JSONObject().put(key, value) }
     }

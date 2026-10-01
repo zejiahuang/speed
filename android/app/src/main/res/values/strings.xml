@@ -478,8 +478,13 @@
     <string name="about_update_download">前往下载</string>
     <string name="about_update_failed">检查失败：%1$s</string>
     <string name="about_update_url_title">版本清单地址</string>
-    <string name="about_update_url_hint">App 会拉取这个地址上的 JSON，读取其中的 versionCode 与下载链接。留空则不检查更新。</string>
-    <string name="about_update_url_invalid">请填一个以 http:// 或 https:// 开头的地址</string>
+    <string name="about_update_url_hint">App 会拉取这个地址，支持两种格式：GitHub Releases 的 latest 接口（按 tag_name 比较版本）与普通 JSON 清单（读取其中的 versionCode 与下载链接）。留空则不检查更新。</string>
+    <string name="about_update_url_invalid">请填一个以 https:// 开头的地址（系统已禁止明文 HTTP）</string>
+    <string name="about_update_auto_check">启动时自动检查</string>
+    <string name="about_update_auto_check_hint">每天最多一次，只在有更新时提醒</string>
+    <string name="update_dialog_title">有新版本</string>
+    <string name="update_dialog_version">版本 %1$s</string>
+    <string name="update_dialog_later">稍后</string>
     <string name="about_section_what">关于本应用</string>
     <string name="about_description">speed（内部名 detour）是一个免 Root 的全流量用户态网络内核。它用一个本地 VPN 接口把流量接进 Rust 内核，按规则把命中域名的连接中继到规则给出的地址，其余流量直连。它不解密 TLS，所以一个域名能否走通，取决于规则里的地址是否可达、以及该地址的证书是否覆盖原域名。</string>
     <string name="about_close">关闭</string>

@@ -1,5 +1,6 @@
 package dev.detour.core
 
+import android.os.Build
 import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
@@ -8,11 +9,16 @@ import org.json.JSONObject
 /**
  * Fetches a release manifest and decides whether a newer build exists.
  *
- * There is no update server yet, so the manifest URL is whatever the user
- * typed into settings. That makes every input suspect: the URL may be blank,
- * may point at an APK instead of a JSON manifest, may 404, or may return
- * HTML. None of those may crash the app and none of them may be mistaken for
- * "you are up to date" — hence [Result.Failed] as a first-class outcome.
+ * The update source defaults to this project's own GitHub Releases (see
+ * [DEFAULT_MANIFEST_URL]) and is served by the GitHub Releases API, so the body
+ * is a GitHub release object rather than anything we control. A user may still
+ * override the URL from settings and point it at the older hand-written
+ * manifest format, so both shapes are accepted and told apart by their keys.
+ *
+ * Every input stays suspect: the URL may be blank, may point at an APK instead
+ * of a JSON document, may 404, or may return HTML. None of those may crash the
+ * app and none of them may be mistaken for "you are up to date" — hence
+ * [Result.Failed] as a first-class outcome.
  *
  * Deliberately has **no UI**: it returns a [Result] and the caller decides how
  * to render it.
@@ -20,10 +26,32 @@ import org.json.JSONObject
 object UpdateChecker {
 
     /**
-     * A manifest is a few hundred bytes. Without a ceiling, a user who pastes
-     * an APK URL would pull the whole file into memory (tens of MB) before we
-     * ever get to parse it, so the read is capped and oversized bodies are
-     * rejected rather than buffered.
+     * The default update source: this project's GitHub Releases, reached through
+     * the `gh-proxy.com` mirror rather than `api.github.com` directly.
+     *
+     * The proxy is not a preference, it is a reachability requirement. This
+     * app's own traffic is deliberately kept *out* of its VPN tunnel —
+     * `DetourVpnService` calls `addDisallowedApplication(packageName)` (see
+     * `DetourVpnService.kt:262`) — so an update check leaves the device over the
+     * raw network, exactly like an app with no proxy configured. We therefore
+     * cannot assume `api.github.com` is reachable from wherever the user is, and
+     * the direct endpoint is commonly blocked in mainland China. The mirror is
+     * measured working from there (HTTP 200, byte-identical body), so it is the
+     * default; a user who can reach GitHub directly can override the URL.
+     *
+     * It lives here rather than in `Prefs` on purpose: `Prefs` stores what the
+     * *user* configured, and a compiled-in fallback is not a user setting. It
+     * also belongs beside the parser that understands the GitHub release format,
+     * so the default and the code that consumes it cannot drift apart.
+     */
+    const val DEFAULT_MANIFEST_URL =
+        "https://gh-proxy.com/https://api.github.com/repos/zejiahuang/speed/releases/latest"
+
+    /**
+     * A manifest is a few hundred bytes; a GitHub release body is a few KB.
+     * Without a ceiling, a user who pastes an APK URL would pull the whole file
+     * into memory (tens of MB) before we ever get to parse it, so the read is
+     * capped and oversized bodies are rejected rather than buffered.
      */
     private const val MAX_BYTES = 64 * 1024
 
@@ -32,11 +60,20 @@ object UpdateChecker {
     private const val CONNECT_TIMEOUT_MS = 15_000
     private const val READ_TIMEOUT_MS = 20_000
 
-    /** One published build, as described by the manifest. */
+    /**
+     * One published build.
+     *
+     * There is deliberately no `versionCode` here. GitHub releases carry only a
+     * tag, so a numeric code is not always available, and the field was only
+     * ever used for comparison, never shown. The caller displays [versionName]
+     * and downloads [url]; nothing needs the integer.
+     */
     data class Release(
-        val versionCode: Int,
+        /** Shown to the user, e.g. "0.1.0". */
         val versionName: String,
+        /** Direct APK download for this device's ABI; falls back to the release page. */
         val url: String,
+        /** Release notes body as-is (GitHub `body`, raw Markdown), or `null`. */
         val notes: String?,
     )
 
@@ -49,9 +86,12 @@ object UpdateChecker {
     /**
      * Blocking network call; callers must not call this on the main thread.
      *
-     * @param currentVersionCode the installed build's `versionCode`.
+     * @param currentVersionCode the installed build's `versionCode`; used only
+     *   by the custom manifest format, which still compares integers.
+     * @param currentVersionName the installed build's `versionName` (e.g.
+     *   "0.1.0"); used by the GitHub format, which has no integer to compare.
      */
-    fun check(url: String, currentVersionCode: Int): Result {
+    fun check(url: String, currentVersionCode: Int, currentVersionName: String): Result {
         // Catch Throwable around the whole body: a malformed manifest, a
         // non-JSON body, a wrong-typed field or a socket error must all surface
         // as `Failed` rather than propagate. That is exactly why `Failed` is a
@@ -66,9 +106,23 @@ object UpdateChecker {
             // unknown protocol (e.g. "ftp://", or a bare "example.com"), and a
             // throw here would be a crash-shaped failure where a plain message
             // is what the user needs.
+            //
+            // `http://` is refused here even though it parses fine, because it
+            // cannot succeed on this app: targetSdk is 36 and the manifest sets
+            // neither `usesCleartextTraffic` nor a `networkSecurityConfig`, so
+            // the platform blocks cleartext before a socket is ever opened.
+            // Measured on the emulator: an `http://` address got past this check
+            // and surfaced as "Cleartext HTTP traffic to neverssl.com not
+            // permitted" — an English platform string where the user needs a
+            // Chinese one, arriving only after a pointless connection attempt.
+            //
+            // The alternative — adding `usesCleartextTraffic="true"` so that
+            // `http://` works — is worse than the problem it solves: it would
+            // permit cleartext for *every* request the app makes, including the
+            // rule-source fetches that carry the whole routing table.
             val scheme = schemeOf(trimmed)
-            if (scheme != "http" && scheme != "https") {
-                return Result.Failed("地址不是 http/https")
+            if (scheme != "https") {
+                return Result.Failed("系统不允许明文 HTTP，请改用 https://")
             }
 
             val connection = (URL(trimmed).openConnection() as HttpURLConnection).apply {
@@ -87,7 +141,7 @@ object UpdateChecker {
                 }
 
                 val body = readCapped(connection) ?: return Result.Failed("响应过大")
-                parse(body, currentVersionCode)
+                parse(body, currentVersionCode, currentVersionName)
             } finally {
                 connection.disconnect()
             }
@@ -125,9 +179,30 @@ object UpdateChecker {
         return out.toString("UTF-8")
     }
 
-    private fun parse(body: String, currentVersionCode: Int): Result {
+    /**
+     * Tells the two accepted shapes apart and dispatches.
+     *
+     * The GitHub format is tested first because the two are disjoint on the key
+     * we look at: a GitHub release has `tag_name` and never has
+     * `versionCode`/`url`, and a hand-written manifest is the other way round.
+     * Testing GitHub first means a real GitHub body can never be misread as a
+     * *broken* custom manifest — which would surface to the user as the
+     * misleading "缺少 versionCode 或 url" for a perfectly valid release. A
+     * custom manifest simply has no `tag_name` and falls through to the old
+     * path unchanged.
+     */
+    private fun parse(body: String, currentVersionCode: Int, currentVersionName: String): Result {
         val json = JSONObject(body)
 
+        val tagName = json.optString("tag_name", "")
+        return if (tagName.isNotBlank()) {
+            parseGitHub(json, tagName, currentVersionName)
+        } else {
+            parseCustom(json, currentVersionCode)
+        }
+    }
+
+    private fun parseCustom(json: JSONObject, currentVersionCode: Int): Result {
         // Only `versionCode` and `url` are required. `-1` is the sentinel for
         // "absent or not an integer": a real Android versionCode is always
         // positive, so it can never collide with it.
@@ -145,9 +220,107 @@ object UpdateChecker {
         // would report a newer build as older. The project carries
         // `versionCode` precisely so there is a monotonic integer to compare.
         return if (versionCode > currentVersionCode) {
-            Result.Available(Release(versionCode, versionName, downloadUrl, notes))
+            Result.Available(Release(versionName, downloadUrl, notes))
         } else {
             Result.UpToDate
         }
+    }
+
+    /**
+     * Parses a GitHub Releases API release object.
+     *
+     * @param tagName the already-read `tag_name`.
+     */
+    private fun parseGitHub(json: JSONObject, tagName: String, currentVersionName: String): Result {
+        // Defence, not a normal path: `/releases/latest` never returns a draft
+        // or a prerelease by GitHub's own contract, so this branch should be
+        // dead. It exists because the *consequence* of being wrong is bad in a
+        // specific way — a draft is an unfinished build and a prerelease is
+        // explicitly not for general use, so treating either as "a new version
+        // is out" would push users at a download that should not be offered
+        // yet. Bailing to UpToDate is the quiet, safe answer.
+        if (json.optBoolean("draft", false) || json.optBoolean("prerelease", false)) {
+            return Result.UpToDate
+        }
+
+        val versionName = tagName.removePrefix("v").removePrefix("V")
+
+        // A malformed version on *either* side is reported as Failed, never as
+        // UpToDate. Coercing a bad tag into some default that compares as
+        // "older" would dress a broken release up as "you are up to date" and
+        // silently hide every future update until someone notices.
+        val current = parseVersion(currentVersionName)
+            ?: return Result.Failed("版本号无法解析：$currentVersionName")
+        val remote = parseVersion(versionName)
+            ?: return Result.Failed("版本号无法解析：$versionName")
+
+        // Compare the parsed (major, minor, patch) triples, never the strings:
+        // lexicographically "0.10.0" sorts *before* "0.9.0", so a string compare
+        // would call a newer release older and hide the update.
+        val newer = when {
+            remote.first != current.first -> remote.first > current.first
+            remote.second != current.second -> remote.second > current.second
+            else -> remote.third > current.third
+        }
+        if (!newer) {
+            return Result.UpToDate
+        }
+
+        val downloadUrl = pickAssetUrl(json) ?: json.optString("html_url", "")
+
+        // `isNotBlank()` trims before testing, so a body of only whitespace
+        // becomes `null` rather than an empty notes section. A real body is
+        // returned verbatim, Markdown and all — stripping it is the display
+        // layer's job, not this parser's.
+        val notes = json.optString("body", "").takeIf { it.isNotBlank() }
+
+        return Result.Available(Release(versionName, downloadUrl, notes))
+    }
+
+    /**
+     * Picks the asset that best fits this device, or `null` when none matches.
+     *
+     * `Build.SUPPORTED_ABIS` is ordered by preference — the device's primary ABI
+     * comes first — so scanning it in that order and taking the first asset
+     * whose name ends in `-<abi>.apk` means "the package built for the ABI this
+     * phone would rather run". The suffix is matched case-insensitively because
+     * asset names are typed in CI and `ARM64-V8A` and `arm64-v8a` mean the same
+     * thing. When nothing matches we return `null` so the caller falls back to
+     * `html_url` (the release page): the user can still download by hand,
+     * whereas handing back a guess at a wrong-ABI APK is worse. In practice the
+     * two APKs share a signing key, so even a mis-pick would only waste a 10 MB
+     * download, not install a broken app — but we do not rely on that.
+     */
+    private fun pickAssetUrl(json: JSONObject): String? {
+        val assets = json.optJSONArray("assets") ?: return null
+        for (abi in Build.SUPPORTED_ABIS) {
+            val suffix = "-$abi.apk"
+            for (i in 0 until assets.length()) {
+                val asset = assets.optJSONObject(i) ?: continue
+                val name = asset.optString("name", "")
+                if (name.endsWith(suffix, ignoreCase = true)) {
+                    val url = asset.optString("browser_download_url", "")
+                    if (url.isNotBlank()) return url
+                }
+            }
+        }
+        return null
+    }
+
+    /**
+     * Parses a `major.minor.patch` version into three ints, or returns `null`
+     * if the value is not exactly that shape.
+     *
+     * Anything that is not three dot-separated non-negative integers — a
+     * `v`-less tag like "1.2", a date tag, or a tag with a suffix such as
+     * "1.0.0-rc1" — is not comparable, so it is rejected here and the caller
+     * turns that into a failure rather than guessing.
+     */
+    private fun parseVersion(value: String): Triple<Int, Int, Int>? {
+        val parts = value.split(".")
+        if (parts.size != 3) return null
+        val numbers = parts.map { it.toIntOrNull() ?: return null }
+        if (numbers.any { it < 0 }) return null
+        return Triple(numbers[0], numbers[1], numbers[2])
     }
 }

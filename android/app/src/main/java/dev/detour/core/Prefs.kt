@@ -157,22 +157,85 @@ class Prefs private constructor(private val store: SharedPreferences) {
      * Where the app fetches the update "version manifest" — a small JSON
      * document describing the newest published build.
      *
-     * **A setting rather than a constant because the app has no server of its
-     * own.** There is no release endpoint this project controls, so the manifest
-     * lives wherever the owner puts it, and the owner has to be able to point the
-     * app at it — or move it — without a rebuild. Baking a URL into the APK would
-     * make every relocation a new release, which is the one thing an update
-     * checker cannot depend on.
+     * **Defaults to this project's own GitHub Releases.** The release workflow
+     * (`.github/workflows/release.yml`) creates a Release on every `v*` tag push,
+     * and the manifest this app reads is that repository's `releases/latest`
+     * endpoint, reached through the `gh-proxy.com` mirror because the API host is
+     * not reliably reachable from every network the app runs on. The Release body
+     * is the matching section of `CHANGELOG.md`, and its assets are
+     * `speed-<ver>-arm64-v8a.apk` and `speed-<ver>-x86_64.apk`. So the honest
+     * starting state is "there is a source", not "there is none": an app that
+     * ships its own releases but starts with checking switched off has an update
+     * channel that exists only on paper.
      *
-     * **Defaults to empty, and empty means "do not check".** That is the honest
-     * starting state: nothing has been configured, so nothing is fetched and the
-     * UI can say so. A placeholder URL would be worse than useless — it would
-     * produce a check that always fails, which reads as "your update source is
-     * broken" on a device where no source was ever meant to exist. The reader
-     * (`UpdateChecker`) already treats a blank URL as a first-class
-     * "not configured" outcome for exactly this reason.
+     * **Still a setting rather than a constant, because the source has to be
+     * movable without a rebuild.** The default names this repository, but a user
+     * may run a fork, mirror the manifest behind a proxy of their own, or point
+     * the app at a test manifest for an afternoon — and none of those should
+     * require a new APK. The old wording ("the app has no server of its own") is
+     * still the right idea, just no longer the whole story: the URL is a value,
+     * not a constant, precisely so it can be changed from the settings screen.
+     *
+     * **Empty still means "do not check".** Clearing the row calls
+     * `updateUpdateUrl("")`, which stores a real empty string; the UI then reads
+     * 未配置, and `UpdateChecker.check` returns 未配置更新地址 instead of fetching
+     * anything. That is the user saying "I want no update source", and it is
+     * honoured as such — which is also why no migration rewrites it (below).
+     *
+     * **No migration step, and no `CURRENT_VERSION` bump.** `SharedPreferences`
+     * returns a *stored* value over a changed default, so the only question is
+     * who has one. A device that never touched this row has no `update_url` key
+     * at all, so `store.getString` hands it the new default on the next launch —
+     * it gains the source for free. The only devices that read `""` are those
+     * whose owner cleared the row, and that empty string is the user's own "I
+     * want no update source", which a migration must not overwrite. Nothing needs
+     * repairing, so `migrate` gains no step: a step that changes nothing is
+     * ceremony every future reader has to read and trust — the same reason
+     * `applied_kernel_settings` needs no bump (see `migrate`).
      */
-    var updateUrl by mutableStateOf(store.getString(KEY_UPDATE_URL, "") ?: "")
+    var updateUrl by mutableStateOf(store.getString(KEY_UPDATE_URL, UpdateChecker.DEFAULT_MANIFEST_URL) ?: "")
+        private set
+
+    /**
+     * Whether the app checks for a new release by itself on startup. On by
+     * default.
+     *
+     * **On, because off is the same as having no update channel.** Something
+     * distributed through GitHub Releases has no other way to tell a user a new
+     * version exists: there is no store listing to update, no push channel, and
+     * no reason for anyone to open the About screen on a hunch. A silent startup
+     * check that the user can switch off is the only mechanism there is, so it is
+     * on until the user turns it off. "On" does not mean "a request on every
+     * launch": the check is throttled to once per `UpdateState.MIN_AUTO_CHECK_INTERVAL_MS`
+     * (see `UpdateState.shouldAutoCheck`), so opening the app ten times a day
+     * still sends one request.
+     *
+     * No migration bump, for the same reason `applied_kernel_settings` needs
+     * none: `true` is already the correct behaviour for an upgraded install, so
+     * there is nothing to repair on disk.
+     */
+    var autoCheckUpdate by mutableStateOf(store.getBoolean(KEY_AUTO_CHECK_UPDATE, true))
+        private set
+
+    /**
+     * When this device last *attempted* an update check, as
+     * `System.currentTimeMillis()`; `0L` means "never".
+     *
+     * **A throttle input, not a value to display.** The startup check is skipped
+     * until this is older than `UpdateState.MIN_AUTO_CHECK_INTERVAL_MS`, so that
+     * opening the app ten times a day does not send ten requests to an API that
+     * rate-limits anonymous callers. `UpdateState.run` writes it after **every**
+     * attempt, success or failure — recording only successes would make a device
+     * with a wrong URL, or no network, retry on every single launch, which is the
+     * opposite of throttling.
+     *
+     * **Not a portable setting.** It records a fact about *this* device rather
+     * than a preference, so `SettingsBackup` does not export it; `restoreDefaults`
+     * still clears it, because that reset is local and a restored device should
+     * be free to check at once. The `dump` command reports it so a script can see
+     * whether the throttle is what is suppressing a check.
+     */
+    var lastUpdateCheckAt by mutableStateOf(store.getLong(KEY_LAST_UPDATE_CHECK_AT, 0L))
         private set
 
     var statsIntervalSeconds by mutableStateOf(store.getInt(KEY_STATS_INTERVAL, 5))
@@ -796,6 +859,8 @@ class Prefs private constructor(private val store: SharedPreferences) {
     fun updateOffline(value: Boolean) { offline = value; edit { putBoolean(KEY_OFFLINE, value) } }
     fun updateAutoConnect(value: Boolean) { autoConnect = value; edit { putBoolean(KEY_AUTO_CONNECT, value) } }
     fun updateUpdateUrl(value: String) { updateUrl = value.trim(); edit { putString(KEY_UPDATE_URL, updateUrl) } }
+    fun updateAutoCheckUpdate(value: Boolean) { autoCheckUpdate = value; edit { putBoolean(KEY_AUTO_CHECK_UPDATE, value) } }
+    fun updateLastUpdateCheckAt(value: Long) { lastUpdateCheckAt = value; edit { putLong(KEY_LAST_UPDATE_CHECK_AT, value) } }
     fun updateStatsInterval(value: Int) { statsIntervalSeconds = value; edit { putInt(KEY_STATS_INTERVAL, value) } }
     fun updateLogArchive(value: Boolean) { logArchive = value; edit { putBoolean(KEY_LOG_ARCHIVE, value) } }
     fun updateDynamicColor(value: Boolean) { dynamicColor = value; edit { putBoolean(KEY_DYNAMIC_COLOR, value) } }
@@ -891,7 +956,19 @@ class Prefs private constructor(private val store: SharedPreferences) {
         updateRefreshHours(24)
         updateOffline(false)
         updateAutoConnect(false)
-        updateUpdateUrl("")
+        // The factory source, not `""`: the default is now this project's
+        // Releases, and a restore that left the row empty would pair the
+        // auto-check switch (reset on just below) with no source at all. This is
+        // the value from the property declaration's fallback, which is what the
+        // comment above this method says these lines are copied from.
+        updateUpdateUrl(UpdateChecker.DEFAULT_MANIFEST_URL)
+        updateAutoCheckUpdate(true)
+        // Reset even though it is not a preference. A restored device should be
+        // free to check immediately rather than inherit the previous owner's
+        // throttle window; that is a local action, and it is exactly why this key
+        // is still kept out of `SettingsBackup` — a backup would carry the fact
+        // to a *different* device, where it means nothing.
+        updateLastUpdateCheckAt(0L)
         // Logs.
         updateStatsInterval(5)
         updateLogArchive(true)
@@ -1079,6 +1156,15 @@ class Prefs private constructor(private val store: SharedPreferences) {
 
     /** URL of the update version manifest; `""` means "do not check". */
     private const val KEY_UPDATE_URL = "update_url"
+
+    /** Whether the startup update check runs on its own; see `autoCheckUpdate`. */
+    private const val KEY_AUTO_CHECK_UPDATE = "auto_check_update"
+
+    /**
+     * Epoch millis of the last check *attempt*, read only to throttle the startup
+     * check; see `lastUpdateCheckAt`.
+     */
+    private const val KEY_LAST_UPDATE_CHECK_AT = "last_update_check_at"
 
         @Volatile
         private var instance: Prefs? = null

@@ -46,6 +46,8 @@ import dev.detour.core.DetourVpnService
 import dev.detour.core.KernelState
 import dev.detour.core.Prefs
 import dev.detour.core.Rate
+import dev.detour.core.UpdateChecker
+import dev.detour.core.UpdateState
 import dev.detour.core.WallpaperStore
 import dev.detour.ui.AboutScreen
 import dev.detour.ui.Destination
@@ -56,6 +58,8 @@ import dev.detour.ui.SettingsScreen
 import dev.detour.ui.components.FloatingGlassBar
 import dev.detour.ui.components.LocalBottomBarClearance
 import dev.detour.ui.components.LocalLayerBackdrop
+import dev.detour.ui.components.UpdateAvailableDialog
+import dev.detour.ui.openInBrowser
 import dev.detour.ui.theme.DetourTheme
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -363,6 +367,39 @@ private fun DetourAppBody() {
         // thing from a tab, so it gets a different kind of state.
         if (showAbout) {
             AboutScreen(onClose = { showAbout = false })
+        }
+
+        // The "a new version is available" dialog, drawn last and beside 关于.
+        //
+        // It is a `Dialog`, i.e. a separate window, so its position in the
+        // composition tree does not decide its stacking — being the last child of the
+        // `Box` only keeps it readable next to the other overlay. The real constraint
+        // is inside the window: a `Dialog` cannot sample the page's pixels, so glass
+        // in it has nothing to refract, and this dialog therefore uses a plain
+        // Material surface — see `ReleaseNotes.kt`.
+        //
+        // The branch is only entered when `shouldPrompt` is true, which implies
+        // `result` is `Available`, so the cast below is safe — `result` is mutable
+        // state, Kotlin does not smart-cast it, and an explicit cast is the only way
+        // to say that. `release` is hoisted into a local because both callbacks below
+        // need it, and a lambda should capture the result this frame saw.
+        if (UpdateState.shouldPrompt) {
+            val release = (UpdateState.result as UpdateChecker.Result.Available).release
+            UpdateAvailableDialog(
+                release = release,
+                // 稍后 and a tap outside both mean "not this time", not "never remind
+                // me again" — the flag is scoped to this process, for the reason given
+                // on `UpdateState.promptShown`.
+                onDismiss = { UpdateState.markPromptShown() },
+                onDownload = {
+                    // Open the browser first, then mark: even on a device with nothing
+                    // that can open a link (`openInBrowser` swallows that exception),
+                    // the user has seen the dialog and made a choice, and it must not
+                    // come back just because the link would not open.
+                    openInBrowser(context, release.url)
+                    UpdateState.markPromptShown()
+                },
+            )
         }
     }
 }

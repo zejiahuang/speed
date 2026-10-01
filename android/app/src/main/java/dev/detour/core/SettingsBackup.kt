@@ -20,7 +20,7 @@ import org.json.JSONObject
  * The membership rule is deliberately not a hand-written list. It is:
  *
  * > the set of properties that [Prefs.restoreDefaults] resets, **minus**
- * > `wallpaper`, **plus** `updateUrl`.
+ * > `wallpaper`, **minus** `lastUpdateCheckAt`, **plus** `updateUrl`.
  *
  * [Prefs.restoreDefaults] already defines what this codebase considers a
  * "setting" — it is the function a "restore defaults" button calls — so reusing
@@ -45,6 +45,17 @@ import org.json.JSONObject
  * state `WallpaperStore` was built to degrade away from — so the honest move is
  * not to carry the key at all rather than to carry a reference that cannot
  * resolve on the importing device.
+ *
+ * `lastUpdateCheckAt` is the second exclusion, and it is excluded for the
+ * opposite reason to the pair above. [Prefs.restoreDefaults] *does* reset it —
+ * a restored device should be able to check at once rather than inherit the
+ * previous owner's throttle window — but that reset is a local action, and
+ * portability is not local. The value answers "when did **this** device last
+ * try", so importing it would make the importing device wait out the exporting
+ * device's remaining throttle: its first startup check would be silently skipped
+ * for up to 24 hours, which reads exactly like auto-check being broken. A fact
+ * about one device does not travel inside a file of another device's
+ * preferences, so the key is not written.
  *
  * `updateUrl` is the one addition: it is a new setting that [Prefs.restoreDefaults]
  * resets, so it is in the reset set too, and it is added explicitly here so the
@@ -224,6 +235,14 @@ object SettingsBackup {
         ruleSources,
         string("rule_source_id", { it.ruleSourceId }, { p, v -> p.updateRuleSource(v) }),
         string("update_url", { it.updateUrl }, { p, v -> p.updateUpdateUrl(v) }),
+        bool("auto_check_update", { it.autoCheckUpdate }, { p, v -> p.updateAutoCheckUpdate(v) }),
+        // `last_update_check_at` is deliberately absent, the second exception to
+        // the membership rule stated in the class comment. It records when *this*
+        // device last attempted a check, which is a fact about the device and not
+        // a preference. Importing it would impose the exporting device's remaining
+        // throttle window on the importing one, silencing its first startup check
+        // for up to 24 hours for a reason the user cannot see — indistinguishable
+        // from an auto-check that is switched on but never fires.
     )
 
     /**

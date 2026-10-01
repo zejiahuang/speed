@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -39,6 +40,7 @@ import dev.detour.core.KernelState
 import dev.detour.core.Prefs
 import dev.detour.core.RuleIndex
 import dev.detour.core.UpdateChecker
+import dev.detour.core.UpdateState
 import dev.detour.ui.components.DetourActionRow
 import dev.detour.ui.components.DetourAlertDialog
 import dev.detour.ui.components.DetourButton
@@ -47,6 +49,8 @@ import dev.detour.ui.components.DetourDivider
 import dev.detour.ui.components.DetourKeyValueRow
 import dev.detour.ui.components.DetourPageHeader
 import dev.detour.ui.components.DetourSectionCard
+import dev.detour.ui.components.DetourToggleRow
+import dev.detour.ui.components.ReleaseNotesText
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -95,8 +99,11 @@ fun AboutScreen(onClose: () -> Unit) {
 
     val updateUrl = prefs.updateUrl
     var showUrlDialog by remember { mutableStateOf(false) }
-    var checking by remember { mutableStateOf(false) }
-    var updateResult by remember { mutableStateOf<UpdateChecker.Result?>(null) }
+    // The check state is no longer held by this page. `checking` and `result` both
+    // come from `UpdateState`: this page's manual button and the silent startup check
+    // are one entry point and one piece of state, so this reads it rather than
+    // keeping its own copy. The reason is on `UpdateState`'s class comment — two
+    // copies means the two tests eventually disagree.
 
     // The rule document's size, read off the cache.
     //
@@ -254,6 +261,29 @@ fun AboutScreen(onClose: () -> Unit) {
                     onAction = { showUrlDialog = true },
                 )
 
+                // The 启动时自动检查 switch.
+                //
+                // **It has to exist.** The startup check is a behaviour that issues a
+                // network request on its own: the user taps nothing and the app sends
+                // a request to an address. Anything that acts by itself has to be
+                // switchable off, or it is not a feature but a nuisance — and once it
+                // cannot be turned off, the only means of resistance left to the user
+                // is uninstalling. This matches the project's standing rule about
+                // controls, read in the other direction: a control must genuinely do
+                // something, and a behaviour that genuinely does something must come
+                // with a control that genuinely stops it.
+                //
+                // It sits under 版本清单地址 because the two are halves of one
+                // subject: the address decides *where* to check, the switch decides
+                // *whether* to check by itself.
+                DetourDivider()
+                DetourToggleRow(
+                    label = stringResource(R.string.about_update_auto_check),
+                    hint = stringResource(R.string.about_update_auto_check_hint),
+                    checked = prefs.autoCheckUpdate,
+                    onChange = { prefs.updateAutoCheckUpdate(it) },
+                )
+
                 // The check action exists only once there is an address to check.
                 //
                 // This is the project's "a control that cannot have an effect
@@ -270,31 +300,30 @@ fun AboutScreen(onClose: () -> Unit) {
                             onClick = {
                                 // The tap is answered immediately — the label
                                 // switches to 正在检查… and the button goes
-                                // disabled — before the request starts. `check` is
-                                // a blocking socket call, so it runs on `IO`; on
-                                // the main thread it would freeze the page for up
-                                // to 20 s and look like a crash.
-                                checking = true
-                                updateResult = null
-                                scope.launch {
-                                    val checked = withContext(Dispatchers.IO) {
-                                        UpdateChecker.check(updateUrl, BuildConfig.VERSION_CODE)
-                                    }
-                                    updateResult = checked
-                                    checking = false
-                                }
+                                // disabled — before the request starts, and both are
+                                // driven by `UpdateState.checking` now that the state
+                                // is shared with the startup check.
+                                //
+                                // The manual check goes through `UpdateState.run` for
+                                // the same reason the startup one does — see that
+                                // object's class comment: two triggers written twice
+                                // would eventually disagree about what "a check is in
+                                // flight" means and about when the timestamp is
+                                // written. `run` moves the blocking `check` to `IO`
+                                // itself, so there is no `withContext` here.
+                                scope.launch { UpdateState.run(context) }
                             },
                             // Disabled while in flight, so a second tap cannot
                             // start a second request. The disabled state is also
                             // the only visible sign that the first tap was taken,
                             // since nothing else on the page changes until the
                             // socket answers.
-                            enabled = !checking,
+                            enabled = !UpdateState.checking,
                             modifier = Modifier.fillMaxWidth(),
                         ) {
                             Text(
                                 stringResource(
-                                    if (checking) {
+                                    if (UpdateState.checking) {
                                         R.string.about_update_checking
                                     } else {
                                         R.string.about_update_check
@@ -304,7 +333,7 @@ fun AboutScreen(onClose: () -> Unit) {
                         }
                     }
 
-                    val result = updateResult
+                    val result = UpdateState.result
                     if (result != null) {
                         DetourDivider()
                         // The three outcomes are rendered as themselves rather
@@ -330,12 +359,30 @@ fun AboutScreen(onClose: () -> Unit) {
                                     ),
                                 )
                                 val notes = release.notes
-                                if (notes != null) {
+                                if (!notes.isNullOrBlank()) {
                                     DetourDivider()
-                                    DetourKeyValueRow(
-                                        label = stringResource(R.string.about_update_notes),
-                                        value = notes,
-                                    )
+                                    Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                                        Text(
+                                            stringResource(R.string.about_update_notes),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                        Spacer(Modifier.height(4.dp))
+                                        // The upper bound is not optional: this whole
+                                        // page scrolls vertically, and without a bound
+                                        // the scroll inside `ReleaseNotesText` would
+                                        // receive an infinite constraint and throw.
+                                        // 240dp is the compromise between "several
+                                        // lines visible at a glance" and "does not
+                                        // push the download button off the screen";
+                                        // anything longer scrolls inside the component.
+                                        ReleaseNotesText(
+                                            notes = notes,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .heightIn(max = 240.dp),
+                                        )
+                                    }
                                 }
                                 DetourDivider()
                                 Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
@@ -403,8 +450,17 @@ fun AboutScreen(onClose: () -> Unit) {
  * about version numbers. The failure is logged rather than shown: there is no
  * dialog in this app for "nothing on the device can open a link", and the log
  * page is where a user diagnosing it would look anyway.
+ *
+ * **This is `internal` rather than `private` because the "a new version is
+ * available" dialog needs it too.** That dialog lives in `ReleaseNotes.kt` and is
+ * driven by `MainActivity`, so "hand the link to whatever on the system can open
+ * it" now has two callers. Copying it next to the dialog would copy the
+ * `ActivityNotFoundException` fallback and the log tag as well, and the two copies
+ * would diverge the first time only one of them was edited. One function shared
+ * within the module is the smaller thing to maintain, and `internal` is enough —
+ * it exposes nothing outside.
  */
-private fun openInBrowser(context: Context, url: String) {
+internal fun openInBrowser(context: Context, url: String) {
     val opened = runCatching {
         context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
     }
@@ -492,17 +548,21 @@ private fun UpdateUrlDialog(
                     // set — the only way back to "no update source" would be to
                     // clear the app's data.
                     //
+                    // `http://` is refused for the same reason `UpdateChecker`
+                    // refuses it, and the two must agree: a dialog that accepted
+                    // an address the checker rejects would store a value that
+                    // fails only later, at the check button, as the platform's
+                    // English cleartext message instead of this hint. The scheme
+                    // is not a matter of taste here — the app targets SDK 36 and
+                    // grants no cleartext exemption, so `http://` cannot work.
+                    //
                     // The scheme test is case-insensitive on purpose.
                     // `UpdateChecker` lowercases the scheme before comparing it,
                     // so `HTTPS://…` is a URL it would accept; rejecting it here
                     // would be this dialog refusing an address the checker is
                     // happy with.
                     val lower = trimmed.lowercase()
-                    if (
-                        trimmed.isEmpty() ||
-                        lower.startsWith("http://") ||
-                        lower.startsWith("https://")
-                    ) {
+                    if (trimmed.isEmpty() || lower.startsWith("https://")) {
                         onConfirm(trimmed)
                     } else {
                         // Keep the dialog open, and say why. Closing it and
