@@ -266,52 +266,87 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
         // immediately in this callback, while the temporary grant is still live.
         ActivityResultContracts.OpenDocument(),
     ) { uri ->
-        // Cancelled pick: nothing to report, same as the export above.
-        if (uri != null) {
-            backupScope.launch {
-                // Off the main thread for the same reason as the export: a slow
-                // provider would otherwise block the main thread long enough to ANR.
-                val outcome = withContext(Dispatchers.IO) {
-                    runCatching {
-                        context.contentResolver.openInputStream(uri)?.use { stream ->
-                            stream.bufferedReader().readText()
-                        } ?: throw IOException("无法打开输入流")
-                    }
-                }
-                val message = outcome.fold(
-                    onSuccess = { json ->
-                        val result = SettingsBackup.import(context, json)
-                        when (result.failure) {
-                            SettingsBackup.ImportResult.Failure.NOT_JSON ->
-                                context.getString(R.string.settings_import_bad_json)
-                            SettingsBackup.ImportResult.Failure.NOT_OURS ->
-                                context.getString(R.string.settings_import_not_ours)
-                            SettingsBackup.ImportResult.Failure.TOO_NEW ->
-                                context.getString(R.string.settings_import_too_new)
-                            null -> {
-                                // An import can change the rule source, and the
-                                // kernel keeps serving the old table until it is
-                                // told to reload — the same two steps the restore
-                                // path and every other source change on this screen
-                                // performs.
-                                RulesRepository.invalidate(context)
-                                DetourVpnService.reloadRulesIfRunning()
-                                if (result.ignored == 0) {
-                                    context.getString(R.string.settings_import_done, result.applied)
-                                } else {
-                                    context.getString(
-                                        R.string.settings_import_done_ignored,
-                                        result.applied,
-                                        result.ignored,
-                                    )
-                                }
+                // Cancelled pick: nothing to report, same as the export above.
+                if (uri != null) {
+                    backupScope.launch {
+                        // Off the main thread for the same reason as the export: a slow
+                        // provider would otherwise block the main thread long enough to ANR.
+                        val outcome = withContext(Dispatchers.IO) {
+                            runCatching {
+                                context.contentResolver.openInputStream(uri)?.use { stream ->
+                                    stream.bufferedReader().readText()
+                                } ?: throw IOException("无法打开输入流")
                             }
                         }
-                    },
-                    onFailure = {
-                        context.getString(R.string.settings_import_read_failed, it.message ?: "未知错误")
-                    },
-                )
+                        val message = outcome.fold(
+                            onSuccess = { json ->
+                                val result = SettingsBackup.import(context, json)
+                                when (result.failure) {
+                                    SettingsBackup.ImportResult.Failure.NOT_JSON ->
+                                        context.getString(R.string.settings_import_bad_json)
+                                    SettingsBackup.ImportResult.Failure.NOT_OURS ->
+                                        context.getString(R.string.settings_import_not_ours)
+                                    SettingsBackup.ImportResult.Failure.TOO_NEW ->
+                                        context.getString(R.string.settings_import_too_new)
+                                    null -> {
+                                        // An import can change the rule source, and the
+                                        // kernel keeps serving the old table until it is
+                                        // told to reload — the same two steps the restore
+                                        // path and every other source change on this screen
+                                        // performs.
+                                        RulesRepository.invalidate(context)
+                                        DetourVpnService.reloadRulesIfRunning()
+                                        if (result.ignored == 0) {
+                                            context.getString(R.string.settings_import_done, result.applied)
+                                        } else {
+                                            context.getString(
+                                                R.string.settings_import_done_ignored,
+                                                result.applied,
+                                                result.ignored,
+                                            )
+                                        }
+                                    }
+                                }
+                            },
+                            onFailure = {
+                                context.getString(R.string.settings_import_read_failed, it.message ?: "未知错误")
+                            },
+                        )
+                        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+
+    // The rule-file picker, for importing a hosts document from anywhere the user
+    // can reach. The same Storage Access Framework contract as the settings import
+    // above and for the same reason: no storage permission, and the stream is read
+    // in this callback while the temporary grant is still live.
+    //
+    // `*/*` because a hosts file has no registered MIME type — different providers
+    // report `text/plain`, `application/octet-stream`, or nothing at all — and the
+    // content is validated after reading regardless, so a narrower filter could
+    // only hide files the user is entitled to pick.
+    //
+    // Everything after "the user picked a file" is `RulesRepository.importLocal`,
+    // which is also what the rules screen calls. Validating, copying, adding,
+    // selecting, dropping the stale cache and reloading a running tunnel are six
+    // steps that must not be able to differ between the two screens.
+    val rulesImportPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        // Cancelled pick: nothing to report, as with the three pickers above.
+        if (uri != null) {
+            backupScope.launch {
+                val message = withContext(Dispatchers.IO) {
+                    when (val outcome = RulesRepository.importLocal(context, uri)) {
+                        is RulesRepository.LocalImport.Added ->
+                            context.getString(R.string.rules_import_done, outcome.source.label)
+                        is RulesRepository.LocalImport.AlreadyPresent ->
+                            context.getString(R.string.rules_import_already, outcome.source.label)
+                        is RulesRepository.LocalImport.Failed ->
+                            context.getString(R.string.rules_import_failed, outcome.reason)
+                    }
+                }
                 Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
             }
         }
@@ -357,15 +392,19 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
         // would appear where the original had none.
         val sourceHeading = stringResource(R.string.rules_source)
         val addSourceLabel = stringResource(R.string.rules_add_source)
+        val importLocalLabel = stringResource(R.string.rules_import_local)
+        val localSourceLabel = stringResource(R.string.rules_source_local)
         add(
             SettingsRow(
                 section = SettingsSection.CONNECTION,
                 searchText = buildList {
                     add(sourceHeading)
                     add(addSourceLabel)
+                    add(importLocalLabel)
                     prefs.ruleSources.forEach { source ->
                         add(source.labelRes?.let { stringResource(it) } ?: source.label)
                         if (source.usable) add(source.url)
+                        if (source.isLocal) add(localSourceLabel)
                     }
                 },
             ) {
@@ -410,6 +449,30 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
                     Spacer(Modifier.width(12.dp))
                     Text(
                         addSourceLabel,
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                }
+                DetourDivider()
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { rulesImportPicker.launch(arrayOf("*/*")) }
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    // `Icons.Filled.Add` a second time, and that is a decision
+                    // rather than an oversight. `material-icons-core` is the only
+                    // icon artifact this app ships — the extended one is
+                    // deliberately not pulled in, see the build file — and it
+                    // carries no document or folder glyph. Of the ones it does
+                    // carry, `List` is already the rules tab's own icon and
+                    // `ExitToApp` points the opposite way; the plus is honest,
+                    // because this action *is* "add a source", only by file
+                    // instead of by address. The label is what separates the rows.
+                    Icon(Icons.Filled.Add, contentDescription = null)
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        importLocalLabel,
                         style = MaterialTheme.typography.bodyLarge,
                     )
                 }
@@ -1422,11 +1485,19 @@ private fun ColumnScope.SettingsRows(rows: List<SettingsRow>) {
  *
  * Built-in sources have no delete — they are not in storage to delete, and
  * [Prefs.removeRuleSource] refuses them anyway, so offering the button would be a
- * control that cannot do what it says. The subtitle is the URL for a usable
- * source and the "unavailable" string otherwise. That `else` branch no longer
- * describes a *retired* source — no built-in sets `unavailable` since `s302` was
- * deleted (see [RuleSource]) — it is what shows for a source whose `url` is
- * empty, the one case `usable` is false for.
+ * control that cannot do what it says.
+ *
+ * The subtitle is three-way now, and each case is a different kind of answer. A
+ * source imported from a file says so and nothing more: its `url` is empty, so
+ * the old `if (usable) url else …` would have labelled it "暂不可用" — a working
+ * source described as broken, which is the worst of the three. The copy's own
+ * name is a SHA-256 and would tell the reader nothing, and the picked file's name
+ * is already the row's title; `dump` is where the copy's name belongs.
+ *
+ * The last case is the "unavailable" string. That branch no longer describes a
+ * *retired* source — no built-in sets `unavailable` since `s302` was deleted (see
+ * [RuleSource]) — it is what shows for a source with neither an address nor a
+ * local copy, the one state `usable` is false for.
  */
 @Composable
 private fun RuleSourceRow(
@@ -1449,7 +1520,11 @@ private fun RuleSourceRow(
                 style = MaterialTheme.typography.bodyLarge,
             )
             Text(
-                if (source.usable) source.url else stringResource(R.string.rules_source_unavailable),
+                when {
+                    source.isLocal -> stringResource(R.string.rules_source_local)
+                    source.usable -> source.url
+                    else -> stringResource(R.string.rules_source_unavailable)
+                },
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,

@@ -71,6 +71,17 @@
     <string name="rules_source_delete">删除</string>
     <string name="rules_source_unavailable">暂不可用</string>
     <string name="rules_source_invalid_url">请填写以 http(s):// 开头的地址</string>
+    <!-- The import entry point. "本地文件" rather than "hosts 文件": the content
+         is validated as a rule document, and the kernel's own JSON is accepted
+         too, so naming hosts would describe one of the two shapes it takes. -->
+    <string name="rules_import_local">导入本地文件</string>
+    <!-- The subtitle of an imported source's row. The stored copy's name is a
+         SHA-256 and says nothing to a reader, so the row says what the source
+         *is*; the file's own name is the row's title, and the copy is in `dump`. -->
+    <string name="rules_source_local">本地文件</string>
+    <string name="rules_import_done">已导入 %1$s</string>
+    <string name="rules_import_already">%1$s 的内容之前已经导入过，已切换到它</string>
+    <string name="rules_import_failed">导入失败：%1$s</string>
     <string name="rules_count_domains">%1$d 个域名</string>
     <string name="rules_count_addresses">%1$d 个地址</string>
     <string name="rules_expand">展开</string>
@@ -410,11 +421,17 @@
          The export is deliberately a *settings* document, not a backup. It
          excludes the wallpaper image — a multi-megabyte photo the user already
          has in their gallery, and the one thing here that cannot be carried in
-         a chat message — and it excludes every piece of runtime state (the
-         engine's applied settings, the cache-dirty repair flag, the schema
-         version). What is left is a few KB of JSON that can be pasted into any
-         chat app, which is the whole point: a backup nobody can move is not a
-         backup.
+         a chat message — it excludes every piece of runtime state (the engine's
+         applied settings, the cache-dirty repair flag, the schema version), and
+         it excludes imported rule sources, whose content is a file on the device
+         rather than a value that can be written down. What is left is a few KB of
+         JSON that can be pasted into any chat app, which is the whole point: a
+         backup nobody can move is not a backup.
+
+         The imported sources are excluded in both directions and that is one
+         decision, not two: dropping them on export keeps the file free of a name
+         that means nothing on another device, and skipping them on import is what
+         stops a restore from deleting the copies this device already has.
 
          Import applies each value through the same setter the corresponding
          settings row uses, so a setting cannot be exported without also being
@@ -434,7 +451,13 @@
     <string name="settings_export_done">已导出设置</string>
     <string name="settings_export_failed">导出失败：%1$s</string>
     <string name="settings_import_confirm_title">导入设置？</string>
-    <string name="settings_import_confirm_text">导入会用文件里的值覆盖当前设置，已添加的规则源和自定义开关也在其中。当前连接不会被断开，但需要重新连接才能用上新参数。</string>
+    <!-- The parenthetical is not a nicety. The sentence says the file overwrites
+         the added rule sources, which is true of the *network* ones — the
+         imported ones are deliberately kept, because their content is not in
+         the file and dropping them would delete a document the user still has
+         on the device. Without it the copy would tell a user with an imported
+         file that importing is about to remove it. -->
+    <string name="settings_import_confirm_text">导入会用文件里的值覆盖当前设置，已添加的规则源和自定义开关也在其中（本机导入的规则文件会保留）。当前连接不会被断开，但需要重新连接才能用上新参数。</string>
     <string name="settings_import_confirm_ok">导入</string>
     <string name="settings_import_done">已导入 %1$d 项设置</string>
     <string name="settings_import_done_ignored">已导入 %1$d 项设置，忽略 %2$d 项无法识别的项</string>

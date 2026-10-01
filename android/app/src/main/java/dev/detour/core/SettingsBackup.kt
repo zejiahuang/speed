@@ -56,6 +56,12 @@ import org.json.JSONObject
  * not to carry the key at all rather than to carry a reference that cannot
  * resolve on the importing device.
  *
+ * A rule source imported from a file on the device is the same shape of problem
+ * one level down — the reference is a field inside `rule_sources` rather than a
+ * key of its own — and it is resolved the same way: the entry is left out of the
+ * document. See the `ruleSources` entry for the other half, which is that a
+ * restore must not *delete* the local sources the device already has.
+ *
  * `lastUpdateCheckAt` is the second exclusion, and it is excluded for the
  * opposite reason to the pair above. [Prefs.restoreDefaults] *does* reset it —
  * a restored device should be able to check at once rather than inherit the
@@ -200,22 +206,44 @@ object SettingsBackup {
      * document either, which is correct: their URLs must follow the installed
      * build, not the file.
      *
-     * The import decodes the array back to a list and re-encodes it, so a
-     * malformed entry is dropped by [RuleSource.decode]'s existing validation
-     * rather than by a rule invented here.
+     * ## Imported sources are excluded, and they survive a restore
+     *
+     * A source imported from a file on the device ([RuleSource.isLocal]) is left
+     * out of the document, for exactly the reason `wallpaper` is: what makes it a
+     * source is a copy inside *this* device's private directory, and the document
+     * does not carry that copy. Writing the entry anyway would produce, on any
+     * other device, a row naming a file that is not there — a source that fails
+     * on every connect with nothing on screen to explain why.
+     *
+     * The read side therefore has to do two things, and the second is the one
+     * that is easy to miss:
+     *
+     * * **Drop** any local entry the file happens to carry. A hand-edited file, or
+     *   one from a build that wrote them, must not be able to plant a dangling
+     *   source.
+     * * **Keep** the local sources already on this device. The usual rule here is
+     *   "the document is the user's complete source list, so replace rather than
+     *   merge" — that rule is what stops a source the export did not contain from
+     *   lingering. Applied to local sources it inverts: they are absent from every
+     *   export, so replacing would delete them on a restore of the user's *own*
+     *   backup, which is the one case where nothing should be lost.
+     *
+     * So the loop below removes only the non-local sources, and adds only the
+     * non-local decoded ones.
      */
     private val ruleSources: Entry = Entry(
         "rule_sources",
-        { o, p -> o.put("rule_sources", JSONArray(RuleSource.encode(p.ruleSources))) },
+        { o, p ->
+            o.put("rule_sources", JSONArray(RuleSource.encode(p.ruleSources.filterNot { it.isLocal })))
+        },
         { o, p ->
             if (o.has("rule_sources")) {
                 val decoded = RuleSource.decode(o.getJSONArray("rule_sources").toString())
-                // Replace rather than merge: the document is the user's complete
-                // source list, so a merge would leave a source the export did not
-                // contain. Built-ins are refused by `removeRuleSource` itself, so
-                // iterating all of them is safe and keeps this loop from having to
-                // know which ones are built in.
-                p.ruleSources.toList().forEach { p.removeRuleSource(it.id) }
+                    .filterNot { it.isLocal }
+                // Built-ins are refused by `removeRuleSource` itself, so iterating
+                // them is safe and keeps this loop from having to know which ones
+                // are built in.
+                p.ruleSources.toList().filterNot { it.isLocal }.forEach { p.removeRuleSource(it.id) }
                 decoded.forEach { p.addRuleSource(it) }
             }
         },

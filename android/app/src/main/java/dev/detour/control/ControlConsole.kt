@@ -102,6 +102,11 @@ object ControlConsole {
                     )
                     // `remove:<id>`: no key; the id rides inside the value.
                     sub.startsWith("remove:") -> CommandLine("rules", rest[0], null)
+                    // `import:<path>`: the path is the whole token and there is no
+                    // key. The path is kept verbatim — it can contain spaces and
+                    // slashes, and splitting it would corrupt it — which is why
+                    // the console's own tokenizer is not applied to it.
+                    sub.startsWith("import:") -> CommandLine("rules", rest[0], null)
                     // An unknown sub-command is passed through so `run` produces
                     // its own `rules expects ...` message.
                     else -> CommandLine("rules", rest[0], null)
@@ -210,6 +215,8 @@ object ControlConsole {
                 addRuleSource(context, raw.removePrefix("add:"), key)
             } else if (raw != null && raw.startsWith("remove:")) {
                 removeRuleSource(context, raw.removePrefix("remove:"))
+            } else if (raw != null && raw.startsWith("import:")) {
+                importLocalFile(context, raw.removePrefix("import:"))
             } else when (raw?.lowercase()) {
             "refresh", null -> {
                 RulesRepository.invalidate(context)
@@ -281,7 +288,8 @@ object ControlConsole {
             }
             else -> JSONObject().put(
                 "error",
-                "rules expects refresh, count, clear, disable, enable, enable-all, disabled, add:<url> or remove:<id>",
+                "rules expects refresh, count, clear, disable, enable, enable-all, disabled, " +
+                    "add:<url>, import:<path> or remove:<id>",
             )
             }
         }
@@ -346,7 +354,7 @@ object ControlConsole {
             JSONArray(
                 listOf(
                     "status", "connect", "disconnect", "mode <vpn|proxy>",
-                    "rules <refresh|count|clear|disable|enable|enable-all|disabled|add:<url>|remove:<id>>",
+                    "rules <refresh|count|clear|disable|enable|enable-all|disabled|add:<url>|import:<path>|remove:<id>>",
                     "log <clear|archive|clear-archive>",
                     "set <key> <value>", "dump", "help",
                 ),
@@ -392,6 +400,39 @@ object ControlConsole {
         return JSONObject().put("removed", id)
     }
 
+    /**
+     * `rules import:<path>` — import a rule file from a path on the device.
+     *
+     * The console's version of the settings screen's file picker, and the reason
+     * it exists is verification: the picker runs in another process and cannot be
+     * driven from a shell, so without this the import path could only be tested
+     * by tapping through it, once, by hand. The path is read with the app's own
+     * privileges — there is no `ContentResolver` and no URI grant involved — so it
+     * has to name something the app can open, which is *not* shared storage (the
+     * app declares no storage permission) but its own private directory or a
+     * world-readable temporary one.
+     *
+     * The size is checked before the read, so a mistaken path to a large file
+     * answers with an error instead of an allocation.
+     */
+    private fun importLocalFile(context: Context, path: String): JSONObject {
+        val file = File(path)
+        if (!file.isFile) return JSONObject().put("error", "no such file: $path")
+        if (file.length() > RulesRepository.MAX_LOCAL_BYTES) {
+            return JSONObject().put("error", "file is too large: ${file.length()} bytes")
+        }
+        val bytes = runCatching { file.readBytes() }
+            .getOrElse { return JSONObject().put("error", "read failed: ${it.message}") }
+        return when (val outcome = RulesRepository.importLocalBytes(context, file.name, bytes)) {
+            is RulesRepository.LocalImport.Added ->
+                JSONObject().put("imported", outcome.source.id).put("label", outcome.source.label)
+            is RulesRepository.LocalImport.AlreadyPresent ->
+                JSONObject().put("imported", outcome.source.id).put("already", true)
+            is RulesRepository.LocalImport.Failed ->
+                JSONObject().put("error", outcome.reason)
+        }
+    }
+
     private fun settingsJson(context: Context): JSONObject {
         val prefs = Prefs.of(context)
         val sources = JSONArray()
@@ -402,7 +443,14 @@ object ControlConsole {
                     .put("label", source.labelRes?.let { context.getString(it) } ?: source.label)
                     .put("url", source.url)
                     .put("builtin", source.builtin)
-                    .put("usable", source.usable),
+                    .put("usable", source.usable)
+                    // The name of the copy for an imported source, `null` for a
+                    // fetched one. Reported because it is the only thing that ties
+                    // a source row to a file on disk: `url` is empty for a local
+                    // source, so without this the dump could not say *which* file
+                    // a source is reading, and a verification that a re-import
+                    // changed the document would have nothing to compare.
+                    .put("local_file", source.localFile ?: JSONObject.NULL),
             )
         }
         return JSONObject()

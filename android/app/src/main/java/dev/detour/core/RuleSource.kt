@@ -25,16 +25,37 @@ import org.json.JSONObject
  * update to fix it. Only user-added sources — the ones the app cannot know — are
  * stored.
  *
+ * ## The third kind: a source that is a file on this device
+ *
+ * A user-added source used to mean exactly one thing — a URL. [localFile] adds a
+ * second: the name of a copy, inside the app's own private directory, of a
+ * document the user picked with the system file chooser. It is stored as a
+ * *third* kind rather than as "a URL with a `file://` scheme" because every layer
+ * below this one would have to grow a scheme check to tell the two apart —
+ * [RulesRepository] would have to decide whether to open a socket, and a
+ * `file://` URL is also a path a hostile document could point outside the
+ * sandbox with. A separate field keeps "fetch this" and "read this" two distinct
+ * questions with two distinct answers, and lets [usable] stop depending on [url]
+ * for the local case.
+ *
+ * **The copy, not the original.** The picked file's content is copied into
+ * `filesDir/imported-rules/` and named after its own SHA-256. That makes
+ * [identity] content-addressed for free — see below — and it means the source
+ * survives the original being moved, renamed or revoked, which is the normal
+ * fate of a URI grant. The cost is stated in the UI: editing the original does
+ * nothing until it is imported again.
+ *
  * ## Why `unavailable` still exists with no producer
  *
  * Deleting the retired `s302` source leaves **no built-in that sets
  * [unavailable]**, so the field currently has nothing that turns it on. It is
  * kept anyway, and that is a decision rather than an oversight.
  *
- * Removing it would make [usable] unconditionally true — `url.isNotEmpty()` is
- * true for every source the app can produce, since [decode] drops any stored
- * entry without a URL and the add-source dialog rejects one. A constant-true
- * `usable` does not shrink the code; it turns a whole chain into dead weight
+ * Removing it would make [usable] true for every source the app can produce —
+ * [decode] drops any stored entry with neither a URL nor a local copy, the
+ * add-source dialog rejects an empty URL, and an imported file is usable by
+ * construction. A `usable` that is true for every value the app can hold does
+ * not shrink the code; it turns a whole chain into dead weight
  * that still has to be maintained: [unavailable]'s own branch in
  * `RuleSourceRow`'s subtitle, the `rules_source_unavailable` string, the "first
  * selectable source" step of `Prefs.selectedSource`'s fallback, and the
@@ -67,9 +88,33 @@ data class RuleSource(
     val mirrors: List<String> = emptyList(),
     val builtin: Boolean = false,
     val unavailable: Boolean = false,
+    /**
+     * The name of this source's copy in `filesDir/imported-rules/`, or `null` for
+     * a source that is fetched over the network.
+     *
+     * A bare file name and never a path: the directory is fixed, and a stored
+     * value that could walk out of it (`../`, an absolute path) would turn a
+     * hand-edited settings file or backup into a read of anything the app can
+     * reach. [decode] rejects such a name outright, so everything downstream may
+     * assume a single path segment.
+     */
+    val localFile: String? = null,
 ) {
-    /** Whether this source can be selected and fetched. */
-    val usable: Boolean get() = url.isNotEmpty() && !unavailable
+    /** Whether this source is a file on this device rather than an address. */
+    val isLocal: Boolean get() = localFile != null
+
+    /**
+     * Whether this source can be selected and loaded.
+     *
+     * A local source has no [url] to be non-empty, so the old single expression
+     * would have marked every imported file un-selectable — the one thing this
+     * kind of source exists to be.
+     */
+    val usable: Boolean get() = when {
+        unavailable -> false
+        isLocal -> true
+        else -> url.isNotEmpty()
+    }
 
     /** Every URL that can serve this source, in the order they should be tried. */
     val fetchUrls: List<String> get() = if (url.isEmpty()) emptyList() else listOf(url) + mirrors
@@ -88,12 +133,48 @@ data class RuleSource(
      * disagree, and a perfectly good cache is thrown away on every load. The
      * identity answers "which document is this", not "which host served it", and
      * only [url] is stable enough to name the document.
+     *
+     * A local source's identity is its **copy's file name**, which is the
+     * SHA-256 of the content. That is the same principle one level stronger: for
+     * a local file there is no host at all, and the only thing that can make the
+     * document different is its bytes — so naming it after those bytes makes the
+     * stamp change exactly when the content does. Re-importing the same file
+     * keeps the stamp (and the cache); re-importing an edited one changes both.
+     * The `local:` prefix keeps the stamp from ever colliding with a URL.
      */
-    val identity: String get() = url
+    val identity: String get() = localFile?.let { "$LOCAL_ID_PREFIX$it" } ?: url
 
     companion object {
         const val GITHUB_HOSTS_ID = "github-hosts"
         const val HELLOGITHUB_HOSTS_ID = "hellogithub-hosts"
+
+        /**
+         * The prefix that marks an [id] — and an [identity] — as belonging to a
+         * local copy.
+         *
+         * A shared constant because the two uses have to agree: the id is what a
+         * shell passes to `rules remove:<id>`, and the identity is what the cache
+         * sidecar holds. Neither may be mistaken for a URL.
+         */
+        const val LOCAL_ID_PREFIX = "local:"
+
+        /** The id of the source wrapping the local copy named [fileName]. */
+        fun localId(fileName: String): String = "$LOCAL_ID_PREFIX$fileName"
+
+        /**
+         * Whether a stored [localFile] value is a bare file name.
+         *
+         * Checked on the way in from storage, not on the way out, because this is
+         * the only place a value this app did not write can enter — a
+         * `SharedPreferences` entry or a backup file edited by hand. Everything
+         * downstream joins the name onto a fixed directory, so a name carrying a
+         * separator or a `..` would resolve *outside* it.
+         */
+        fun isSafeLocalName(name: String): Boolean =
+            name.isNotEmpty() &&
+                name.length <= 128 &&
+                name != "." && name != ".." &&
+                name.none { it == '/' || it == '\\' || it == '\u0000' }
 
         /**
          * The `maxiaof/github-hosts` document: a plain hosts file with no
@@ -214,17 +295,21 @@ data class RuleSource(
         /**
          * Serialise the user-added sources. Built-ins are skipped — see the class
          * comment for why they must not be frozen into storage.
+         *
+         * `local_file` is written only when there is one, so a fetched source's
+         * entry keeps the shape every earlier build wrote and reads back
+         * unchanged.
          */
         fun encode(sources: List<RuleSource>): String {
             val array = JSONArray()
             for (source in sources) {
                 if (source.builtin) continue
-                array.put(
-                    JSONObject()
-                        .put("id", source.id)
-                        .put("label", source.label)
-                        .put("url", source.url),
-                )
+                val entry = JSONObject()
+                    .put("id", source.id)
+                    .put("label", source.label)
+                    .put("url", source.url)
+                source.localFile?.let { entry.put("local_file", it) }
+                array.put(entry)
             }
             return array.toString()
         }
@@ -235,6 +320,12 @@ data class RuleSource(
          * Malformed or absent JSON yields [defaults] alone rather than throwing:
          * this runs on the path that builds the settings screen, and a corrupt
          * list must not be able to stop the app from showing its own sources.
+         *
+         * A local entry is kept only if its `local_file` is a bare file name (see
+         * [isSafeLocalName]) **and** it has no URL: the two are alternatives, and
+         * an entry carrying both is a document this app never wrote. Dropping it
+         * is the same call the "no URL" rule below makes — a source that cannot be
+         * read is a row that can only disappoint.
          */
         fun decode(json: String?): List<RuleSource> {
             if (json.isNullOrBlank()) return defaults()
@@ -243,13 +334,20 @@ data class RuleSource(
                 (0 until array.length()).mapNotNull { index ->
                     val entry = array.optJSONObject(index) ?: return@mapNotNull null
                     val url = entry.optString("url").trim()
-                    // A source with no URL can never be fetched, so storing one
-                    // would only ever produce an un-selectable row.
-                    if (url.isEmpty()) return@mapNotNull null
+                    val localFile = entry.optString("local_file").trim().ifEmpty { null }
+                    if (localFile != null && !isSafeLocalName(localFile)) return@mapNotNull null
+                    if (localFile != null && url.isNotEmpty()) return@mapNotNull null
+                    // A source with neither an address nor a local copy can never
+                    // be loaded, so storing one would only ever produce an
+                    // un-selectable row.
+                    if (url.isEmpty() && localFile == null) return@mapNotNull null
                     RuleSource(
-                        id = entry.optString("id").ifEmpty { "custom:$url" },
+                        id = entry.optString("id").ifEmpty {
+                            localFile?.let { localId(it) } ?: "custom:$url"
+                        },
                         label = entry.optString("label"),
                         url = url,
+                        localFile = localFile,
                     )
                 }
             }.getOrNull() ?: return defaults()

@@ -1,10 +1,16 @@
 package dev.detour.core
 
 import android.content.Context
+import android.net.Uri
+import android.provider.OpenableColumns
 import android.util.Log
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.IOException
+import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
 import org.json.JSONObject
 
 /**
@@ -90,6 +96,22 @@ import org.json.JSONObject
  * `hosts` text has no such failure mode: the parser reads it natively, and it is
  * the shape the upstream files themselves contain.
  *
+ * ## A source can also be a file on this device
+ *
+ * A [RuleSource] with a [RuleSource.localFile] is read from
+ * `filesDir/imported-rules/` and never from the network, so [fetch] branches on
+ * it before it opens a connection and [load] treats it as never stale — there is
+ * no server whose copy could move on. Everything after that branch is the same
+ * for both kinds: the same [parseDocument] gates, the same cache, the same
+ * stamp. That is deliberate; a second read path with its own validation is how
+ * the "an HTML page parses to one fabricated entry" hole would come back.
+ *
+ * The copy is named after the SHA-256 of its content ([importLocalBytes]), which
+ * is what makes the cache stamp self-correcting: see [RuleSource.identity]. A
+ * re-import of edited content lands under a *different* name, so the stamp
+ * changes and the cache is a miss, without anything having to remember to
+ * invalidate it.
+ *
  * ## The cache carries the identity of what it holds
  *
  * `rules.json` is the upstream document, kept so a tunnel can start without a
@@ -147,6 +169,31 @@ object RulesRepository {
     private const val CACHE_NAME = "rules.json"
 
     /**
+     * Where imported copies live, under the app's private `filesDir`.
+     *
+     * Private rather than on shared storage: the whole point of copying the file
+     * is that the source stops depending on a URI grant, and a world-readable
+     * copy would be a second thing to keep in step. It also means no storage
+     * permission is needed at any point — the picker hands over a stream, and the
+     * app owns everything after that.
+     */
+    private const val IMPORTED_DIR = "imported-rules"
+
+    /** The suffix given to an imported copy, so a listing says what these are. */
+    private const val IMPORTED_SUFFIX = ".rules"
+
+    /**
+     * The largest imported file accepted, in bytes.
+     *
+     * The file is read into memory to be hashed and parsed, and the picker will
+     * happily hand over a video. The real documents are tens of kilobytes
+     * (`raw.hellogithub.com` measured at ~4 KiB, `maxiaof/github-hosts` similar),
+     * so 8 MiB is three orders of magnitude of headroom for a legitimate list
+     * while still refusing to allocate a gigabyte for a mistaken tap.
+     */
+    const val MAX_LOCAL_BYTES = 8 * 1024 * 1024
+
+    /**
      * Records which rule source produced [CACHE_NAME].
      *
      * A sidecar rather than a field in the document — see the class comment for
@@ -202,16 +249,26 @@ object RulesRepository {
         // cache's lifetime: before it elapses the download is reused, after it the
         // document is fetched again. Without the age check the cache was reused
         // forever, so "刷新间隔" was a number that changed nothing.
+        //
+        // Neither applies to a local source, which is read from this device rather
+        // than downloaded: `offline` has nothing to forbid, and there is no
+        // upstream copy whose age could matter — the content cannot change without
+        // the source being re-imported, which lands it under a different name and
+        // therefore a different stamp. Both checks are skipped here rather than
+        // special-cased inside the offline branch, which is what keeps that branch
+        // able to refuse honestly when it really has nothing to serve.
+        val localSource = runCatching { prefs.selectedSource.isLocal }.getOrDefault(false)
+
         val ageMillis = if (hasCache) {
             (System.currentTimeMillis() - cached.lastModified()).coerceAtLeast(0L)
         } else {
             Long.MAX_VALUE
         }
         val maxAgeMillis = prefs.refreshHours.coerceIn(1, 72) * 3_600_000L
-        val stale = ageMillis >= maxAgeMillis
+        val stale = !localSource && ageMillis >= maxAgeMillis
 
         val merged = when {
-            prefs.offline -> {
+            prefs.offline && !localSource -> {
                 // Offline cannot fetch, so the file on disk is the only candidate.
                 // Whether it may be *used* turns on how much is known about it,
                 // and there are three cases, not two.
@@ -409,7 +466,7 @@ object RulesRepository {
      * The gates are not decoration, and they catch different things: `fetchText`
      * refuses a non-200 ("the server said it failed"), [looksLikeHtml] refuses a
      * 200 that is a web page ("the server said it succeeded but did not send a
-     * document"), and [requireUsable] refuses a document that parsed to too few
+     * document"), and [parseDocument] refuses a document that parsed to too few
      * entries. None of them is redundant — a non-200 is not necessarily HTML, a
      * 200 HTML page is not zero entries (measured: 1), and the kernel accepts a
      * wrong-shaped document silently. See each for the measurement.
@@ -418,6 +475,8 @@ object RulesRepository {
      * that clears every gate wins. Endpoints die — eight of the eleven measured
      * candidates for the default document were already gone — so a single URL is
      * a single point of failure the user cannot see or fix.
+     *
+     * A local source never reaches the loop: see [readLocal].
      */
     private fun fetch(context: Context): ByteArray {
         val source = Prefs.of(context).selectedSource
@@ -427,6 +486,12 @@ object RulesRepository {
             // opening a connection to an empty URL.
             throw IllegalStateException("规则源「${source.id}」暂不可用")
         }
+
+        // Branched on before the loop rather than inside it: a local source has no
+        // URLs to iterate, and the mirror-and-fallback machinery below exists only
+        // because a network endpoint can be dead. A file on this device either
+        // exists or has been deleted, and there is nothing to try instead.
+        source.localFile?.let { return readLocal(context, source, it) }
 
         val urls = source.fetchUrls
         val failures = mutableListOf<String>()
@@ -441,20 +506,7 @@ object RulesRepository {
             )
             try {
                 val text = fetchText(url)
-                // A 200 can still not be a rule document — see [looksLikeHtml] —
-                // and this check runs before the shape sniff so an HTML page is
-                // never fed to either parser.
-                if (looksLikeHtml(text)) {
-                    throw java.io.IOException("响应是 HTML 页面，不是规则文档")
-                }
-                // A custom source may publish the kernel's own JSON rather than
-                // hosts text, so the shape is sniffed before the hosts conversion
-                // is applied. Converting an already-JSON document would be a parse
-                // of the wrong grammar, and the merge would return zero entries
-                // rather than fail.
-                val document =
-                    if (looksLikeKernelJson(text)) text.toByteArray() else toKernelDocument(text)
-                return requireUsable(document, source, url)
+                return parseDocument(text, builtin = source.builtin, origin = url)
             } catch (err: Throwable) {
                 failures += "$url → ${err.message}"
                 KernelState.log(
@@ -470,6 +522,36 @@ object RulesRepository {
         // the rest were unreachable.
         throw IllegalStateException(
             "规则源「${source.id}」的 ${urls.size} 个地址全部失败：" + failures.joinToString("；"),
+        )
+    }
+
+    /**
+     * Read a source whose document is a file on this device.
+     *
+     * A missing file is an error and not a fallback to anything: the copy is
+     * named after its own content and lives in the app's private directory, so
+     * the only things that can remove it are this app deleting it (which also
+     * removes the source — see [pruneImported]) or the user clearing the app's
+     * data, which removes the preference naming it too. If it is gone anyway, the
+     * honest answer is "import it again", and the message says so. Serving a
+     * different document instead would be the same class of bug the identity
+     * stamp exists to prevent.
+     */
+    private fun readLocal(context: Context, source: RuleSource, fileName: String): ByteArray {
+        val file = importedFile(context, fileName)
+        if (!file.isFile || file.length() == 0L) {
+            throw IllegalStateException(
+                "本地规则文件已丢失，请重新导入「${source.label.ifBlank { fileName }}」",
+            )
+        }
+        KernelState.log(
+            KernelState.LogEntry.Level.INFO, TAG,
+            "读取本地规则文件：${source.label.ifBlank { fileName }}（${file.length() / 1024} KiB）",
+        )
+        return parseDocument(
+            String(file.readBytes(), Charsets.UTF_8),
+            builtin = false,
+            origin = source.label.ifBlank { fileName },
         )
     }
 
@@ -520,7 +602,13 @@ object RulesRepository {
         runCatching { JSONObject(text).optJSONArray("groups") != null }.getOrDefault(false)
 
     /**
-     * Refuse a document that would relay nothing — or almost nothing.
+     * Turn fetched or imported text into a kernel document that would relay
+     * something.
+     *
+     * One function for both kinds of source on purpose. The gates below are the
+     * only thing standing between a web page and a tunnel that comes up green and
+     * forwards nothing, and a second copy of them on the local path is exactly how
+     * one of them would end up missing.
      *
      * Every field on the kernel's `RuleDocument` is `#[serde(default)]`, so a
      * whole-document shape mismatch is accepted as `Ok(document with zero
@@ -546,20 +634,34 @@ object RulesRepository {
      * shrinks a little upstream.
      *
      * The floor applies **only to built-ins**. Their size is something we have
-     * measured, so a floor is safe; a user-added source's size is not, and
-     * imposing one would reject a legitimately small custom list.
+     * measured, so a floor is safe; a user-added source's size is not — an
+     * imported list of one host is a legitimate thing to import, and a floor here
+     * would refuse it.
      *
-     * [source] carries both `builtin` and the primary URL; [url] is the address
-     * that was actually tried, not the primary one: with mirrors in play the
-     * primary URL is often *not* what was fetched, and an error naming an address
-     * that was never contacted sends the reader to the wrong endpoint.
+     * [origin] names what was read: the address that was actually tried, or the
+     * imported file's name. The address is the one that answered, not the primary
+     * one — with mirrors in play the primary URL is often *not* what was fetched,
+     * and an error naming an address that was never contacted sends the reader to
+     * the wrong endpoint.
      */
-    private fun requireUsable(document: ByteArray, source: RuleSource, url: String): ByteArray {
+    private fun parseDocument(text: String, builtin: Boolean, origin: String): ByteArray {
+        // A 200 can still not be a rule document — see [looksLikeHtml] — and this
+        // check runs before the shape sniff so an HTML page is never fed to either
+        // parser.
+        if (looksLikeHtml(text)) {
+            throw IOException("内容是一份 HTML 页面，不是规则文档")
+        }
+        // A source may publish the kernel's own JSON rather than hosts text, so
+        // the shape is sniffed before the hosts conversion is applied. Converting
+        // an already-JSON document would be a parse of the wrong grammar, and the
+        // merge would return zero entries rather than fail.
+        val document =
+            if (looksLikeKernelJson(text)) text.toByteArray() else toKernelDocument(text)
         val count = entryCount(document)
-        val floor = if (source.builtin) BUILTIN_MIN_ENTRIES else 1
+        val floor = if (builtin) BUILTIN_MIN_ENTRIES else 1
         if (count < floor) {
             throw IllegalStateException(
-                "规则源「${source.id}」解析出的条目过少：$url（实测 $count 条，内置源要求至少 $floor 条）",
+                "规则源「$origin」解析出的条目过少：实测 $count 条，至少需要 $floor 条",
             )
         }
         return document
@@ -629,8 +731,209 @@ object RulesRepository {
     /** The sidecar that records which source produced [cacheFile]. */
     fun sourceFile(context: Context): File = File(context.filesDir, SOURCE_NAME)
 
-    /** Drop the cache, so the next load fetches. */
+    /** Where imported copies live. Listed by [pruneImported], written by [importLocalBytes]. */
+    fun importedDir(context: Context): File = File(context.filesDir, IMPORTED_DIR)
+
+    /**
+     * Drop the cache, so the next load fetches — and drop any imported copy that
+     * no longer belongs to a source.
+     *
+     * The two are one call because they are the same decision seen twice: every
+     * caller that reaches for this has just changed *which document should be
+     * served*, and a copy left behind by a source the user deleted is a file that
+     * nothing will ever read again. Doing it here rather than inside
+     * [Prefs.removeRuleSource] is deliberate — [Prefs] has no file I/O by design
+     * (see its KDoc on `rulesCacheDirty`), and this object already owns
+     * everything under `filesDir`.
+     */
     fun invalidate(context: Context) {
         discardCache(context)
+        pruneImported(context)
     }
+
+    /**
+     * What [importLocal] and [importLocalBytes] did.
+     *
+     * A sealed result rather than a thrown exception because "this file is
+     * already imported" is not a failure — the outcome the user asked for (this
+     * document is now the active rule source) is exactly what happened — and a
+     * caller that reported it as an error would be scolding them for picking the
+     * right file twice.
+     */
+    sealed interface LocalImport {
+        /** The copy was written and a new source was added and selected. */
+        data class Added(val source: RuleSource) : LocalImport
+
+        /** The same content was already imported; its source was selected. */
+        data class AlreadyPresent(val source: RuleSource) : LocalImport
+
+        /** Nothing was written and nothing changed. [reason] is user-facing. */
+        data class Failed(val reason: String) : LocalImport
+    }
+
+    /**
+     * Import the document behind [uri] and make it the active rule source.
+     *
+     * Blocking — it reads a stream and writes a file. Call it off the main thread.
+     *
+     * The whole operation lives here rather than in each screen because there are
+     * two entry points (the settings screen and the rules screen) and the steps
+     * have to agree: validate, copy, add, select, drop the stale cache, reload a
+     * running tunnel. Five steps in two places is how the two screens end up
+     * behaving differently, which this app has already paid for once.
+     */
+    fun importLocal(context: Context, uri: Uri): LocalImport {
+        val bytes = try {
+            readUri(context, uri)
+        } catch (err: Throwable) {
+            return LocalImport.Failed("读取文件失败：${err.message ?: "未知错误"}")
+        } ?: return LocalImport.Failed(
+            "文件超过 ${MAX_LOCAL_BYTES / (1024 * 1024)} MiB，不像是规则文件",
+        )
+        return importLocalBytes(context, displayName(context, uri), bytes)
+    }
+
+    /**
+     * Import [bytes] under the name [displayName], as [importLocal] does.
+     *
+     * Split out from [importLocal] because the control console imports from a
+     * path rather than a URI, and that path has no `ContentResolver` to ask for a
+     * display name. The two share everything after the bytes are in hand, which
+     * is where all the decisions are.
+     */
+    fun importLocalBytes(context: Context, displayName: String, bytes: ByteArray): LocalImport {
+        val label = displayName.trim().ifEmpty { "本地规则" }
+        if (bytes.isEmpty()) return LocalImport.Failed("文件是空的")
+
+        // Validated **before** anything is written. The point of the check is that
+        // a file which cannot serve as a rule document never becomes a source at
+        // all: writing first and validating after would leave a copy on disk, a
+        // source that fails on every connect, and a delete button as the only way
+        // out.
+        try {
+            parseDocument(String(bytes, Charsets.UTF_8), builtin = false, origin = label)
+        } catch (err: Throwable) {
+            return LocalImport.Failed(err.message ?: "内容不是规则文档")
+        }
+
+        val fileName = sha256(bytes) + IMPORTED_SUFFIX
+        val file = importedFile(context, fileName)
+        try {
+            file.parentFile?.mkdirs()
+            file.writeBytes(bytes)
+        } catch (err: Throwable) {
+            return LocalImport.Failed("写入本地副本失败：${err.message ?: "未知错误"}")
+        }
+
+        val prefs = Prefs.of(context)
+        val id = RuleSource.localId(fileName)
+        val existing = prefs.ruleSources.firstOrNull { it.id == id }
+        val source = existing ?: RuleSource(id = id, label = label, url = "", localFile = fileName)
+        if (existing == null) {
+            prefs.addRuleSource(source)
+            KernelState.log(
+                KernelState.LogEntry.Level.INFO, TAG,
+                "已导入本地规则：$label（${bytes.size / 1024} KiB，副本 $fileName）",
+            )
+        }
+        // Selected as well as stored, and on both paths: a source that is added
+        // but not selected changes nothing, and the user picked this file because
+        // they want it used.
+        prefs.updateRuleSource(source.id)
+        invalidate(context)
+        DetourVpnService.reloadRulesIfRunning()
+        return if (existing == null) LocalImport.Added(source) else LocalImport.AlreadyPresent(source)
+    }
+
+    /**
+     * Delete imported copies that no source names any more.
+     *
+     * Runs from [invalidate], which every source change already calls, so it
+     * covers both ways a copy can be orphaned — the source was deleted, or an
+     * import was superseded and the old source dropped — without either path
+     * having to remember to clean up. Two guards matter: an unreadable [Prefs]
+     * returns early rather than pruning against an empty set (which would delete
+     * every copy on the device), and only files inside `imported-rules/` are
+     * considered.
+     */
+    private fun pruneImported(context: Context) {
+        val referenced = runCatching {
+            Prefs.of(context).ruleSources.mapNotNull { it.localFile }.toSet()
+        }.getOrNull() ?: return
+        for (file in importedDir(context).listFiles() ?: return) {
+            if (file.name in referenced) continue
+            runCatching { file.delete() }
+        }
+    }
+
+    private fun importedFile(context: Context, fileName: String): File =
+        File(importedDir(context), fileName)
+
+    /**
+     * Read a whole stream, or `null` if it turns out to be larger than [cap].
+     *
+     * Bounded rather than `readBytes()`: the picker will hand over any file the
+     * user taps, and `readBytes()` on a video is an `OutOfMemoryError` this app
+     * cannot catch as a `Throwable`-and-continue. The cap is checked *while*
+     * reading, so a huge file costs one buffer rather than its whole length.
+     */
+    private fun readBounded(input: InputStream, cap: Int): ByteArray? {
+        val out = ByteArrayOutputStream()
+        val buffer = ByteArray(16 * 1024)
+        while (true) {
+            val read = input.read(buffer)
+            if (read < 0) break
+            if (out.size() + read > cap) return null
+            out.write(buffer, 0, read)
+        }
+        return out.toByteArray()
+    }
+
+    /**
+     * The picked file's bytes, or `null` if it exceeds [MAX_LOCAL_BYTES].
+     *
+     * The stream is opened and checked separately rather than with `?:` on one
+     * expression: `null` from the read means "too large", and `null` from
+     * `openInputStream` means "cannot open", and collapsing the two would report
+     * a file the user is allowed to pick as unopenable.
+     */
+    private fun readUri(context: Context, uri: Uri): ByteArray? {
+        val stream = context.contentResolver.openInputStream(uri)
+            ?: throw IOException("无法打开输入流")
+        return stream.use { readBounded(it, MAX_LOCAL_BYTES) }
+    }
+
+    /**
+     * The picked file's display name, for the source's label.
+     *
+     * `OpenableColumns.DISPLAY_NAME` is what the picker itself shows the user, so
+     * a source named after it is one they can match against what they tapped. The
+     * fallback matters for the providers that do not implement the column — a
+     * `content://` URI's last segment is usually an opaque id, but it is still
+     * better than an empty label, and the last resort is a fixed string.
+     */
+    private fun displayName(context: Context, uri: Uri): String {
+        val fallback = uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
+            ?: "本地规则"
+        return runCatching {
+            context.contentResolver
+                .query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+                ?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        cursor.getString(0)?.takeIf { it.isNotBlank() } ?: fallback
+                    } else {
+                        fallback
+                    }
+                } ?: fallback
+        }.getOrDefault(fallback)
+    }
+
+    /** The lower-case hex SHA-256 of [bytes], which is how an imported copy is named. */
+    private fun sha256(bytes: ByteArray): String =
+        // `and 0xFF` on the widened int rather than relying on the formatter's own
+        // handling of a negative `Byte`: Android's `Formatter` is its own
+        // implementation, and a digest byte is negative half the time, so a
+        // difference there would corrupt half of every name.
+        MessageDigest.getInstance("SHA-256").digest(bytes)
+            .joinToString("") { "%02x".format(it.toInt() and 0xFF) }
 }

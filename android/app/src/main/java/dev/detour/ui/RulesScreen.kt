@@ -1,5 +1,7 @@
 package dev.detour.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -197,6 +199,11 @@ fun RulesScreen() {
     var expandedGroups by remember { mutableStateOf(setOf<String>()) }
     var expandedDomains by remember { mutableStateOf(setOf<String>()) }
     var showAddSource by remember { mutableStateOf(false) }
+    // The last import failure, shown as a dialog and cleared on dismiss. A
+    // failure here has no other way to reach the user: the source row it would
+    // have added is simply absent, which looks exactly like the picker having
+    // done nothing.
+    var importError by remember { mutableStateOf<String?>(null) }
     // Whether the list is narrowed to rows with a bad verdict. Off by default:
     // the page's job is to show the rule set, and this filter is a lens on it,
     // not its resting state.
@@ -276,6 +283,37 @@ fun RulesScreen() {
         RulesRepository.invalidate(context)
         DetourVpnService.reloadRulesIfRunning()
         loadIndex()
+    }
+
+    // The rule-file picker. `*/*` because a hosts file has no registered MIME
+    // type — providers report `text/plain`, `application/octet-stream`, or
+    // nothing — and the content is validated after reading either way, so a
+    // narrower filter could only hide files the user is entitled to pick.
+    //
+    // The work is `RulesRepository.importLocal`, the same call the settings screen
+    // makes, so the two entry points cannot drift; this callback only turns its
+    // outcome into what this screen shows. A success needs no announcement — the
+    // new chip appears and is selected, which is the change the user asked for —
+    // while a failure has nothing else to make it visible, hence the dialog.
+    val rulesImportPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        // Cancelled pick: nothing to report, same as the dialogs here.
+        if (uri != null) {
+            scope.launch {
+                when (val outcome = withContext(Dispatchers.IO) {
+                    RulesRepository.importLocal(context, uri)
+                }) {
+                    is RulesRepository.LocalImport.Added -> loadIndex()
+                    is RulesRepository.LocalImport.AlreadyPresent -> loadIndex()
+                    is RulesRepository.LocalImport.Failed -> {
+                        val reason = outcome.reason
+                        KernelState.log(KernelState.LogEntry.Level.ERROR, "Rules", "导入本地规则失败：$reason")
+                        importError = reason
+                    }
+                }
+            }
+        }
     }
 
     // One place where a switch becomes a kernel change. Writing to the store is
@@ -440,12 +478,23 @@ fun RulesScreen() {
                         selected = source.id == prefs.ruleSourceId,
                         onClick = { selectSource(source.id) },
                         label = source.labelRes?.let { stringResource(it) } ?: source.label,
-                        // A source whose `url` is empty is shown but cannot be
-                        // chosen — see RuleSource.usable. No built-in is in that
-                        // state since `s302` was deleted.
+                        // `usable` is false for a source with neither an address
+                        // nor an imported copy — see RuleSource.usable. No
+                        // built-in is in that state since `s302` was deleted, and
+                        // an imported source never is, so this guard only ever
+                        // hides a row that could not load.
                         enabled = source.usable,
                     )
                 }
+            }
+            // A labelled text button rather than a second icon. Two icon-only
+            // buttons would both have to be a plus: `material-icons-core` is the
+            // only icon artifact this app ships and it has no document glyph, so
+            // the pair would be indistinguishable on screen — the one place where
+            // reusing the plus, which is fine on the settings screen's labelled
+            // rows, stops being fine.
+            TextButton(onClick = { rulesImportPicker.launch(arrayOf("*/*")) }) {
+                Text(stringResource(R.string.rules_import_local))
             }
             IconButton(onClick = { showAddSource = true }) {
                 Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.rules_add_source))
@@ -624,6 +673,24 @@ fun RulesScreen() {
                 // Select what was just added. A source the user has to hunt for and
                 // tap before it does anything reads as "the add did nothing".
                 selectSource(source.id)
+            },
+        )
+    }
+
+    // Also outside the Column, and for the same reason as the two below: an
+    // overlay on the whole screen rather than a row in the list.
+    importError?.let { reason ->
+        DetourAlertDialog(
+            onDismissRequest = { importError = null },
+            title = stringResource(R.string.rules_import_local),
+            text = { Text(stringResource(R.string.rules_import_failed, reason)) },
+            // One button. There is no "try again" action to offer — the picker is
+            // already the retry — and a second button that only closed the dialog
+            // would be the same action spelled twice.
+            confirmButton = {
+                TextButton(onClick = { importError = null }) {
+                    Text(stringResource(R.string.common_confirm))
+                }
             },
         )
     }

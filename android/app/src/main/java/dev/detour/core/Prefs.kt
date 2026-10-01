@@ -861,7 +861,7 @@ class Prefs private constructor(private val store: SharedPreferences) {
             // The sidecar mismatch forces a refetch on its own — the source URL
             // is the identity, so `RulesRepository.load` sees
             // `identityMatches == false` and takes the fetch branch
-            // (`RulesRepository.kt:273`) — so no flag is needed to make the cache
+            // (`RulesRepository.kt:330`) — so no flag is needed to make the cache
             // refresh.
             //
             // ## What setting the flag would actually cost
@@ -870,7 +870,7 @@ class Prefs private constructor(private val store: SharedPreferences) {
             // obvious.** It is not "the offline user loses their rules": an
             // offline upgrade fails *either way*, because `load` refuses a
             // mismatched sidecar in the offline branch too
-            // (`RulesRepository.kt:225-257`) — a document whose stamp positively
+            // (`RulesRepository.kt:282-314`) — a document whose stamp positively
             // identifies it as a different rule set is not served. The difference
             // is what the user is left holding. `discardCache` deletes both files,
             // so with the flag the offline user gets "离线模式，且本地还没有已下载的
@@ -896,7 +896,7 @@ class Prefs private constructor(private val store: SharedPreferences) {
             // An earlier version of this comment claimed there was ("falling back
             // to the old cache only if that fetch fails"); it was wrong.
             // `RulesRepository.fetchInto` re-checks the sidecar *after* the
-            // failure (`RulesRepository.kt:329-346`) and re-throws on a mismatch
+            // failure (`RulesRepository.kt:386-402`) and re-throws on a mismatch
             // instead of serving the document, deliberately — serving it would
             // hand the tunnel exactly the document the stamp had just rejected.
             // So an online upgrade with the new source down fails the connect; it
