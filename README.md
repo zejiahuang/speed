@@ -11,7 +11,7 @@
 [![ABI](https://img.shields.io/badge/ABI-arm64--v8a%20%7C%20x86__64-lightgrey.svg)](#下载)
 [![Release](https://img.shields.io/github/v/release/zejiahuang/speed?label=release&color=3ddc84)](../../releases/latest)
 
-[下载](#下载) · [工作原理](#工作原理) · [设计取舍](#设计取舍) · [从源码构建](#从源码构建)
+[下载](#下载) · [工作原理](#工作原理) · [设计取舍](#设计取舍) · [从源码构建](#从源码构建) · [免责声明](DISCLAIMER.md)
 
 </div>
 
@@ -202,6 +202,25 @@
 应用启动时会自己查一次有没有新版（每天最多一次，可在关于页关掉），有新版会弹出窗口并附上
 这个版本的更新日志，并直接给你对应 ABI 的下载链接——不必盯着 Releases 页面。
 
+**更新检查与 APK 下载都经 `gh-proxy.com` 这一第三方镜像中转，不走直连。** 这不是偏好，
+是可达性要求：应用自身流量被刻意排除在隧道之外（`addDisallowedApplication`，防自环），
+所以更新走的是裸网络，而 GitHub 在部分网络环境下直连不可达。
+
+**下载这一跳也走镜像，理由是「少一跳」，不是「否则下不下来」。** 与查版本不同，下载要经过一次重定向：
+`github.com/.../releases/download/...` 返回 **302** 到 `release-assets.githubusercontent.com`。
+这个名字**不在规则文档里**（表里只有**旧的** `objects.githubusercontent.com`），所以隧道对它的处置是
+**直连**（见「设计取舍」）——即下载能否成功取决于该域名当前解析到的**真实地址**在当前网络是否可达，
+而不取决于规则表。经镜像后整条重定向链在代理侧被消化，客户端只连镜像一个域名。
+
+**实测（设备、经 tun0）：两条路当前都通，各取回 64 KB（`206` + `application/vnd.android.package-archive`），
+同一窗口背靠背 4 轮无失败，耗时差落在噪声内**——对照域名自身在 0.37–6.70s 之间波动，相差 18 倍，
+所以「镜像更快」这一条**测不出来，不作为理由**。改动的实际依据是：少一次重定向、少一个对第三方
+解析地址可达性的依赖、以及和查版本保持同一套语义。
+
+中转意味着**你的下载请求会经过第三方**。完整性由 **APK 签名**兜底——被改过的包装不上，
+但这不保证第三方不记录下载行为。不接受第三方中转的话，请从源码自行构建（见下一节）。
+若 Releases 页面本身也打不开，用 `https://gh-proxy.com/https://github.com/zejiahuang/speed/releases`。
+
 ## 从源码构建
 
 需要：Rust（含 `aarch64-linux-android` 与 `x86_64-linux-android` target）、
@@ -346,6 +365,11 @@ cargo clippy --workspace --all-targets -- -D warnings
 ## 许可
 
 GNU General Public License v3.0，见 [LICENSE](LICENSE)。
+
+**使用前请先读 [DISCLAIMER.md](DISCLAIMER.md)（免责声明）。** 它把 GPL-3.0 第 15、16 条的免责条款
+具体化到本项目的实际情况：不提供任何网络出口、不解密 TLS、更新经第三方镜像中转、规则源另有其许可、
+不收集数据、无技术支持与 SLA，以及一份明确列出的、由你自担的风险清单。
+下载、安装或使用本项目，即视为接受该声明。
 
 ## 致谢
 

@@ -26,6 +26,23 @@ import org.json.JSONObject
 object UpdateChecker {
 
     /**
+     * The mirror prefix shared by the manifest fetch and the APK download.
+     *
+     * **One constant, two hops, on purpose.** Checking for an update and
+     * downloading it are two requests of the same transfer, and only the first
+     * one used to go through the mirror. The second hop is the harder one: the
+     * release page answers `github.com/.../releases/download/...` with a `302`
+     * to `release-assets.githubusercontent.com`, which the rule document does
+     * not carry, so an unmirrored download ends up on a host the tunnel only
+     * ever dials directly. Measured through this prefix, the asset comes back
+     * `206` with `application/vnd.android.package-archive`, and the client opens
+     * a connection to the mirror alone — the redirect is followed server-side.
+     * Deriving both URLs from one constant is what keeps them from drifting
+     * apart into the state this replaces: the check working, the download not.
+     */
+    private const val MIRROR_PREFIX = "https://gh-proxy.com/"
+
+    /**
      * The default update source: this project's GitHub Releases, reached through
      * the `gh-proxy.com` mirror rather than `api.github.com` directly.
      *
@@ -39,13 +56,16 @@ object UpdateChecker {
      * measured working from there (HTTP 200, byte-identical body), so it is the
      * default; a user who can reach GitHub directly can override the URL.
      *
+     * The APK download is mirrored too, by [mirrorForDownload] — see
+     * [MIRROR_PREFIX] for why one is not enough.
+     *
      * It lives here rather than in `Prefs` on purpose: `Prefs` stores what the
      * *user* configured, and a compiled-in fallback is not a user setting. It
      * also belongs beside the parser that understands the GitHub release format,
      * so the default and the code that consumes it cannot drift apart.
      */
     const val DEFAULT_MANIFEST_URL =
-        "https://gh-proxy.com/https://api.github.com/repos/zejiahuang/speed/releases/latest"
+        MIRROR_PREFIX + "https://api.github.com/repos/zejiahuang/speed/releases/latest"
 
     /**
      * A manifest is a few hundred bytes; a GitHub release body is a few KB.
@@ -71,7 +91,7 @@ object UpdateChecker {
     data class Release(
         /** Shown to the user, e.g. "0.1.0". */
         val versionName: String,
-        /** Direct APK download for this device's ABI; falls back to the release page. */
+        /** Direct APK download for this device's ABI, through the mirror; falls back to the release page. */
         val url: String,
         /** Release notes body as-is (GitHub `body`, raw Markdown), or `null`. */
         val notes: String?,
@@ -266,7 +286,11 @@ object UpdateChecker {
             return Result.UpToDate
         }
 
-        val downloadUrl = pickAssetUrl(json) ?: json.optString("html_url", "")
+        // Both branches are mirrored: the asset URL and the release-page
+        // fallback are the same GitHub host family, and the fallback is a
+        // download link too — an unmirrored one would fail for the same reason
+        // the asset URL would.
+        val downloadUrl = mirrorForDownload(pickAssetUrl(json) ?: json.optString("html_url", ""))
 
         // `isNotBlank()` trims before testing, so a body of only whitespace
         // becomes `null` rather than an empty notes section. A real body is
@@ -305,6 +329,67 @@ object UpdateChecker {
             }
         }
         return null
+    }
+
+    /**
+     * Rewrites a GitHub download URL so it goes through [MIRROR_PREFIX].
+     *
+     * **Why the download needs the mirror even though the manifest has it.** The
+     * manifest reaching GitHub says nothing about the asset reaching it. The
+     * release page answers `github.com/.../releases/download/...` with a `302`
+     * to `release-assets.githubusercontent.com`, and that host is not in the
+     * rule document, so the tunnel plans the flow as a direct dial of the
+     * client's own address (`Planner::decide`, step 4) — the same unprotected
+     * path the manifest would have taken. Measured through the mirror, the asset
+     * comes back `206` with `application/vnd.android.package-archive` and a
+     * `PK\x03\x04` body, and the client opens a connection to the mirror alone.
+     * So the mirror is not an extra fallback here, it removes a hop that could
+     * not have worked.
+     *
+     * Two guards, both about not breaking what the mirror is not for:
+     *
+     * - **Idempotent.** A URL that already carries the prefix is returned
+     *   unchanged. A manifest handing back an already-mirrored URL — or a caller
+     *   that starts mirroring earlier in the chain — would otherwise get a
+     *   doubled prefix, which is a 404, not a download.
+     * - **GitHub hosts only.** The GitHub branch of [parse] trusts the *shape*
+     *   of the body, not its origin: `update_url` is user-settable, so a
+     *   manifest of the user's own may carry `tag_name` and a download link to
+     *   their own server. Routing that through a third party would be a silent
+     *   detour of somebody else's file. Anything that is not a GitHub host is
+     *   left exactly as given.
+     */
+    private fun mirrorForDownload(url: String): String {
+        val target = url.trim()
+        if (target.isEmpty()) return target
+        if (target.startsWith(MIRROR_PREFIX)) return target
+        if (!isGitHubHost(target)) return target
+        return MIRROR_PREFIX + target
+    }
+
+    /**
+     * Whether [url]'s host is one the mirror exists to reach.
+     *
+     * Matched on the **host** and never on a substring of the whole URL: a
+     * `contains("github.com")` test also fires for
+     * `https://example.com/?ref=github.com` and would reroute it. The userinfo
+     * and port are stripped first so `https://user@github.com:443/x` still
+     * matches. `.github.com` covers the API and `codeload`;
+     * `.githubusercontent.com` covers the release-asset, raw and objects hosts —
+     * the family the redirect actually lands in.
+     */
+    private fun isGitHubHost(url: String): Boolean {
+        val afterScheme = url.substringAfter("://", "")
+        if (afterScheme.isEmpty()) return false
+        val host = afterScheme
+            .substringBefore('/')
+            .substringBefore('?')
+            .substringBefore('#')
+            .substringAfterLast('@')
+            .substringBefore(':')
+            .lowercase()
+        return host == "github.com" || host.endsWith(".github.com") ||
+            host == "githubusercontent.com" || host.endsWith(".githubusercontent.com")
     }
 
     /**
