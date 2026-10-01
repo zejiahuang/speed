@@ -281,35 +281,45 @@ class Prefs private constructor(private val store: SharedPreferences) {
         private set
 
     /**
-     * Whether the liquid-glass half of the material is on.
+     * Whether the glass material is on. **One switch for both halves.**
      *
-     * The material has two independently switchable halves — see
-     * `resolveDetourGlass` — and this is the refraction half: the lens, the
-     * specular highlight and the lit edge. It is independent of [glassFrost] on
-     * purpose; either can be on without the other, and each is a real material
-     * on its own.
+     * The material has two halves — see `resolveDetourGlass` — and this switch
+     * turns on both of them: the liquid half (the lens, the specular highlight,
+     * the lit edge) and the frosted half (the blur). They were two independent
+     * switches until the owner merged them (2026-10-01); `resolveDetourGlass`
+     * records what the merge costs.
      *
-     * **Both switches default off.** A fresh install draws flat opaque cards and
-     * the user opts in, which is the owner's explicit choice. There is
-     * deliberately no device inference any more: the old `auto` tier guessed
-     * from RAM and core count, and a guess that silently changes the look per
-     * device made the same build render differently on the emulator than on a
-     * phone — harder to reason about, and impossible to verify against a stored
-     * value, since nothing was stored.
+     * **Defaults off.** A fresh install draws flat opaque cards and the user
+     * opts in, which is the owner's explicit choice. There is deliberately no
+     * device inference any more: the old `auto` tier guessed from RAM and core
+     * count, and a guess that silently changes the look per device made the same
+     * build render differently on the emulator than on a phone — harder to
+     * reason about, and impossible to verify against a stored value, since
+     * nothing was stored.
+     *
+     * **The fallback in the initialiser is the migration.** This switch replaces
+     * the two boolean keys `glass_liquid` and `glass_frost`, and a device that
+     * had either of them on has to come out of the upgrade with glass on. A
+     * missing key reads `false`, so without the fallback the merge would silently
+     * turn glass off for exactly the users who had chosen it — the trap
+     * [migrate]'s version-8 step names for a changed default. `migrate` then
+     * makes the value explicit under the new key and deletes the two old ones, so
+     * the fallback is only ever consulted once, on the upgrade itself.
+     *
+     * The key is **`glass_enabled` and not `glass_effect`**, and that is not a
+     * style choice. `glass_effect` is the name the retired five-tier chip row
+     * (`自动/关闭/低/高/自定义`) stored, and it held a **string**; `getBoolean` on
+     * a key holding a string throws `ClassCastException`, so reusing the name
+     * would crash the app on launch on any device still carrying that value.
+     * `migrate` deletes it, but the new name must not depend on the delete having
+     * happened.
      */
-    var glassLiquid by mutableStateOf(store.getBoolean(KEY_GLASS_LIQUID, false))
-        private set
-
-    /**
-     * Whether the frosted half of the material is on.
-     *
-     * The blur half: it samples and blurs the backdrop. Independent of
-     * [glassLiquid]; on its own it is a frosted flat panel, with the refraction
-     * off.
-     *
-     * Defaults off for the same reason [glassLiquid] does — see there.
-     */
-    var glassFrost by mutableStateOf(store.getBoolean(KEY_GLASS_FROST, false))
+    var glassEnabled by mutableStateOf(
+        store.getBoolean(
+            KEY_GLASS_ENABLED,
+            store.getBoolean(KEY_GLASS_LIQUID, false) || store.getBoolean(KEY_GLASS_FROST, false),
+        ),
+    )
         private set
 
     /**
@@ -336,25 +346,25 @@ class Prefs private constructor(private val store: SharedPreferences) {
     var wallpaperScrim by mutableStateOf(store.getInt(KEY_WALLPAPER_SCRIM, DEFAULT_WALLPAPER_SCRIM))
         private set
 
-    // The five numbers behind the two glass switches. They are stored
-    // unconditionally — not only while a switch is on — so a user can set them
-    // up, leave, and come back to find them intact, and so the control channel
-    // can write them in any order relative to flipping a switch.
+    // The five numbers behind the glass switch. They are stored unconditionally —
+    // not only while the switch is on — so a user can set them up, leave, and
+    // come back to find them intact, and so the control channel can write them in
+    // any order relative to flipping the switch.
     //
     // **Their defaults are deliberately the old `high` preset's numbers, digit
     // for digit** (16 / 72 / 32 / 12 / 50). That is the whole reason for these
-    // particular values: turning a switch on must reveal the material at a sane
+    // particular values: turning the switch on must reveal the material at a sane
     // setting, not also jump to an unrelated one. The numbers are the picture a
-    // switch-on produces; changing them would make the act of enabling an
-    // effect change something else as well. There is no version migration
-    // because a missing key already yields the default, and a migration that
-    // rewrote the same numbers would be ceremony — the same reasoning the
-    // version note above `CURRENT_VERSION` records.
+    // switch-on produces; changing them would make the act of enabling an effect
+    // change something else as well. There is no version migration because a
+    // missing key already yields the default, and a migration that rewrote the
+    // same numbers would be ceremony — the same reasoning the version note above
+    // `CURRENT_VERSION` records.
     //
-    // Which switch reads which: the blur is the frost; the lens, highlight and
-    // border are the liquid glass; the tint is shared, because both materials
-    // draw a base fill and a card with no fill would let the wallpaper through
-    // behind its text. See `resolveDetourGlass` for the assembly.
+    // Which number feeds which half: the blur is the frosted half; the lens,
+    // highlight and border are the liquid half; the tint is shared, because both
+    // materials draw a base fill and a card with no fill would let the wallpaper
+    // through behind its text. See `resolveDetourGlass` for the assembly.
 
     /** Blur radius of the frosted material, in dp (0..100). */
     var glassBlur by mutableStateOf(store.getInt(KEY_GLASS_BLUR, DEFAULT_GLASS_BLUR))
@@ -636,6 +646,13 @@ class Prefs private constructor(private val store: SharedPreferences) {
      *   install should do before its first connect — so there is no bump of
      *   `CURRENT_VERSION` here, because a step that changes nothing is ceremony
      *   that has to be read and trusted forever.
+     * * **Two keys that become one are not additive, because the new key is
+     *   missing and a missing key reads its default.** Version 9 replaces
+     *   `glass_liquid` and `glass_frost` with the single `glass_enabled`, and the
+     *   default is `false` — which is the *opposite* of what a user who had either
+     *   half on chose. So the merge is carried across by hand, "either was on" is
+     *   the translation, and the two old keys are deleted in the same step rather
+     *   than left in the initialiser's fallback path forever.
      */
     private fun migrate() {
         val version = store.getInt(KEY_VERSION, 1)
@@ -807,6 +824,49 @@ class Prefs private constructor(private val store: SharedPreferences) {
             // does not silently fall back to the `maxiaof` document.
         }
 
+        if (version < 9) {
+            // The two glass switches became one, and the value has to be carried
+            // across by hand. `glass_enabled` is a new key, a missing key reads
+            // `false`, and `SharedPreferences` returns a stored value over a
+            // default — so without this step the merge would silently turn glass
+            // **off** for every user who had switched it on. That is v8's lesson
+            // again, in the one shape where the "old value" is spread over two
+            // keys.
+            //
+            // "Either half on" is the only faithful translation, and it is worth
+            // saying why it is not a lossy guess: the merged switch turns on both
+            // halves, so a user who had one half on gets what they asked for plus
+            // the other, and a user who had neither on stays off. The one case
+            // that changes is "refraction without blur", which the merge removes
+            // by design — see `resolveDetourGlass`.
+            //
+            // The two old keys are **deleted**, not left behind. A stored value
+            // that outlives the thing it described is a defect this project has
+            // paid for three times, and these two would be worse than inert: the
+            // property initialiser reads them as a fallback, so leaving them would
+            // keep a stale boolean in the read path forever.
+            //
+            // `glass_effect` is deleted as well, and it is spelled out rather than
+            // given a constant for the same reason version 4 spells out
+            // `rule_source`: no current code reads it. It held the retired
+            // five-tier chip row (`自动/关闭/低/高/自定义`) as a **string**, and a
+            // string under a name a later build wants for a boolean is a launch
+            // crash waiting on whichever device still carries it.
+            val legacyGlass =
+                store.getBoolean(KEY_GLASS_LIQUID, false) || store.getBoolean(KEY_GLASS_FROST, false)
+            edit {
+                putBoolean(KEY_GLASS_ENABLED, legacyGlass)
+                remove(KEY_GLASS_LIQUID)
+                remove(KEY_GLASS_FROST)
+                remove("glass_effect")
+            }
+            // The in-memory half, for the reason versions 5, 7 and 8 all assign
+            // it: `of()` reads every property from the store *before* calling
+            // `migrate()`, so without this the process performing the upgrade
+            // would keep the value it had already read for its whole life.
+            glassEnabled = legacyGlass
+        }
+
         if (version < CURRENT_VERSION) {
             edit { putInt(KEY_VERSION, CURRENT_VERSION) }
         }
@@ -886,8 +946,7 @@ class Prefs private constructor(private val store: SharedPreferences) {
 
     fun updateThemeColor(value: String) { themeColor = value; edit { putString(KEY_THEME_COLOR, value) } }
     fun updateCornerStyle(value: String) { cornerStyle = value; edit { putString(KEY_CORNER_STYLE, value) } }
-    fun updateGlassLiquid(value: Boolean) { glassLiquid = value; edit { putBoolean(KEY_GLASS_LIQUID, value) } }
-    fun updateGlassFrost(value: Boolean) { glassFrost = value; edit { putBoolean(KEY_GLASS_FROST, value) } }
+    fun updateGlassEnabled(value: Boolean) { glassEnabled = value; edit { putBoolean(KEY_GLASS_ENABLED, value) } }
     fun updateWallpaper(value: String) { wallpaper = value; edit { putString(KEY_WALLPAPER, value) } }
     fun updateWallpaperScrim(value: Int) {
         wallpaperScrim = value.coerceIn(0, 100); edit { putInt(KEY_WALLPAPER_SCRIM, wallpaperScrim) }
@@ -982,16 +1041,15 @@ class Prefs private constructor(private val store: SharedPreferences) {
         updateDarkMode("follow")
         updateThemeColor("dynamic")
         updateCornerStyle("medium")
-        updateGlassLiquid(false)
-        updateGlassFrost(false)
+        updateGlassEnabled(false)
         // Clears the selection only; `Prefs` has no file I/O by design, so the
         // bytes in `filesDir` are pruned by `WallpaperStore` on its next load.
         updateWallpaper("")
         updateWallpaperScrim(DEFAULT_WALLPAPER_SCRIM)
         // The glass numbers go back to the sane defaults with everything else.
-        // They are reset even though both switches are reset off, so that turning
-        // a switch back on later starts from the no-jump defaults rather than from
-        // whatever the previous owner of the device left behind.
+        // They are reset even though the switch is reset off, so that turning it
+        // back on later starts from the no-jump defaults rather than from whatever
+        // the previous owner of the device left behind.
         updateGlassBlur(DEFAULT_GLASS_BLUR)
         updateGlassTint(DEFAULT_GLASS_TINT)
         updateGlassLens(DEFAULT_GLASS_LENS)
@@ -1096,7 +1154,9 @@ class Prefs private constructor(private val store: SharedPreferences) {
          * option values are replaced by a list of [RuleSource]s, and the old key is
          * removed. 8: the default source moved from `github-hosts` to HelloGitHub,
          * and a stored `github-hosts` — the old default — is carried forward while
-         * every other id is left alone.
+         * every other id is left alone. 9: the two glass switches are merged into
+         * `glass_enabled`, with "either half was on" carried forward, and the two
+         * old keys plus the retired tier key `glass_effect` are deleted.
          *
          * Public rather than private because it is also the `version` field of the
          * settings-export document: `SettingsBackup` stamps it on export and
@@ -1104,14 +1164,20 @@ class Prefs private constructor(private val store: SharedPreferences) {
          * have to read the same number. A second copy over there would be a copy
          * that drifts the first time this one is bumped.
          */
-        const val CURRENT_VERSION = 8
+        const val CURRENT_VERSION = 9
         private const val KEY_THEME_COLOR = "theme_color"
         private const val KEY_CORNER_STYLE = "corner_style"
 
-        // The two glass switches. No version bump guards them: a missing boolean
-        // key reads its default (`false`), so an install from before they existed
-        // simply gets the both-off state, which is the correct starting point —
-        // the same reasoning the numeric keys below record.
+        // The glass switch. `migrate` version 9 introduces it, because the two
+        // booleans it replaced cannot be merged by a default — see the property
+        // declaration for why the fallback lives there as well as in `migrate`.
+        private const val KEY_GLASS_ENABLED = "glass_enabled"
+
+        // The two booleans `glass_enabled` replaced. They are **read** — by the
+        // property initialiser's fallback and by `migrate` version 9 — and deleted
+        // by that step, so they are the one pair of keys here that no setter
+        // writes. They keep constants, unlike the retired tier key that version 9
+        // spells out, precisely because current code still reads them.
         private const val KEY_GLASS_LIQUID = "glass_liquid"
         private const val KEY_GLASS_FROST = "glass_frost"
 

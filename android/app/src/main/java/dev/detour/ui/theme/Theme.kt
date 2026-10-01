@@ -241,21 +241,21 @@ fun DetourTheme(
     // its text sizes from `MaterialTheme.typography`, so scaling at the source is
     // what makes the setting reach all of them.
     val typography = remember(fontScale) { detourTypography(fontScale) }
-    // The two glass switches and the five glass numbers are read here, in the
+    // The glass switch and the five glass numbers are read here, in the
     // composable body, so that they are part of the `remember` key set below.
     // **This is load-bearing, not tidiness.** `resolveDetourGlass` reads `Prefs`
-    // itself; if this `remember` did not also key on its inputs, flipping a
+    // itself; if this `remember` did not also key on its inputs, flipping the
     // switch or dragging a slider would change the stored value, the theme would
     // recompute nothing, and the screen would not move — the exact "control that
     // does nothing" defect this project treats as its cardinal sin. Keying on
     // them re-runs the resolver on every change.
     //
-    // They are read unconditionally, even with both switches off, for two
-    // reasons: an `if` around the read would make the composition's subscriptions
-    // depend on the switches and re-subscribe on every toggle, and `Prefs.of` is
-    // a cached singleton so the reads themselves are free.
+    // They are read unconditionally, even with the switch off, for two reasons: an
+    // `if` around the read would make the composition's subscriptions depend on
+    // the switch and re-subscribe on every toggle, and `Prefs.of` is a cached
+    // singleton so the reads themselves are free.
     //
-    // The alternative was to add eight parameters to `DetourTheme` and have
+    // The alternative was to add seven parameters to `DetourTheme` and have
     // `MainActivity` pass them in. That would spread the knowledge of these
     // settings into every caller of the theme and force an edit to a file this
     // change does not own, for no benefit over reading the one source of truth
@@ -264,8 +264,7 @@ fun DetourTheme(
     val glass = remember(
         scheme,
         context,
-        prefs.glassLiquid,
-        prefs.glassFrost,
+        prefs.glassEnabled,
         prefs.glassBlur,
         prefs.glassTint,
         prefs.glassLens,

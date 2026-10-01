@@ -177,33 +177,32 @@
     <string name="settings_corner_small">紧凑</string>
     <string name="settings_corner_medium">标准</string>
     <string name="settings_corner_large">圆润</string>
-    <!-- The glass section. Two independent master switches, both **off by
-         default** (the owner's call, 2026-09-27): a fresh install draws flat
-         cards and the user opts into the effects. They replaced the old
-         five-tier chip row (自动/关闭/低/高/自定义). The tiers were a second and
-         redundant way to say what the switches say directly, and "自动"
-         (device-decided) was the one tier that made the section unreadable: the
-         user could not tell what they were looking at without knowing their own
-         device's RAM and core count. -->
+    <!-- The glass section. One master switch, **off by default** (the owner's
+         call, 2026-09-27): a fresh install draws flat cards and the user opts
+         into the effect. It replaced the old five-tier chip row
+         (自动/关闭/低/高/自定义) — the tiers were a second and redundant way to
+         say what the switch says directly, and "自动" (device-decided) was the
+         one tier that made the section unreadable: the user could not tell what
+         they were looking at without knowing their own device's RAM and core
+         count.
+
+         It was **two** switches (液态玻璃 / 磨砂材质) until 2026-10-01, when the
+         owner merged them. The two halves of the material are unchanged — 磨砂
+         is the *blur* (`DetourGlass.blurRadius`), 液态 is the *refraction*
+         (`lensHeight`/`lensAmount`) plus the highlight and the lit edge — but one
+         switch now turns on both, so refraction without blur is no longer
+         reachable and every glass-on user pays for the blur.
+         `resolveDetourGlass` records that trade-off. The two old labels survive
+         only inside this comment: keeping either as a string would leave a name
+         for something the UI no longer offers. -->
     <string name="settings_glass">玻璃效果</string>
-    <!-- The two switches are the two halves of the material, and they are
-         genuinely independent — each can be on without the other:
-         · 磨砂材质 is the *blur* (`DetourGlass.blurRadius`).
-         · 液态玻璃 is the *refraction* (`lensHeight`/`lensAmount`) plus the
-           highlight and the lit edge — the parts that make it read as glass
-           rather than as a merely translucent panel. -->
-    <string name="settings_glass_liquid">液态玻璃</string>
-    <!-- The Android 13 caveat lives in the hint rather than being hidden,
-         because below API 33 `lens` has no `RuntimeShader` to run in and the
-         switch would otherwise look broken on an older phone — see the
-         API-level ladder in `LiquidGlass`. -->
-    <string name="settings_glass_liquid_hint">折射、高光与描边（需要 Android 13）</string>
-    <string name="settings_glass_frost">磨砂材质</string>
-    <string name="settings_glass_frost_hint">模糊背后的内容，是最费性能的一步</string>
-    <!-- Shown only when at least one switch is on; each slider below is shown
-         only when its own switch is on. Same rule as the wallpaper scrim: a
-         control that cannot have an effect must not be shown. -->
-    <string name="settings_glass_knobs_hint">下面的数值只在对应开关打开时生效</string>
+    <!-- Both halves' hints, in one line. The Android 13 caveat stays in the hint
+         rather than being hidden, because below API 33 `lens` has no
+         `RuntimeShader` to run in and the liquid half would look broken on an
+         older phone — see the API-level ladder in `LiquidGlass`. The blur is
+         named as the expensive half because the merge made it unavoidable, so it
+         is the one thing a user cannot turn off once glass is on. -->
+    <string name="settings_glass_hint">折射、高光与描边，并模糊背后的内容（需要 Android 13；模糊最费性能）</string>
     <string name="settings_glass_blur">模糊强度</string>
     <string name="settings_glass_tint">底色浓度</string>
     <string name="settings_glass_lens">折射强度</string>

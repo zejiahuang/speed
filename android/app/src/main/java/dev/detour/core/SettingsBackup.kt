@@ -125,6 +125,36 @@ object SettingsBackup {
         Entry(key, { o, p -> o.put(key, get(p)) }, { o, p -> if (o.has(key)) set(p, o.getString(key)) })
 
     /**
+     * The merged glass switch. The one entry whose read side understands a
+     * **previous** key spelling.
+     *
+     * Until 2026-10-01 the material had two switches, exported as `glass_liquid`
+     * and `glass_frost`. A document written before then names those and not
+     * `glass_enabled`, so [Entry]'s usual "an absent key leaves the value alone"
+     * rule would turn a full restore into a partial one: everything would come
+     * back except the glass the user had chosen. The read therefore accepts either
+     * spelling, and "either half was on" is the translation — the same one
+     * `Prefs.migrate` version 9 makes, for the same reason.
+     *
+     * The write side emits only the new key, so the two old names are read-only
+     * here and age out as pre-merge documents stop being imported. They are
+     * spelled out rather than shared with `Prefs`' constants for the reason the
+     * class comment gives: these strings are the wire format, and this file is
+     * where the format is decided.
+     */
+    private val glassEnabled: Entry = Entry(
+        "glass_enabled",
+        { o, p -> o.put("glass_enabled", p.glassEnabled) },
+        { o, p ->
+            when {
+                o.has("glass_enabled") -> p.updateGlassEnabled(o.getBoolean("glass_enabled"))
+                o.has("glass_liquid") || o.has("glass_frost") ->
+                    p.updateGlassEnabled(o.optBoolean("glass_liquid") || o.optBoolean("glass_frost"))
+            }
+        },
+    )
+
+    /**
      * `disabled_rules` is a `Set<String>` in prefs, so it crosses the wire as a
      * JSON array of strings — a real array, not the `StringSet`'s `toString`,
      * which is not JSON and could not be read back.
@@ -205,8 +235,7 @@ object SettingsBackup {
         string("dark_mode", { it.darkMode }, { p, v -> p.updateDarkMode(v) }),
         string("theme_color", { it.themeColor }, { p, v -> p.updateThemeColor(v) }),
         string("corner_style", { it.cornerStyle }, { p, v -> p.updateCornerStyle(v) }),
-        bool("glass_liquid", { it.glassLiquid }, { p, v -> p.updateGlassLiquid(v) }),
-        bool("glass_frost", { it.glassFrost }, { p, v -> p.updateGlassFrost(v) }),
+        glassEnabled,
         // `wallpaper` is deliberately absent — see the class comment.
         int("wallpaper_scrim", { it.wallpaperScrim }, { p, v -> p.updateWallpaperScrim(v) }),
         int("glass_blur", { it.glassBlur }, { p, v -> p.updateGlassBlur(v) }),

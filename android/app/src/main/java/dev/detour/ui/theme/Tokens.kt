@@ -159,22 +159,27 @@ data class DetourGlass(
 val LocalDetourGlass = staticCompositionLocalOf { DetourGlass.Disabled }
 
 /**
- * Resolve the glass material from the two switches and the five numbers.
+ * Resolve the glass material from the single switch and the five numbers.
  *
- * The material is two independent halves, and each switch owns one:
+ * The material is two halves and **the one switch drives both**:
  *
- * * **frost** (`glassFrost`) is the blur — it samples and blurs the backdrop;
- * * **liquid** (`glassLiquid`) is the refraction (the lens), plus the specular
- *   highlight and the lit edge.
+ * * **liquid** — the refraction (the lens), plus the specular highlight and the
+ *   lit edge;
+ * * **frost** — the blur: it samples and blurs the backdrop.
  *
- * They are genuinely independent: with only liquid on you get refraction over a
- * sharp backdrop, which is what liquid glass actually is; with only frost on you
- * get a frosted flat panel. Each `if (frost) ... else 0.dp` below is what makes
- * that true — collapsing them into a single gate would make either switch
- * silently require the other, so one of the two materials would be unreachable.
+ * They were two independently switchable halves until the owner merged them
+ * (2026-10-01), on the argument that two master switches for one visual idea
+ * read as two features. **The merge has a cost and it is the blur:** the halves
+ * were independent, so "refraction over a sharp backdrop" — liquid glass without
+ * the frosted panel, which is what the material looks like on a real device —
+ * is no longer reachable, and every user who turns glass on now pays for the
+ * blur, which is the expensive half (the hint string says so). If a cheap glass
+ * mode is ever wanted, the switch to add is one that turns the *blur* off, not a
+ * second master switch: the two booleans this replaced were the wrong shape
+ * because they were symmetric, and the asymmetry is what the merge exposes.
  *
- * With both off the result is a flat opaque card: `enabled = false` and the
- * **opaque** `scheme.surfaceContainer` as the tint. That last part is not
+ * With the switch off the result is a flat opaque card: `enabled = false` and
+ * the **opaque** `scheme.surfaceContainer` as the tint. That last part is not
  * incidental — `LiquidGlass` draws `glass.tint` as a plain fill when `enabled`
  * is false, and its comment records that the setting is "no glass", not "no
  * surface". A transparent tint here would make the card vanish instead of going
@@ -185,15 +190,13 @@ val LocalDetourGlass = staticCompositionLocalOf { DetourGlass.Disabled }
  * behind them.
  *
  * The numbers come from `Prefs` through `context`, so **the theme's `remember`
- * must key on the two switches and the five numbers** or flipping a switch or
+ * must key on the switch and the five numbers** or flipping the switch or
  * dragging a slider would not repaint — the "control that does nothing" defect
  * this project has already paid for twice. `DetourTheme` carries that key list.
  */
 fun resolveDetourGlass(scheme: ColorScheme, context: Context): DetourGlass {
     val prefs = Prefs.of(context)
-    val liquid = prefs.glassLiquid
-    val frost = prefs.glassFrost
-    if (!liquid && !frost) {
+    if (!prefs.glassEnabled) {
         return DetourGlass(
             enabled = false,
             blurRadius = 0.dp,
@@ -204,11 +207,11 @@ fun resolveDetourGlass(scheme: ColorScheme, context: Context): DetourGlass {
     }
     return DetourGlass(
         enabled = true,
-        blurRadius = if (frost) prefs.glassBlur.dp else 0.dp,
+        blurRadius = prefs.glassBlur.dp,
         tint = scheme.surfaceContainer.copy(alpha = prefs.glassTint / 100f),
-        borderWidth = if (liquid) (prefs.glassBorder / 100f * 2f).dp else 0.dp,
-        highlightAlpha = if (liquid) prefs.glassHighlight / 100f else 0f,
-        lensHeight = if (liquid) (prefs.glassLens * 0.75f).dp else 0.dp,
-        lensAmount = if (liquid) prefs.glassLens.dp else 0.dp,
+        borderWidth = (prefs.glassBorder / 100f * 2f).dp,
+        highlightAlpha = prefs.glassHighlight / 100f,
+        lensHeight = (prefs.glassLens * 0.75f).dp,
+        lensAmount = prefs.glassLens.dp,
     )
 }

@@ -431,14 +431,13 @@ object ControlConsole {
             .put("race_width", prefs.raceWidth)
             .put("race_launch", prefs.raceLaunchMillis)
             .put("max_dialing", prefs.maxDialing)
-            .put("glass_liquid", prefs.glassLiquid)
-            .put("glass_frost", prefs.glassFrost)
-            // The five numbers behind the two glass switches. They are reported
-            // unconditionally — not only while a switch is on — because the whole
+            .put("glass_enabled", prefs.glassEnabled)
+            // The five numbers behind the glass switch. They are reported
+            // unconditionally — not only while the switch is on — because the whole
             // point of reporting a setting is that `set` can be read back, and a
             // value that disappears from the dump depending on a switch would be
             // unverifiable: a script that sets `glass_blur` and then reads it back
-            // would find nothing whenever that switch happened to be off. The rule
+            // would find nothing whenever the switch happened to be off. The rule
             // this project learned the hard way is that a `set` must be confirmed
             // by reading the pref back, never by trusting the command's own
             // success reply; these five are what makes that possible.
@@ -538,17 +537,16 @@ object ControlConsole {
             "race_launch", "race_launch_milliseconds" ->
                 asInt?.let { prefs.updateRaceLaunch(it) } ?: return bad("int")
             "max_dialing" -> asInt?.let { prefs.updateMaxDialing(it) } ?: return bad("int")
-            "glass_liquid" -> asBool?.let { prefs.updateGlassLiquid(it) } ?: return bad("bool")
-            "glass_frost" -> asBool?.let { prefs.updateGlassFrost(it) } ?: return bad("bool")
-            // The glass material's five knobs. They are settable regardless of
-            // either switch's state, and that is deliberate rather than an
-            // oversight: a script may set the numbers *first* and flip a switch
-            // afterwards, and if the setters rejected them while both switches
-            // were off that ordering would look like the settings were silently
-            // dropped. Both orderings — set then switch on, or switch on then
-            // tune — have to work, so a value is accepted whenever it is sent.
-            // Whether it currently reaches the pixels is a separate question,
-            // answered by the two switches in the dump, not by refusing the write.
+            "glass_enabled" -> asBool?.let { prefs.updateGlassEnabled(it) } ?: return bad("bool")
+            // The glass material's five knobs. They are settable regardless of the
+            // switch's state, and that is deliberate rather than an oversight: a
+            // script may set the numbers *first* and flip the switch afterwards,
+            // and if the setters rejected them while the switch was off that
+            // ordering would look like the settings were silently dropped. Both
+            // orderings — set then switch on, or switch on then tune — have to
+            // work, so a value is accepted whenever it is sent. Whether it
+            // currently reaches the pixels is a separate question, answered by the
+            // switch in the dump, not by refusing the write.
             "glass_blur" -> asInt?.let { prefs.updateGlassBlur(it) } ?: return bad("int")
             "glass_tint" -> asInt?.let { prefs.updateGlassTint(it) } ?: return bad("int")
             "glass_lens" -> asInt?.let { prefs.updateGlassLens(it) } ?: return bad("int")

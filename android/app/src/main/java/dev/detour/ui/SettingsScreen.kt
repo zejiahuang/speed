@@ -562,78 +562,51 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
             },
         )
 
-        // The material is two switches, not a tier picker, because it is two
-        // genuinely independent effects: refraction and blur. A single "how much
-        // glass" control cannot express "refraction without blur", and each half
-        // is a real material on its own — refraction over a sharp backdrop is
-        // what liquid glass actually is, and blur without refraction is a frosted
-        // flat panel. See `resolveDetourGlass` for how the two assemble.
-        val glassHeading = stringResource(R.string.settings_glass)
+        // One switch, because the material is one idea. It was two switches
+        // (液态玻璃 / 磨砂材质) until the owner merged them (2026-10-01): two master
+        // switches for a single visual effect read as two features, and the one
+        // combination only two switches could express — refraction without blur —
+        // is not something this section ever explained. The merge is not free:
+        // the switch turns on both halves, so the blur, which is the expensive
+        // half, can no longer be left off. `resolveDetourGlass` records that.
+        //
+        // The old section heading 玻璃效果 is gone rather than kept above this
+        // row: the row's own label is now 玻璃效果, and a heading with the same
+        // words one line above the switch is a duplicate that also makes search
+        // return two rows for one control.
+        val glassLabel = stringResource(R.string.settings_glass)
+        val glassHint = stringResource(R.string.settings_glass_hint)
         add(
-            SettingsRow(SettingsSection.APPEARANCE, listOf(glassHeading)) {
-                Text(
-                    glassHeading,
-                    modifier = Modifier.padding(start = 16.dp, top = 12.dp),
-                    style = MaterialTheme.typography.bodyLarge,
-                )
-            },
-        )
-
-        val glassLiquidLabel = stringResource(R.string.settings_glass_liquid)
-        val glassLiquidHint = stringResource(R.string.settings_glass_liquid_hint)
-        add(
-            SettingsRow(SettingsSection.APPEARANCE, listOf(glassLiquidLabel, glassLiquidHint)) {
+            SettingsRow(SettingsSection.APPEARANCE, listOf(glassLabel, glassHint)) {
                 DetourToggleRow(
-                    label = glassLiquidLabel,
-                    hint = glassLiquidHint,
-                    checked = prefs.glassLiquid,
-                    onChange = { prefs.updateGlassLiquid(it) },
+                    label = glassLabel,
+                    hint = glassHint,
+                    checked = prefs.glassEnabled,
+                    onChange = { prefs.updateGlassEnabled(it) },
                 )
             },
         )
 
-        val glassFrostLabel = stringResource(R.string.settings_glass_frost)
-        val glassFrostHint = stringResource(R.string.settings_glass_frost_hint)
-        add(
-            SettingsRow(SettingsSection.APPEARANCE, listOf(glassFrostLabel, glassFrostHint)) {
-                DetourToggleRow(
-                    label = glassFrostLabel,
-                    hint = glassFrostHint,
-                    checked = prefs.glassFrost,
-                    onChange = { prefs.updateGlassFrost(it) },
-                )
-            },
-        )
-
-        // The numeric knobs are hidden until at least one switch is on, and that
-        // is the same principle the wallpaper scrim below states in full: a
-        // control that cannot have an effect must not be shown. With both
-        // switches off, `resolveDetourGlass` ignores every one of these numbers,
-        // so showing them would offer five handles connected to nothing — the
-        // "the control does nothing" defect this project has already paid for
-        // twice. Each slider is then gated by the switch that actually reads it,
-        // so 模糊强度 appears only under 磨砂材质 and the three liquid knobs only
-        // under 液态玻璃; 底色浓度 is read by both halves, so either switch
-        // reveals it.
+        // The numeric knobs are hidden until the switch is on, and that is the
+        // same principle the wallpaper scrim below states in full: a control that
+        // cannot have an effect must not be shown. With the switch off,
+        // `resolveDetourGlass` ignores every one of these numbers, so showing them
+        // would offer five handles connected to nothing — the "the control does
+        // nothing" defect this project has already paid for twice. All five are
+        // gated by the one switch now, rather than each by "its own" switch,
+        // because the one switch turns on both halves and so all five numbers
+        // reach the picture.
+        //
+        // A hint row used to sit here saying the numbers apply only while "the
+        // corresponding switch" was on. It is deleted rather than reworded: the
+        // sliders only exist while the switch is on, so that sentence could only
+        // ever be read next to a switch that is already on, which makes it a
+        // tautology pointing at nothing.
         //
         // Their defaults are the previous preset's numbers, so the moment a
         // slider appears the picture is already the one the switch turned on —
         // see `Prefs` for why that matters.
-        val anyGlassOn = prefs.glassLiquid || prefs.glassFrost
-        if (anyGlassOn) {
-            val glassKnobsHint = stringResource(R.string.settings_glass_knobs_hint)
-            add(
-                SettingsRow(SettingsSection.APPEARANCE, listOf(glassKnobsHint)) {
-                    Text(
-                        glassKnobsHint,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                },
-            )
-        }
-        if (prefs.glassFrost) {
+        if (prefs.glassEnabled) {
             val glassBlurLabel = stringResource(R.string.settings_glass_blur)
             add(
                 SettingsRow(SettingsSection.APPEARANCE, listOf(glassBlurLabel)) {
@@ -646,8 +619,6 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
                     )
                 },
             )
-        }
-        if (anyGlassOn) {
             val glassTintLabel = stringResource(R.string.settings_glass_tint)
             add(
                 SettingsRow(SettingsSection.APPEARANCE, listOf(glassTintLabel)) {
@@ -660,8 +631,6 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
                     )
                 },
             )
-        }
-        if (prefs.glassLiquid) {
             val glassLensLabel = stringResource(R.string.settings_glass_lens)
             add(
                 SettingsRow(SettingsSection.APPEARANCE, listOf(glassLensLabel)) {
