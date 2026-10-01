@@ -1,0 +1,283 @@
+name: 每日测试版
+
+# 每天检查一次：HEAD 上有还没发布过的提交就发一个测试版，没有就什么都不做。
+# 手动触发用于立刻验证这条链路，不必等到第二天。
+#
+# 这个工作流只发预发布（prerelease）。正式版仍然由 `release.yml` 在推标签时发布，
+# 两条路径不共用触发条件，也不互相触发。
+on:
+  schedule:
+    # 03:17 UTC = 北京时间 11:17。避开整点：GitHub 的定时任务在整点最拥挤，
+    # 排队延迟可以到十几分钟，而「11:17」和「12:03」对使用者没有区别。
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+# 默认的 GITHUB_TOKEN 是只读的，而这里要建标签、创建 Release 并上传附件。
+permissions:
+  contents: write
+
+# 两次运行同时发测试版会算出同一个版本号并抢同一个标签。
+# 排队而不是取消：已经开跑的那次应当发完。
+concurrency:
+  group: daily-beta
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  plan:
+    name: 判断是否需要发布
+    runs-on: ubuntu-24.04
+    outputs:
+      publish: ${{ steps.decide.outputs.publish }}
+      version: ${{ steps.decide.outputs.version }}
+      since: ${{ steps.decide.outputs.since }}
+      count: ${{ steps.decide.outputs.count }}
+      commits: ${{ steps.decide.outputs.commits }}
+    steps:
+      - name: 检出（需要全部标签）
+        uses: actions/checkout@v4
+        with:
+          # 必须取全部标签：判断「这个提交发布过没有」靠的就是本地标签，
+          # 而 `actions/checkout` 默认是浅克隆且不取标签 —— 那样每次都会认为
+          # 有改动，于是每天发一个测试版，正是这个工作流要避免的事。
+          fetch-depth: 0
+          fetch-tags: true
+
+      # 「有没有修改」不是靠记住上次运行到哪，而是靠标签本身：测试版发布后标签就
+      # 指向 HEAD，下一次运行看到 HEAD 已有标签就知道没有新东西。这样不需要在
+      # 仓库之外存任何状态，也不会因为某次运行失败而把状态记错。
+      - name: 决定是否发布
+        id: decide
+        run: |
+          set -euo pipefail
+          head_sha="$(git rev-parse HEAD)"
+
+          tagged="$(git tag --points-at "$head_sha" --list 'v*')"
+          if [ -n "$tagged" ]; then
+            echo "HEAD $head_sha 已有标签，无需发布：$(echo "$tagged" | tr '\n' ' ')"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          base="$(grep -oP 'val repoVersionName = "\K[^"]+' android/app/build.gradle.kts)"
+          if ! printf '%s' "$base" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "repoVersionName 不是三段数字：'$base'" >&2
+            exit 1
+          fi
+
+          # 测试版走「下一个版本 + 预发布后缀」。仓库里的版本号如果已经作为正式版
+          # 发布过，就往后跳一个补丁号 —— 否则测试版会排在已发布的正式版之前，
+          # 装上去比现有版本还旧，更新检查会永远认为它是旧包。
+          # 逐个补丁号往后找，而不是只跳一次：版本号落后好几轮时跳一次仍然落在
+          # 已发布的区间里。
+          IFS=. read -r major minor patch <<<"$base"
+          next="$base"
+          while git rev-parse -q --verify "refs/tags/v$next" >/dev/null 2>&1; do
+            patch=$((patch + 1))
+            next="$major.$minor.$patch"
+          done
+
+          # 计数器用 `GITHUB_RUN_NUMBER`：它每次运行都加一，所以同一个「下一个版本」
+          # 下的多个测试版天然递增（`beta.10` 排在 `beta.9` 之后 —— 应用里的版本比较
+          # 是按数字比标识符的），也不会撞上已存在的标签。
+          version="$next-beta.$GITHUB_RUN_NUMBER"
+          echo "本次测试版版本号：$version"
+
+          # 说明文字里列的是「上一个发布点之后的所有提交」。`git describe` 取的是从
+          # HEAD 可达的最近标签，也就是上一个发布点；没有任何标签时退回列全部提交。
+          if since="$(git describe --tags --abbrev=0 2>/dev/null)"; then
+            range="$since..HEAD"
+          else
+            since="（首个提交）"
+            range="HEAD"
+          fi
+          count="$(git rev-list --count "$range")"
+          commits="$(git log --pretty='- %s（`%h`）' "$range")"
+
+          {
+            echo "publish=true"
+            echo "version=$version"
+            echo "since=$since"
+            echo "count=$count"
+            echo "commits<<BETA_COMMITS_EOF"
+            echo "$commits"
+            echo "BETA_COMMITS_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+  beta:
+    name: 构建并发布测试版
+    needs: plan
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: 检出
+        uses: actions/checkout@v4
+
+      # 下面这些步骤与 `release.yml` 的构建部分保持一致。两份必然漂移，但这里的
+      # 漂移代价是「测试版和正式版的构建方式不同」，而共用一份的办法只有把构建
+      # 抽成一个可复用工作流 —— 那需要把签名密钥的传法也一并抽出去。当前两个
+      # 工作流的差异只有版本号来源和发布参数，重复的这几步不值得那个复杂度。
+      - name: 缓存 Gradle 发行包
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/gradle-8.14.3
+          key: gradle-8.14.3
+
+      - name: 缓存 cargo 与内核中间产物
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cache/watt-target
+          key: cargo-${{ runner.os }}-${{ hashFiles('core-rs/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: 安装 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: 安装 Android SDK
+        uses: actions/setup-android@v3
+        with:
+          packages: "platform-tools platforms;android-36 build-tools;36.0.0"
+
+      - name: 指向 runner 自带的 SDK
+        run: |
+          set -euo pipefail
+          sdk="${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"
+          test -d "$sdk/platforms" || { echo "SDK 里没有 platforms：$sdk" >&2; exit 1; }
+          echo "ANDROID_HOME=$sdk" >> "$GITHUB_ENV"
+          ls "$sdk/platforms" "$sdk/build-tools"
+
+      - name: 安装 NDK r30
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/android"
+          curl -fsSL -o /tmp/ndk.zip \
+            https://dl.google.com/android/repository/android-ndk-r30-linux.zip
+          unzip -q /tmp/ndk.zip -d "$HOME/android"
+          echo "NDK_DIR=$HOME/android/android-ndk-r30" >> "$GITHUB_ENV"
+
+      - name: 安装 Rust 与 Android target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      - name: 编译内核（release，两个 ABI）
+        env:
+          PROFILE: release
+        run: bash scripts/app-native-build.sh aarch64-linux-android x86_64-linux-android
+
+      - name: 落盘签名密钥
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${KEYSTORE_BASE64:-}" ]; then
+            echo "缺少 secret KEYSTORE_BASE64，拒绝产出未签名的测试版" >&2
+            exit 1
+          fi
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          echo "WATT_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+
+      # 单元测试与打包放在同一次 Gradle 调用里。测试比正式发布那条路径多这一道，
+      # 是因为这个工作流无人值守：没人按下的发布按钮，应该由测试替他把门。
+      # 测试失败时后面的发布步骤不会执行，工作流变红。
+      - name: 跑单元测试并打包签名（按 ABI 拆分）
+        env:
+          SKIP_NATIVE: "1"
+          BETA_VERSION: ${{ needs.plan.outputs.version }}
+          WATT_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          WATT_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          WATT_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          bash scripts/app-build.sh :app:testDebugUnitTest assembleRelease \
+            -PabiSplits -PappVersionName="$BETA_VERSION"
+
+      # 与 `release.yml` 同样的校验：包内 versionName 必须等于标签，且两个 ABI 各一个包。
+      # 测试版这里尤其不能省 —— 版本号对不上的测试版装上去之后，更新检查会一直把
+      # 它自己当成旧包反复提示。
+      - name: 校验产物
+        env:
+          BETA_VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          BT="$ANDROID_HOME/build-tools/36.0.0"
+          APKDIR=android/app/build/outputs/apk/release
+
+          count="$(find "$APKDIR" -name '*.apk' | wc -l)"
+          if [ "$count" -ne 2 ]; then
+            echo "期望 arm64-v8a 与 x86_64 各一个包，实际 $count 个" >&2
+            ls -l "$APKDIR" >&2
+            exit 1
+          fi
+
+          for apk in "$APKDIR"/*.apk; do
+            echo "=================== $apk"
+            "$BT/apksigner" verify --print-certs "$apk"
+            badging="$("$BT/aapt2" dump badging "$apk")"
+            echo "$badging" | sed -n '1,2p'
+            echo "$badging" | grep -q "versionName='$BETA_VERSION'" || {
+              echo "包内 versionName 不是 $BETA_VERSION" >&2; exit 1; }
+          done
+
+      - name: 按发布名重命名
+        env:
+          BETA_VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          find android/app/build/outputs/apk/release -name 'app-*-release.apk' -print0 |
+            while IFS= read -r -d '' f; do
+              abi="$(basename "$f")"
+              abi="${abi#app-}"
+              abi="${abi%-release.apk}"
+              cp "$f" "out/speed-${BETA_VERSION}-${abi}.apk"
+            done
+          ls -l out
+          test "$(find out -name '*.apk' | wc -l)" -eq 2
+
+      - name: 生成发布说明
+        env:
+          BETA_VERSION: ${{ needs.plan.outputs.version }}
+          SINCE: ${{ needs.plan.outputs.since }}
+          COUNT: ${{ needs.plan.outputs.count }}
+          COMMITS: ${{ needs.plan.outputs.commits }}
+        run: |
+          set -euo pipefail
+          {
+            printf '## speed %s（测试版）\n\n' "$BETA_VERSION"
+            printf '本版由每日检查自动发布。自 `%s` 起有 %s 个提交：\n\n' "$SINCE" "$COUNT"
+            printf '%s\n' "$COMMITS"
+            printf '\n---\n\n'
+            printf '这是预发布版本，只出现在应用的「测试版」更新通道；默认的稳定通道不会收到它。\n\n'
+            printf '下载对应 ABI 的 APK 安装：`speed-%s-arm64-v8a.apk`（多数手机与平板）、' "$BETA_VERSION"
+            printf '`speed-%s-x86_64.apk`（模拟器）。两个包与正式版用同一个密钥签名，' "$BETA_VERSION"
+            printf '可以直接覆盖安装，也可以直接装回正式版。\n'
+          } > notes.md
+          cat notes.md
+
+      # `prerelease: true` 是这个工作流唯一的发布参数，也是整条更新通道的前提：
+      # GitHub 规定 `/releases/latest` 返回的是「既不是草稿也不是预发布」的最新版本，
+      # 所以只要标了预发布，稳定通道就不可能收到它。
+      #
+      # `make_latest: false` 在 GitHub 的规则下是多余的（预发布本来就不能当最新版），
+      # 但这里写出来是刻意的：整个通道划分的安全性都压在「测试版不会成为最新版」
+      # 这一点上，所以它是被声明的，而不是被假设的。
+      - name: 创建预发布
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.plan.outputs.version }}
+          name: speed ${{ needs.plan.outputs.version }}
+          body_path: notes.md
+          files: out/*.apk
+          draft: false
+          prerelease: true
+          make_latest: false

@@ -133,8 +133,16 @@ jobs:
           BT="$ANDROID_HOME/build-tools/36.0.0"
           APKDIR=android/app/build/outputs/apk/release
 
-          expected="$(grep -oP 'versionName = "\K[^"]+' android/app/build.gradle.kts)"
-          echo "build.gradle.kts 里的 versionName = $expected"
+          # 从 build.gradle.kts 读仓库记录的版本号。这一行 grep 的是
+          # `val repoVersionName`，不是 `versionName =` —— 后者现在是一个变量引用
+          # （`versionName = appVersionName`），grep 它会读到空字符串，而空字符串
+          # 会让下面那个「标签 == 版本号」的比对变成恒不成立、或者更糟的恒成立。
+          expected="$(grep -oP 'val repoVersionName = "\K[^"]+' android/app/build.gradle.kts)"
+          echo "build.gradle.kts 里的 repoVersionName = $expected"
+          if [ -z "$expected" ]; then
+            echo "没能从 build.gradle.kts 里读到 repoVersionName" >&2
+            exit 1
+          fi
           if [ "$GITHUB_REF_TYPE" = "tag" ]; then
             tag_ver="${GITHUB_REF_NAME#v}"
             if [ "$tag_ver" != "$expected" ]; then
@@ -206,13 +214,19 @@ jobs:
       - name: 从 CHANGELOG 取出本版本正文
         run: |
           set -euo pipefail
+          # 正文到下一个版本标题为止，**也到文件底部的链接定义块为止**。
+          # 后者不是多余的：最后一节后面没有下一个 `## [`，只按标题停止会把
+          # `[0.1.0]: https://...` 那几行链接定义当成正文一起发出去 —— v0.1.0 的
+          # Release 说明里就有这么一行。判据用 POSIX 字符类而不是 `[^]]`，
+          # 免得依赖 awk 对嵌套方括号的容忍度。
           ver="${GITHUB_REF_NAME#v}"
           {
             printf '## speed %s\n\n' "$ver"
             awk -v v="$ver" '
               $0 ~ "^## \\[" v "\\]" { f = 1; next }
-              f && /^## \[/        { exit }
-              f                    { print }
+              f && /^## \[/              { exit }
+              f && /^\[[[:alnum:]._-]+\]:/ { exit }
+              f                          { print }
             ' CHANGELOG.md
             printf '\n---\n\n'
             printf '下载对应 ABI 的 APK 安装：`speed-%s-arm64-v8a.apk`（多数手机与平板）、' "$ver"
@@ -225,10 +239,21 @@ jobs:
           fi
           cat notes.md
 
+      # `prerelease` is derived from the tag instead of being fixed, and that line
+      # is load-bearing rather than tidiness: the app's default update channel
+      # reads `/releases/latest`, which GitHub defines as the newest release that
+      # is neither a draft nor a prerelease. Hardcoding `false` would publish a
+      # test build as an ordinary release, and `/releases/latest` would then hand
+      # it to every user on the stable channel — a test build delivered to people
+      # who never opted into testing, which is the one outcome the channel split
+      # exists to prevent.
+      #
+      # SemVer places the prerelease identifiers after a hyphen (`v0.2.4-beta.1`),
+      # so a hyphen anywhere in the tag is the signal. A plain `v0.2.3` has none.
       - name: 创建 Release
         uses: softprops/action-gh-release@v2
         with:
           body_path: notes.md
           files: out/*.apk
           draft: false
-          prerelease: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
