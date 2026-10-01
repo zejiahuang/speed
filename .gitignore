@@ -5,6 +5,10 @@ core-rs/crates/*/target/
 
 # --- Android / Gradle -------------------------------------------------------
 .gradle/
+# Kotlin Gradle Plugin writes per-build session/error files here. Not covered by
+# `.gradle/`, and leaving it unignored means every build dirties the working tree
+# with a directory that a later `git add -A` would happily commit.
+.kotlin/
 android/build/
 android/app/build/
 android/local.properties
