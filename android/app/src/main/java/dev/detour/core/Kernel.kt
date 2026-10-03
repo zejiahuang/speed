@@ -72,6 +72,88 @@ object Kernel {
         val flowsMatchedRules: Long = 0,
         /** Flows relayed to whatever the client asked for. */
         val flowsDirect: Long = 0,
+        /**
+         * Flows relayed without the kernel knowing the domain.
+         *
+         * Separate from [flowsDirect]: that one says no rule matched, this says
+         * there was nothing to match against. Rule lookup and the certificate
+         * check are both gated on the name, so a client resolving over HTTPS —
+         * the default in every current browser — lands here and gets neither.
+         */
+        val flowsWithoutName: Long = 0,
+        /**
+         * Flows that opened with no name and recovered one from the client's own
+         * TLS handshake.
+         *
+         * The part of [flowsWithoutName] the handshake rescues. Read the two
+         * together: their difference is the traffic still relayed blind, which is
+         * the number that says whether the rule set is reachable for a client that
+         * resolves elsewhere. On its own this counter cannot be judged — a large
+         * value means many flows were rescued, and a large [flowsWithoutName] with
+         * a small value here means they were not.
+         */
+        val flowsNamedBySni: Long = 0,
+        /**
+         * Flows the configured upstream exit agreed to carry.
+         *
+         * Always zero when no exit is configured, which is what makes it the
+         * answer to "is the exit in use" — the question the switch cannot answer,
+         * since a switch only reports what the user asked for.
+         */
+        val proxyHandshakes: Long = 0,
+        /**
+         * Handshakes the exit refused, or never answered.
+         *
+         * Read with [proxyHandshakes]: a non-zero value here means the exit is
+         * reachable and the problem is the request — wrong protocol, missing
+         * credential, or the exit being unable to reach the destination. An exit
+         * that is unreachable moves neither counter, so the pair distinguishes
+         * the two failures that look identical on screen.
+         */
+        val proxyRefusals: Long = 0,
+        /**
+         * Names the upstream resolver was asked about.
+         *
+         * Only names the rule set does **not** own: a name with a rule is
+         * answered from the rule table and never leaves the device. So this is
+         * the size of the "outside the list" traffic, which is the number that
+         * says whether the resolver is being used at all.
+         */
+        val dnsUpstreamQueries: Long = 0,
+        /**
+         * Questions the upstream answered.
+         *
+         * Read with [dnsUpstreamQueries] and [dnsUpstreamFailed]: a query that
+         * is neither answered nor failed is still in flight, and one that is
+         * both would be a bug in the counting rather than in the network.
+         */
+        val dnsUpstreamAnswered: Long = 0,
+        /**
+         * Questions that used every attempt and still got no answer.
+         *
+         * Non-zero is expected rather than alarming — the endpoint is measurably
+         * intermittent — but a value near [dnsUpstreamQueries] means the
+         * resolver is barely working and the client is being handed its own
+         * polluted answer instead.
+         */
+        val dnsUpstreamFailed: Long = 0,
+        /**
+         * Attempts after the first.
+         *
+         * The counter that says how intermittent the endpoint is. It is normal
+         * for this to be a fraction of [dnsUpstreamQueries]; it should not
+         * approach it.
+         */
+        val dnsUpstreamRetries: Long = 0,
+        /**
+         * Questions the resolver was not offered, because too many were already
+         * in flight.
+         *
+         * Each one was forwarded as it would have been without a resolver. A
+         * non-zero value means the ceiling is being hit, which is a capacity
+         * answer rather than a correctness one.
+         */
+        val dnsUpstreamOverflowed: Long = 0,
     ) {
         val bytesTotal: Long get() = bytesToUpstream + bytesToClient
     }
@@ -298,6 +380,15 @@ object Kernel {
                 liveFlows = raw[13],
                 flowsMatchedRules = raw[14],
                 flowsDirect = raw[15],
+                flowsWithoutName = raw[16],
+                flowsNamedBySni = raw[17],
+                proxyHandshakes = raw[18],
+                proxyRefusals = raw[19],
+                dnsUpstreamQueries = raw[20],
+                dnsUpstreamAnswered = raw[21],
+                dnsUpstreamFailed = raw[22],
+                dnsUpstreamRetries = raw[23],
+                dnsUpstreamOverflowed = raw[24],
             )
         }
 
@@ -463,7 +554,15 @@ object Kernel {
             ?: throw KernelException(nativeLastError() ?: "the merge failed")
     }
 
-    private const val STATS_FIELDS = 16
+    /**
+     * How many `jlong`s [nativeStats] writes.
+     *
+     * Must equal the length of the array the bridge fills, which is written out by
+     * hand on the Rust side — a mismatch does not fail loudly, it silently shifts
+     * every field after the gap. So this is the one number to check when a counter
+     * is added.
+     */
+    private const val STATS_FIELDS = 25
 }
 
 class KernelException(message: String) : Exception(message)

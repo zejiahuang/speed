@@ -173,6 +173,34 @@
     <string name="settings_race_launch">竞速启动间隔</string>
     <string name="settings_max_dialing">全局拨号并发上限</string>
     <string name="settings_max_dialing_hint">所有连接同时在握手的上游 socket 总数上限，防止描述符耗尽</string>
+    <!-- The upstream exit: hand TCP flows to a proxy and let it open the
+         connection from somewhere else. It changes the path and nothing else —
+         no TLS is terminated and nothing is decrypted. -->
+    <string name="settings_upstream_proxy">上游出口</string>
+    <string name="settings_upstream_proxy_hint">把公网 TCP 交给一台代理转发。不改动也不解密 TLS，只换出口</string>
+    <string name="settings_upstream_proxy_address">地址</string>
+    <string name="settings_upstream_proxy_address_invalid">请填成 IP:端口，例如 203.0.113.7:1080。只支持字面地址，不支持域名</string>
+    <string name="settings_upstream_proxy_kind">协议</string>
+    <string name="settings_upstream_proxy_kind_socks5">SOCKS5</string>
+    <string name="settings_upstream_proxy_kind_http">HTTP CONNECT</string>
+    <string name="settings_upstream_proxy_username">用户名</string>
+    <string name="settings_upstream_proxy_password">密码</string>
+    <string name="settings_upstream_proxy_enable">启用上游出口</string>
+    <string name="settings_upstream_proxy_enable_hint">只对公网 TCP 生效；UDP、局域网和本机地址仍然直连</string>
+    <!-- The upstream resolver: who answers names the rule set does not own. A
+         selection, not a switch — the transport (DoH) is an implementation
+         detail, and the thing being chosen is the resolver. -->
+    <string name="settings_dns_upstream">上游解析器</string>
+    <string name="settings_dns_upstream_hint">规则表之外的域名交给这个解析器。规则表内的域名不受影响，仍在本地应答</string>
+    <string name="settings_dns_upstream_none">当前解析器</string>
+    <string name="settings_dns_upstream_ali">阿里 DNS</string>
+    <string name="settings_dns_upstream_tx">腾讯 DNS</string>
+    <string name="settings_dns_upstream_cf">1.1.1.1</string>
+    <string name="settings_dns_upstream_url">自定义端点</string>
+    <string name="settings_dns_upstream_url_hint">以 https:// 开头的 DoH 地址，例如 https://1.1.1.1/dns-query</string>
+    <string name="settings_dns_upstream_url_invalid">内核无法解析这个端点，因此不会启用</string>
+    <string name="settings_dns_upstream_address">引导地址</string>
+    <string name="settings_dns_upstream_address_hint">端点是域名时必填：解析器自己没法解析自己。填它的 IP，例如 223.5.5.5</string>
     <string name="settings_kernel_pending_title">内核参数已修改</string>
     <string name="settings_kernel_pending_body">当前隧道仍在用旧参数，改动要重建内核才生效。</string>
     <string name="settings_kernel_pending_action">应用并重连</string>
@@ -259,6 +287,8 @@
     <string name="home_hits_matched">命中规则</string>
     <string name="home_hits_direct">直连</string>
     <string name="home_hits_live">存活流</string>
+    <string name="home_hits_unnamed">无名流量</string>
+    <string name="home_hits_named_by_sni">其中握手补名</string>
     <string name="home_hits_ratio">命中率 %1$s</string>
     <string name="home_hits_none">还没有流量经过隧道</string>
 
@@ -270,6 +300,10 @@
     <string name="dev_udp_open_evict">UDP 开/淘汰</string>
     <string name="dev_dns_local">DNS 本地应答</string>
     <string name="dev_dns_trimmed">DNS 裁剪</string>
+    <!-- Answered over queries, the same shape as `dev_dns_local` above. Both
+         counters are zero while no upstream resolver is configured, which is
+         what makes this row the answer to "is the resolver in use". -->
+    <string name="dev_dns_upstream">DNS 上游解析</string>
     <string name="dev_live_flows">存活流</string>
     <string name="dev_packets">包 入/出</string>
 

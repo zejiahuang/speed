@@ -2,9 +2,14 @@ package dev.detour.core
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.annotation.StringRes
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import dev.detour.R
+import java.net.Inet6Address
+import java.net.InetAddress
+import org.json.JSONObject
 
 /**
  * Settings, as observable properties over `SharedPreferences`.
@@ -522,6 +527,155 @@ class Prefs private constructor(private val store: SharedPreferences) {
     var dialNames by mutableStateOf(store.getBoolean(KEY_DIAL_NAMES, true))
         private set
 
+    // The upstream exit: the one setting here that changes **where** a flow
+    // leaves from rather than which address it goes to. It sits next to
+    // `dial_names` because the two answer the same kind of question, and it is
+    // deliberately above the kernel-settings block below — it reaches the kernel
+    // through the same document, but its switch is a user-facing on/off rather
+    // than a tuning knob, and a reader looking for "how does this get out" should
+    // not have to walk past the MTU to find it.
+
+    /**
+     * The upstream exit's endpoint, as `ip:port`; `""` means none configured.
+     *
+     * **A literal address, never a name.** The kernel reads this once, when the
+     * engine is built, and dials it as a `SocketAddr` — there is no later point at
+     * which a name could be resolved, and the kernel's own resolver is not
+     * reachable from there. So `proxy.example.com:1080` would be dropped by the
+     * kernel with nothing on screen to explain it. [upstreamProxyConfigured]
+     * therefore accepts only what the kernel will accept, and the enable switch is
+     * gated on it: the one endpoint shape that can be switched on is the shape
+     * that works.
+     */
+    var upstreamProxyAddress by mutableStateOf(store.getString(KEY_UPSTREAM_PROXY_ADDRESS, "").orEmpty())
+        private set
+
+    /**
+     * Which handshake to speak to the exit: [PROXY_KIND_SOCKS5] or
+     * [PROXY_KIND_HTTP_CONNECT].
+     *
+     * Normalised on the way in and out, like [updateChannel] and for the same
+     * reason: the settings row renders this as the selected segment of a two-option
+     * control, and a third value would leave the control with nothing selected
+     * while the kernel quietly spoke the default protocol.
+     */
+    var upstreamProxyKind by mutableStateOf(
+        if (store.getString(KEY_UPSTREAM_PROXY_KIND, null) == PROXY_KIND_HTTP_CONNECT) {
+            PROXY_KIND_HTTP_CONNECT
+        } else {
+            PROXY_KIND_SOCKS5
+        },
+    )
+        private set
+
+    /**
+     * Credentials for the exit, when it wants any. `""` means "not offered".
+     *
+     * Stored as two plain strings rather than as one optional pair, because the
+     * kernel's own rule is what decides that a half-filled pair is no pair at all
+     * — see `ProxyConfig::credentials`. A second copy of that rule here would be a
+     * copy that drifts.
+     */
+    var upstreamProxyUsername by mutableStateOf(store.getString(KEY_UPSTREAM_PROXY_USERNAME, "").orEmpty())
+        private set
+
+    /** See [upstreamProxyUsername]. Never exported — see `SettingsBackup`. */
+    var upstreamProxyPassword by mutableStateOf(store.getString(KEY_UPSTREAM_PROXY_PASSWORD, "").orEmpty())
+        private set
+
+    /**
+     * Whether the configured exit is in use. Off by default.
+     *
+     * Off rather than on because an exit is a deliberate choice: turning it on
+     * sends every public TCP flow through someone else's host, which is not
+     * something to discover after the fact. The switch that writes this is only
+     * drawn while [upstreamProxyConfigured] holds, so the flag can never be the
+     * only thing between a user and an exit they cannot see.
+     */
+    var upstreamProxyEnabled by mutableStateOf(store.getBoolean(KEY_UPSTREAM_PROXY_ENABLED, false))
+        private set
+
+    /**
+     * Whether the endpoint as typed is one the kernel can dial.
+     *
+     * The gate for the enable switch, and the reason the switch can be trusted:
+     * it exists exactly when turning it on would do something.
+     */
+    val upstreamProxyConfigured: Boolean get() = isProxyEndpoint(upstreamProxyAddress)
+
+    /**
+     * Whether an exit will actually be used — configured *and* switched on.
+     *
+     * The one definition of "in use", read by [kernelSettingsJson] to decide
+     * whether the exit reaches the kernel at all. The endpoint being blank makes
+     * this false even with the flag on, so clearing the address can never leave a
+     * switch that says on while nothing is proxied.
+     */
+    val upstreamProxyActive: Boolean get() = upstreamProxyEnabled && upstreamProxyConfigured
+
+    // --- the upstream resolver -------------------------------------------------
+    //
+    // A different question from the exit above, and deliberately a separate one.
+    // The exit decides where *TCP* leaves from; this decides who answers the
+    // names the rule set does not own. They solve different problems — the exit
+    // is for names whose SNI is blocked, this is for names whose answer is
+    // forged — and neither implies the other, so a user may want either, both or
+    // neither.
+
+    /**
+     * The upstream resolver's URL, as typed; `""` means the client's own
+     * resolver, which is the default.
+     *
+     * **Not a switch, and deliberately not labelled as one.** The measurement
+     * behind this setting (`memory/2026-10-02.md` §14) pinned one resolver and
+     * changed only the transport — plain UDP/53, plain TCP/53, DoH — and all
+     * three returned the same forged addresses. The forgery is produced by the
+     * resolver, not by the path to it. So encryption is not the variable, and a
+     * switch labelled "DoH" would advertise the wrong one; what is chosen here
+     * is **which resolver answers**, and DoH is only how it is reached.
+     *
+     * Stored as typed, like [upstreamProxyAddress] and for the same reason: the
+     * field is edited one character at a time, so every prefix of a correct URL
+     * is wrong, and refusing them would make the field impossible to type into.
+     * Whether it is a resolver the kernel can dial is [dnsUpstreamConfigured].
+     */
+    var dnsUpstreamUrl by mutableStateOf(store.getString(KEY_DNS_UPSTREAM_URL, "").orEmpty())
+        private set
+
+    /**
+     * The address to reach [dnsUpstreamUrl] by, when that URL names a host
+     * rather than being one.
+     *
+     * Required, not optional, for a named endpoint: a name has to be resolved
+     * before it can be connected to, and resolving is the thing being
+     * configured. `dns.alidns.com` cannot be looked up *by* the resolver that is
+     * being pointed at it, so its address is stated — see `DohEndpoint::parse`.
+     * An address-shaped URL such as `https://1.1.1.1/dns-query` needs none, and
+     * this stays blank for it.
+     */
+    var dnsUpstreamAddress by mutableStateOf(store.getString(KEY_DNS_UPSTREAM_ADDRESS, "").orEmpty())
+        private set
+
+    /**
+     * Whether the resolver as typed is one the kernel can dial.
+     *
+     * The gate for every "in use" state on screen, and the reason such a state
+     * can be trusted: it holds exactly when a query would really be sent. A URL
+     * the kernel would drop is not a resolver, it is a field with text in it.
+     */
+    val dnsUpstreamConfigured: Boolean
+        get() = isDohEndpoint(dnsUpstreamUrl, dnsUpstreamAddress)
+
+    /**
+     * Whether queries are actually leaving for an upstream — a URL that is
+     * neither blank nor undialable.
+     *
+     * The single definition of "in use", read by [kernelSettingsJson]. There is
+     * no separate enable flag: choosing a resolver *is* turning it on, which is
+     * what makes this a selection rather than a switch.
+     */
+    val dnsUpstreamActive: Boolean get() = dnsUpstreamUrl.isNotBlank() && dnsUpstreamConfigured
+
     // --- kernel settings ------------------------------------------------------
     //
     // These reach `StackConfig` through the C ABI. The defaults are the kernel's
@@ -646,6 +800,48 @@ class Prefs private constructor(private val store: SharedPreferences) {
         append(",\"failure_cooldown_seconds\":").append(failureCooldownSeconds)
         // Whether the kernel resolves the rules' dial names itself.
         append(",\"dial_names\":").append(dialNames)
+        // The upstream exit, and **only while it is in use**. The document is what
+        // the kernel acts on, so "switched off" has to mean the keys are absent
+        // rather than a flag the kernel would have to learn about: a key that is
+        // not there cannot be half-honoured. [upstreamProxyActive] is the single
+        // definition of "in use", so the switch, the banner and this document
+        // cannot disagree about it.
+        //
+        // Every value goes through `JSONObject.quote` rather than being pasted
+        // between quotes. These are the first *strings* in this document — the
+        // rest is numbers and booleans — and a password containing a quote or a
+        // backslash would otherwise produce a document that does not parse, which
+        // the kernel answers by falling back to **every** default. One stray
+        // character in a password must not be able to reset the whole engine.
+        if (upstreamProxyActive) {
+            append(",\"upstream_proxy_kind\":").append(JSONObject.quote(upstreamProxyKind))
+            append(",\"upstream_proxy_address\":").append(JSONObject.quote(upstreamProxyAddress))
+            // Emitted whenever either half is filled, not only when both are. The
+            // document reports what the user typed; whether a half pair is
+            // credentials is the kernel's rule (`ProxyConfig::credentials`), and
+            // hiding a half-filled pair here would make the document disagree with
+            // the settings screen about the same state.
+            if (upstreamProxyUsername.isNotEmpty()) {
+                append(",\"upstream_proxy_username\":").append(JSONObject.quote(upstreamProxyUsername))
+            }
+            if (upstreamProxyPassword.isNotEmpty()) {
+                append(",\"upstream_proxy_password\":").append(JSONObject.quote(upstreamProxyPassword))
+            }
+        }
+        // The upstream resolver, and **only while one is in use** — the same rule
+        // as the exit above and for the same reason: the document is what the
+        // kernel acts on, so "no resolver" has to mean the keys are absent
+        // rather than a flag the kernel would have to learn about.
+        //
+        // Both keys travel together, and a named URL with no address never gets
+        // here: [dnsUpstreamActive] is false for an endpoint the kernel cannot
+        // dial, so the half-configured state cannot reach the kernel at all.
+        if (dnsUpstreamActive) {
+            append(",\"dns_upstream_url\":").append(JSONObject.quote(dnsUpstreamUrl))
+            if (dnsUpstreamAddress.isNotEmpty()) {
+                append(",\"dns_upstream_address\":").append(JSONObject.quote(dnsUpstreamAddress))
+            }
+        }
         append('}')
     }
 
@@ -1026,6 +1222,62 @@ class Prefs private constructor(private val store: SharedPreferences) {
     }
     fun updateDialNames(value: Boolean) { dialNames = value; edit { putBoolean(KEY_DIAL_NAMES, value) } }
 
+    /**
+     * Set the exit's endpoint. Trimmed, and stored **as typed**.
+     *
+     * A malformed endpoint is stored rather than refused, and that is deliberate:
+     * the field is edited one character at a time, so every prefix of a correct
+     * address is wrong. Refusing would make the field impossible to type into —
+     * and the state it can leave behind is already handled, because
+     * [upstreamProxyActive] is false for an endpoint the kernel cannot dial, so a
+     * half-typed address is simply not an exit.
+     */
+    fun updateUpstreamProxyAddress(value: String) {
+        upstreamProxyAddress = value.trim()
+        edit { putString(KEY_UPSTREAM_PROXY_ADDRESS, upstreamProxyAddress) }
+    }
+
+    fun updateUpstreamProxyKind(value: String) {
+        upstreamProxyKind = if (value == PROXY_KIND_HTTP_CONNECT) PROXY_KIND_HTTP_CONNECT else PROXY_KIND_SOCKS5
+        edit { putString(KEY_UPSTREAM_PROXY_KIND, upstreamProxyKind) }
+    }
+
+    fun updateUpstreamProxyUsername(value: String) {
+        upstreamProxyUsername = value
+        edit { putString(KEY_UPSTREAM_PROXY_USERNAME, upstreamProxyUsername) }
+    }
+
+    fun updateUpstreamProxyPassword(value: String) {
+        upstreamProxyPassword = value
+        edit { putString(KEY_UPSTREAM_PROXY_PASSWORD, upstreamProxyPassword) }
+    }
+
+    fun updateUpstreamProxyEnabled(value: Boolean) {
+        upstreamProxyEnabled = value
+        edit { putBoolean(KEY_UPSTREAM_PROXY_ENABLED, value) }
+    }
+
+    /**
+     * Set the upstream resolver. Both halves, trimmed, in one write.
+     *
+     * One call rather than two setters, because the two halves are only
+     * meaningful together: writing the URL and the address as separate edits
+     * would leave a window in which a named URL with no address is stored, and
+     * that window is a resolver which is configured but undialable — a state the
+     * screen would render as an error the user did not cause. Presets, typing,
+     * and clearing ("the client's own resolver" is `("", "")`) are all this same
+     * write, so there is no second path into the setting for the two to drift
+     * apart on.
+     */
+    fun updateDnsUpstream(url: String, address: String) {
+        dnsUpstreamUrl = url.trim()
+        dnsUpstreamAddress = address.trim()
+        edit {
+            putString(KEY_DNS_UPSTREAM_URL, dnsUpstreamUrl)
+            putString(KEY_DNS_UPSTREAM_ADDRESS, dnsUpstreamAddress)
+        }
+    }
+
     fun updateMode(value: String) { mode = value; edit { putString(KEY_MODE, value) } }
 
     fun updateThemeColor(value: String) { themeColor = value; edit { putString(KEY_THEME_COLOR, value) } }
@@ -1154,6 +1406,20 @@ class Prefs private constructor(private val store: SharedPreferences) {
         updateMaxDialing(256)
         updateFailureCooldown(60)
         updateDialNames(true)
+        // The exit goes back to "none configured", including the credentials —
+        // a restored device should not keep talking to the previous owner's proxy,
+        // and the address is what the switch is gated on, so clearing it takes the
+        // switch with it. The password is reset here even though `SettingsBackup`
+        // does not carry it; see that file for why the two differ.
+        updateUpstreamProxyAddress("")
+        updateUpstreamProxyKind(PROXY_KIND_SOCKS5)
+        updateUpstreamProxyUsername("")
+        updateUpstreamProxyPassword("")
+        updateUpstreamProxyEnabled(false)
+        // The upstream resolver goes back to the client's own, which is what a
+        // fresh install is on. Cleared in one call so a restore cannot leave a
+        // named URL behind with no address to reach it by.
+        updateDnsUpstream("", "")
         updateMtu(1500)
         updateConnectTimeout(10)
         updateTcpIdle(300)
@@ -1181,6 +1447,20 @@ class Prefs private constructor(private val store: SharedPreferences) {
         // again; it is not a default change.
         edit { putInt(KEY_VERSION, CURRENT_VERSION) }
     }
+
+    /**
+     * One upstream resolver the settings screen offers as a single tap.
+     *
+     * [url] and [address] are exactly the pair [updateDnsUpstream] stores, so
+     * choosing a preset and typing one are the same write — there is no second
+     * path into the setting, and therefore no way for the two to disagree.
+     */
+    data class DnsUpstreamPreset(
+        val id: String,
+        @StringRes val labelRes: Int,
+        val url: String,
+        val address: String,
+    )
 
     companion object {
         private const val STORE = "detour.prefs"
@@ -1210,6 +1490,250 @@ class Prefs private constructor(private val store: SharedPreferences) {
         private const val KEY_RACE_LAUNCH = "race_launch"
         private const val KEY_MAX_DIALING = "max_dialing"
         private const val KEY_DIAL_NAMES = "dial_names"
+
+        // The upstream exit. Four keys and a switch, and the switch is only ever
+        // drawn while the address parses — see `upstreamProxyAddress`.
+        private const val KEY_UPSTREAM_PROXY_ADDRESS = "upstream_proxy_address"
+        private const val KEY_UPSTREAM_PROXY_KIND = "upstream_proxy_kind"
+        private const val KEY_UPSTREAM_PROXY_USERNAME = "upstream_proxy_username"
+        private const val KEY_UPSTREAM_PROXY_PASSWORD = "upstream_proxy_password"
+        private const val KEY_UPSTREAM_PROXY_ENABLED = "upstream_proxy_enabled"
+
+        // The upstream resolver. Two keys and no switch: choosing a resolver is
+        // turning it on, which is the whole difference from the exit above.
+        private const val KEY_DNS_UPSTREAM_URL = "dns_upstream_url"
+        private const val KEY_DNS_UPSTREAM_ADDRESS = "dns_upstream_address"
+
+        /**
+         * The two protocols the kernel speaks to an exit.
+         *
+         * Public because the settings row's segmented control is built from these
+         * two values: a UI that spelled `socks5` itself would be a second
+         * definition of the same thing, and the two would drift. The spellings are
+         * the kernel's — see `ProxyKind::parse`, which is the only thing that
+         * decides whether a string names a protocol.
+         */
+        const val PROXY_KIND_SOCKS5 = "socks5"
+        const val PROXY_KIND_HTTP_CONNECT = "http-connect"
+
+        /**
+         * Whether [text] is an endpoint the kernel can dial.
+         *
+         * Mirrors `SocketAddr::from_str`, which is what the kernel actually calls:
+         * a literal IPv4 address, or an IPv6 address in brackets, then a port.
+         * **A name is deliberately not accepted.** The kernel reads this endpoint
+         * once, when the engine is built, and has no resolver for it — so
+         * `proxy.example.com:1080` would be dropped there with nothing on screen to
+         * say so, which is exactly the "control that cannot take effect" this
+         * project refuses to ship. The switch is gated on this function instead.
+         *
+         * No path through here can reach DNS. IPv4 is parsed by hand, and the IPv6
+         * branch is only entered for a bracketed string of hex digits, colons and
+         * dots — a shape no hostname can take — so `InetAddress.getByName` resolves
+         * it as a literal rather than looking it up. That matters because this runs
+         * from composition, on the main thread, once per keystroke.
+         *
+         * `internal` rather than private so `PrefsEndpointTest` can exercise it:
+         * this is a parser with real edges — leading zeros, a missing port, an
+         * unbracketed IPv6 — and every edge it gets wrong is either a switch that
+         * appears for an endpoint the kernel will drop, or one that never appears
+         * for an endpoint that works.
+         */
+        internal fun isProxyEndpoint(text: String): Boolean {
+            val trimmed = text.trim()
+            if (trimmed.startsWith("[")) {
+                val close = trimmed.indexOf(']')
+                if (close < 0) return false
+                val host = trimmed.substring(1, close)
+                if (!IPV6_CHARS.matches(host)) return false
+                if (!isPort(trimmed.substring(close + 1))) return false
+                return runCatching { InetAddress.getByName(host) is Inet6Address }.getOrDefault(false)
+            }
+            val colon = trimmed.lastIndexOf(':')
+            if (colon <= 0) return false
+            if (!isPort(trimmed.substring(colon))) return false
+            return isIpv4(trimmed.substring(0, colon))
+        }
+
+        /**
+         * Whether `url`, reached at `address`, is a resolver the kernel will dial.
+         *
+         * A mirror of `DohEndpoint::parse` in `watt-stack/src/doh.rs`, and it
+         * exists for the same reason [isProxyEndpoint] does: the kernel reads the
+         * resolver once, when the engine is built, and drops anything it cannot
+         * parse with nothing on screen to say so. A gate looser than the thing it
+         * gates ships a control that does nothing, so the rules below are copied
+         * from the Rust rather than invented — including the two that look like
+         * oversights:
+         *
+         * * `http://` is refused rather than downgraded. A plaintext endpoint is
+         *   reachable by exactly the interception a resolver exists to avoid.
+         * * An **unbracketed** IPv6 authority is refused. The Rust splits the
+         *   authority at its last `:`, so `2606:4700:4700::1111` reads its port
+         *   out of the middle of the address and fails; only `[addr]` parses.
+         *
+         * A bare host with no port is fine (443), and a missing path is fine
+         * (`/dns-query`), which is why `https://dns.alidns.com` is a valid entry.
+         *
+         * `internal` so `PrefsEndpointTest` can exercise it: every edge here is
+         * either a resolver that silently never gets used, or a URL that works
+         * and is reported as broken.
+         */
+        internal fun isDohEndpoint(url: String, address: String): Boolean {
+            val trimmed = url.trim()
+            if (!trimmed.startsWith("https://")) return false
+            val rest = trimmed.removePrefix("https://")
+            if (rest.isEmpty()) return false
+
+            // Authority ends at the first `/`; everything after it is the path,
+            // which the kernel accepts without inspecting.
+            val slash = rest.indexOf('/')
+            val authority = if (slash < 0) rest else rest.substring(0, slash)
+            if (authority.isEmpty()) return false
+
+            val host: String
+            val port: Int
+            if (authority.startsWith("[")) {
+                val close = authority.indexOf(']')
+                if (close < 0) return false
+                host = authority.substring(1, close)
+                val tail = authority.substring(close + 1)
+                port = when {
+                    tail.isEmpty() -> 443
+                    tail.startsWith(":") -> tail.substring(1).toIntOrNull() ?: return false
+                    else -> return false
+                }
+            } else {
+                val at = authority.lastIndexOf(':')
+                if (at < 0) {
+                    host = authority
+                    port = 443
+                } else {
+                    host = authority.substring(0, at)
+                    port = authority.substring(at + 1).toIntOrNull() ?: return false
+                }
+            }
+            if (port !in 1..65535) return false
+            if (host.isEmpty()) return false
+
+            // A literal address is its own identity and needs nothing else; a
+            // name has to be resolved before it can be connected to, and
+            // resolving is the thing being configured — so a name is only
+            // dialable when an address is supplied alongside it. The test is
+            // made on the *stripped* host, so a bracketed non-address falls
+            // through to the bootstrap branch rather than being refused, which
+            // is what the Rust does too.
+            if (isIpLiteral(host)) return true
+            return isIpLiteral(address)
+        }
+
+        /**
+         * Whether `text` is an IP literal, in the sense `str::parse::<IpAddr>()`
+         * means it.
+         *
+         * IPv4 is parsed by hand for the reason [isIpv4] gives. IPv6 is handed to
+         * `InetAddress.getByName`, which is safe because [IPV6_CHARS] admits only
+         * hex digits, colons and dots — a shape no host name can take — so it
+         * resolves as a literal rather than looking anything up. The `:` guard is
+         * what keeps a bare `1.2.3.4` from taking the IPv6 branch.
+         */
+        internal fun isIpLiteral(text: String): Boolean {
+            val trimmed = text.trim()
+            if (isIpv4(trimmed)) return true
+            if (!trimmed.contains(':')) return false
+            if (!IPV6_CHARS.matches(trimmed)) return false
+            return runCatching { InetAddress.getByName(trimmed) is Inet6Address }.getOrDefault(false)
+        }
+
+        /**
+         * The resolvers the settings screen offers as one tap.
+         *
+         * Defined in code rather than in storage — the same call `RuleSource`'s
+         * built-ins make, for the same reason: an address frozen into a stored
+         * row could not be corrected by an update, and a resolver that moves, or
+         * a bootstrap address that turns out to be wrong, would be stuck at the
+         * version that wrote it.
+         *
+         * Every entry is a URL **and** the address to reach it by, because every
+         * one of these is a name. `dns.alidns.com`, `doh.pub` and
+         * `cloudflare-dns.com` cannot be resolved by the resolver that is being
+         * configured, so the address is stated: each is the provider's own public
+         * resolver, which is what the name resolves to. The Cloudflare entry is
+         * the exception and uses its address directly — its certificate carries
+         * the address, so no name is invented for it.
+         *
+         * ⚠️ **Being on this list is not a claim that a resolver works.** These
+         * endpoints were measured on the *host* path only, and this project's rule
+         * is that network behaviour is judged on the device — a host measurement
+         * is not evidence about the device. What the host measurement did show,
+         * and what a user should not be surprised by, is that an upstream can be
+         * reachable and still hand back forged addresses, because it is the
+         * resolver's own recursion that is polluted. Choosing one is a hypothesis
+         * to test, which is what the counters on the developer view are for.
+         */
+        val DNS_UPSTREAM_PRESETS: List<DnsUpstreamPreset> = listOf(
+            DnsUpstreamPreset(
+                id = "ali",
+                labelRes = R.string.settings_dns_upstream_ali,
+                url = "https://dns.alidns.com/dns-query",
+                address = "223.5.5.5",
+            ),
+            DnsUpstreamPreset(
+                id = "tx",
+                labelRes = R.string.settings_dns_upstream_tx,
+                url = "https://doh.pub/dns-query",
+                address = "1.12.12.12",
+            ),
+            DnsUpstreamPreset(
+                id = "cf",
+                labelRes = R.string.settings_dns_upstream_cf,
+                url = "https://1.1.1.1/dns-query",
+                address = "",
+            ),
+        )
+
+        /**
+         * The character set a literal IPv6 address is written in.
+         *
+         * Hoisted out of [isProxyEndpoint] because that function runs from
+         * composition, once per keystroke, and compiling a regex on every one of
+         * those would be the most expensive thing the settings screen does.
+         *
+         * Zone identifiers (`fe80::1%wlan0`) are not in the set, and are therefore
+         * refused. The kernel's own parser does not accept them either, so the two
+         * agree — which is the only thing this set has to get right.
+         */
+        private val IPV6_CHARS = Regex("[0-9a-fA-F:.]+")
+
+        /** The `:port` half of an endpoint, including its colon. */
+        private fun isPort(text: String): Boolean {
+            if (!text.startsWith(":")) return false
+            val digits = text.substring(1)
+            // Leading zeros are refused, matching the kernel's own parser: `:080`
+            // parses there as 80 and here as not-a-port, and a gate that is looser
+            // than the thing it gates is a gate that lets a broken endpoint through.
+            if (digits.isEmpty() || digits.length > 5) return false
+            if (digits.length > 1 && digits[0] == '0') return false
+            return digits.all { it in '0'..'9' } && (digits.toInt() in 1..65535)
+        }
+
+        /**
+         * Four decimal octets, each 0..255, with no leading zeros.
+         *
+         * Hand-written rather than `InetAddress.getByName` for the reason the
+         * caller gives: a bare `a.b.c.d`-shaped typo such as `1.2.3` is not a
+         * literal, and `getByName` would take it to the resolver.
+         */
+        private fun isIpv4(text: String): Boolean {
+            val parts = text.split('.')
+            if (parts.size != 4) return false
+            return parts.all { part ->
+                part.isNotEmpty() && part.length <= 3 &&
+                    part.all { it in '0'..'9' } &&
+                    (part.length == 1 || part[0] != '0') &&
+                    part.toInt() in 0..255
+            }
+        }
         private const val KEY_DISABLED = "disabled_rules"
         private const val KEY_MTU = "mtu"
         private const val KEY_CONNECT_TIMEOUT = "connect_timeout"

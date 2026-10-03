@@ -29,7 +29,7 @@
 
 use std::cell::RefCell;
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
-use std::net::{TcpListener, ToSocketAddrs};
+use std::net::{IpAddr, SocketAddr, TcpListener, ToSocketAddrs};
 use std::os::unix::io::RawFd;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr;
@@ -39,7 +39,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use watt_rules::{IpSelectorConfig, RuleSet, RuleSource};
-use watt_stack::{Engine, Protector, StackConfig, TunDevice};
+use watt_stack::{DohEndpoint, Engine, Protector, ProxyConfig, ProxyKind, StackConfig, TunDevice};
 
 #[cfg(feature = "jni-bridge")]
 mod jni_bridge;
@@ -81,6 +81,56 @@ pub struct WattStats {
     /// is otherwise invisible: a flow that is not steered looks exactly like one
     /// that is, from the outside.
     pub flows_direct: u64,
+    /// Flows relayed with no name known for the destination.
+    ///
+    /// Sizes the DoH problem: a client resolving over HTTPS never shows the
+    /// kernel a query, so nothing can be looked up in the rule set and no
+    /// candidate can be checked against a certificate.
+    pub flows_without_name: u64,
+    /// Flows that opened with no name and recovered one from the client's own TLS
+    /// handshake.
+    ///
+    /// The part of `flows_without_name` the handshake rescues. The two together
+    /// are the measurement: without this one, the only evidence the recovery works
+    /// at all is a log line per flow.
+    pub flows_named_by_sni: u64,
+    /// Flows that the configured upstream exit agreed to carry.
+    ///
+    /// Zero whenever no exit is configured, so this is also the answer to "is the
+    /// exit actually in use" — the question a switch cannot answer, because a
+    /// switch only reports what the user asked for.
+    pub proxy_handshakes: u64,
+    /// Handshakes the exit answered and refused, or never answered at all.
+    ///
+    /// Read together with `proxy_handshakes`: a non-zero value here means the
+    /// exit is reachable and the problem is the request — a wrong protocol, a
+    /// missing credential, or the exit itself being unable to reach the
+    /// destination. That is a different diagnosis from an exit that is
+    /// unreachable, and the pair is what tells the two apart on a device.
+    pub proxy_refusals: u64,
+    /// Questions handed to the configured upstream resolver.
+    ///
+    /// Zero whenever no resolver is configured, so this is also the answer to
+    /// "is the resolver actually in use" — which a switch cannot answer, because
+    /// a switch only reports what the user asked for.
+    pub dns_upstream_queries: u64,
+    /// Questions the upstream answered, and whose answer reached the client.
+    pub dns_upstream_answered: u64,
+    /// Questions the upstream used every attempt on and still did not answer.
+    ///
+    /// The client was told nothing. Read with `dns_upstream_answered` this is the
+    /// resolver's real success rate on this network, which is the number that
+    /// decides whether the endpoint was worth configuring at all.
+    pub dns_upstream_failed: u64,
+    /// Attempts after the first, across every resolution.
+    ///
+    /// Non-zero is normal — a DoH gateway is measurably unreliable per request.
+    /// A value approaching `dns_upstream_queries` means the endpoint is barely
+    /// working and the retry is the only thing making it usable.
+    pub dns_upstream_retries: u64,
+    /// Questions the upstream was never offered, because too many resolutions
+    /// were already in flight. Each was forwarded instead.
+    pub dns_upstream_overflowed: u64,
 }
 
 /// A protector supplied from outside Rust.
@@ -428,6 +478,7 @@ pub(crate) fn apply_settings(mut config: StackConfig, json: &str) -> StackConfig
 
     let number = |key: &str| object.get(key).and_then(|v| v.as_u64());
     let flag = |key: &str| object.get(key).and_then(|v| v.as_bool());
+    let text = |key: &str| object.get(key).and_then(|v| v.as_str());
 
     if let Some(mtu) = number("mtu") {
         // Below 576 the kernel cannot carry a full-sized TCP segment; above the
@@ -508,6 +559,81 @@ pub(crate) fn apply_settings(mut config: StackConfig, json: &str) -> StackConfig
         // rule that names a host rather than listing addresses contributes
         // nothing, which is the honest consequence of turning it off.
         config.dial_names = on;
+    }
+    if let Some(address) = text("upstream_proxy_address") {
+        // The upstream exit. A kind and an address are both required, so there is
+        // exactly one rule to state: an exit exists when the settings name a
+        // protocol this kernel speaks **and** an endpoint it can dial. Anything
+        // less leaves `None`, which is the same state as never having configured
+        // one — and that is the point. A half-configured exit would put a switch
+        // on screen that reads as on while nothing is proxied, which is the one
+        // thing this project does not allow a control to do.
+        //
+        // The shell is expected to gate its own switch on the endpoint for the
+        // same reason; this side does not trust that, because a hand-edited
+        // settings document reaches here without passing a switch at all.
+        match (
+            text("upstream_proxy_kind").and_then(ProxyKind::parse),
+            address.parse::<SocketAddr>(),
+        ) {
+            (Some(kind), Ok(address)) => {
+                config.upstream_proxy = Some(ProxyConfig {
+                    kind,
+                    address,
+                    // Passed through exactly as written, including empty strings:
+                    // `ProxyConfig::credentials` is the one place that decides a
+                    // half-filled pair is no pair at all, and a second copy of
+                    // that rule here would be a copy that drifts.
+                    username: text("upstream_proxy_username").map(str::to_string),
+                    password: text("upstream_proxy_password").map(str::to_string),
+                });
+            }
+            // Named in the log rather than swallowed. Every other key here may be
+            // ignored in silence because ignoring it leaves the kernel on a value
+            // the user never asked to change; this one is the opposite — the user
+            // asked for an exit and is not getting one, and without a line in the
+            // log the only symptom is that the proxy appears not to help.
+            (None, _) => log::warn!(
+                "watt: the upstream exit at {address} was ignored — \
+                 upstream_proxy_kind is missing or names a protocol this kernel does not speak"
+            ),
+            (_, Err(_)) => log::warn!(
+                "watt: the upstream exit was ignored — \
+                 upstream_proxy_address is not an address of the form host:port"
+            ),
+        }
+    }
+
+    if let Some(url) = text("dns_upstream_url") {
+        // The upstream resolver, for names the rule set does not own. As with the
+        // exit above there is exactly one rule: a resolver exists when the
+        // settings name a URL this kernel can parse **and**, when that URL names a
+        // host rather than an address, a bootstrap address to reach it by.
+        //
+        // The bootstrap is not a convenience. A DoH URL is a name, a name has to
+        // be resolved before it can be connected to, and resolving is the thing
+        // being configured — so without an address the endpoint is unreachable by
+        // construction, and a switch built on it would be a control that cannot
+        // take effect.
+        let bootstrap = text("dns_upstream_address")
+            .and_then(|raw| raw.trim().parse::<IpAddr>().ok());
+        match DohEndpoint::parse(url, bootstrap) {
+            Some(endpoint) => {
+                log::info!("watt: upstream resolver {}", endpoint.describe());
+                config.dns_upstream = Some(endpoint);
+            }
+            // An empty value is how the shell clears the setting, and that is a
+            // request being honoured rather than refused, so it gets no line.
+            // Anything else does: the user asked for a resolver and is not
+            // getting one, and without a warning the only symptom is that names
+            // still come back forged.
+            None if !url.trim().is_empty() => log::warn!(
+                "watt: the upstream resolver at {url} was ignored — \
+                 it is not an https:// URL, or it names a host with no \
+                 dns_upstream_address to reach it by"
+            ),
+            None => {}
+        }
     }
 
     config
@@ -614,6 +740,15 @@ pub(crate) fn collect_stats(engine: &WattEngine) -> Option<WattStats> {
         live_flows: stats.open_flows(),
         flows_matched_rules: stats.flows_matched_rules,
         flows_direct: stats.flows_direct,
+        flows_without_name: stats.flows_without_name,
+        flows_named_by_sni: stats.flows_named_by_sni,
+        proxy_handshakes: stats.proxy_handshakes,
+        proxy_refusals: stats.proxy_refusals,
+        dns_upstream_queries: stats.dns_upstream_queries,
+        dns_upstream_answered: stats.dns_upstream_answered,
+        dns_upstream_failed: stats.dns_upstream_failed,
+        dns_upstream_retries: stats.dns_upstream_retries,
+        dns_upstream_overflowed: stats.dns_upstream_overflowed,
     })
 }
 
@@ -1728,6 +1863,71 @@ mod tests {
                 && long.first_connect_timeout <= long.connect_timeout,
             "a per-candidate wait longer than the whole connection's inverts both numbers"
         );
+    }
+
+    #[test]
+    fn the_upstream_exit_needs_both_a_protocol_and_an_endpoint() {
+        // The exit exists when, and only when, the settings name a protocol this
+        // kernel speaks *and* an address it can dial. Each failure below is a state
+        // a shell or a hand-edited document can produce by accident, and every one
+        // of them has to leave **no** exit rather than a half-built one: a
+        // half-built exit is what puts a switch on screen that reads as on while
+        // nothing is proxied.
+        let exit = |json: &str| apply_settings(StackConfig::default(), json).upstream_proxy;
+
+        assert!(
+            exit(r#"{"upstream_proxy_address":"203.0.113.7:1080"}"#).is_none(),
+            "an endpoint with no protocol is not an exit"
+        );
+        assert!(
+            exit(r#"{"upstream_proxy_kind":"socks5","upstream_proxy_address":"203.0.113.7:1080"}"#)
+                .is_some(),
+            "a protocol and a literal endpoint is the one shape that is an exit"
+        );
+        assert!(
+            exit(r#"{"upstream_proxy_kind":"socks4","upstream_proxy_address":"203.0.113.7:1080"}"#)
+                .is_none(),
+            "a misspelled protocol must not fall back to one this kernel does speak"
+        );
+        assert!(
+            exit(r#"{"upstream_proxy_kind":"socks5","upstream_proxy_address":"proxy.example.com:1080"}"#)
+                .is_none(),
+            "a name is not an endpoint: nothing here can resolve it"
+        );
+        assert!(
+            exit(r#"{"upstream_proxy_kind":"socks5","upstream_proxy_address":"203.0.113.7"}"#)
+                .is_none(),
+            "a port is required"
+        );
+    }
+
+    #[test]
+    fn the_upstream_exit_carries_its_protocol_and_credentials() {
+        let exit = apply_settings(
+            StackConfig::default(),
+            r#"{"upstream_proxy_kind":"http-connect","upstream_proxy_address":"203.0.113.7:8080",
+                "upstream_proxy_username":"u","upstream_proxy_password":"p"}"#,
+        )
+        .upstream_proxy
+        .expect("the exit must have been configured");
+
+        assert_eq!(exit.kind, ProxyKind::HttpConnect);
+        assert_eq!(exit.address, "203.0.113.7:8080".parse().unwrap());
+        assert_eq!(exit.credentials(), Some(("u", "p")));
+
+        // A half-filled pair is no pair — the kernel's rule, asserted here because
+        // this is the layer that hands the strings over, and a second opinion about
+        // what half a pair means is exactly the kind of copy that drifts. Note that
+        // the *exit* survives: a missing password is a reason to offer no
+        // credentials, not a reason to drop the endpoint the user typed.
+        let half = apply_settings(
+            StackConfig::default(),
+            r#"{"upstream_proxy_kind":"socks5","upstream_proxy_address":"203.0.113.7:1080",
+                "upstream_proxy_username":"u"}"#,
+        )
+        .upstream_proxy
+        .expect("a missing password is not a reason to drop the exit");
+        assert_eq!(half.credentials(), None);
     }
 
     #[test]

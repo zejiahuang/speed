@@ -45,6 +45,7 @@ use watt_rules::{Family, Strategy};
 
 use crate::config::{StackConfig, Stats};
 use crate::dns;
+use crate::doh::{DohResolver, Waiter};
 use crate::flow::FlowKey;
 use crate::packet::{self, IpHeader, PROTO_UDP};
 use crate::planner::Planner;
@@ -124,6 +125,28 @@ pub struct UdpFlowInfo {
     pub idle: Duration,
 }
 
+/// What the local answerer did with a DNS query.
+///
+/// The distinction that matters is between `NotOurs` and `NotAnswerable`. Both
+/// used to be a `false`, and a caller holding a `bool` cannot tell "no rule
+/// claims this name" — the condition a configured upstream exists for — from "a
+/// rule claims it, but this query cannot be answered from an address list",
+/// which has to keep behaving exactly as it did before an upstream existed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LocalAnswer {
+    /// A reply was emitted. The query is finished.
+    Answered,
+    /// No rule claims this name. The caller may hand it to a configured upstream
+    /// instead of forwarding it to the resolver the client chose.
+    NotOurs,
+    /// The rule set claims the name, but this query cannot be answered from an
+    /// address list — a record type that is not an address, or a rule that lists
+    /// nothing usable. Forwarded as before.
+    NotAnswerable,
+    /// Not a query this kernel acts on at all. Forwarded untouched.
+    Ignored,
+}
+
 /// The UDP half of the kernel.
 pub struct UdpRelay {
     tuning: Tuning,
@@ -132,6 +155,10 @@ pub struct UdpRelay {
     fd_index: HashMap<RawFd, FlowKey>,
     /// Reused read buffer, so a service pass does not allocate 64 KiB each time.
     read_buf: Vec<u8>,
+    /// The resolver names the rule set does not own are sent to, when one is
+    /// configured. `None` — the default — forwards them to the client's own
+    /// resolver, which is what the kernel did before this existed.
+    upstream_dns: Option<DohResolver>,
 }
 
 impl std::fmt::Debug for UdpRelay {
@@ -159,6 +186,7 @@ impl UdpRelay {
             flows: HashMap::new(),
             fd_index: HashMap::new(),
             read_buf: vec![0u8; MAX_DATAGRAM],
+            upstream_dns: config.dns_upstream.clone().map(DohResolver::new),
         }
     }
 
@@ -252,8 +280,11 @@ impl UdpRelay {
         let is_dns = datagram.dst_port == DNS_PORT;
         if is_dns {
             stats.dns_queries += 1;
-            if self.tuning.answer_dns
-                && self.answer_dns_locally(
+            // Rules that are not answering DNS leave every name to whatever
+            // comes next, which is the same condition as "no rule matched" — so
+            // the two are treated as one here rather than as a special case.
+            let local = if self.tuning.answer_dns {
+                self.answer_dns_locally(
                     datagram.payload,
                     datagram.dst_port,
                     datagram.src_port,
@@ -263,8 +294,21 @@ impl UdpRelay {
                     planner,
                     stats,
                 )
-            {
-                return true;
+            } else {
+                LocalAnswer::NotOurs
+            };
+
+            match local {
+                LocalAnswer::Answered => return true,
+                // The only outcome a configured upstream is allowed to take
+                // over. A name a rule owns is left exactly as it was, so
+                // configuring an upstream cannot change how a rule behaves.
+                LocalAnswer::NotOurs => {
+                    if self.start_upstream(datagram.payload, datagram.src_port, &header) {
+                        return true;
+                    }
+                }
+                LocalAnswer::NotAnswerable | LocalAnswer::Ignored => {}
             }
         }
 
@@ -340,8 +384,8 @@ impl UdpRelay {
 
     /// Answer a DNS query from the rule set, when it can be answered at all.
     ///
-    /// Returns `true` when a reply was emitted, in which case no upstream flow is
-    /// created and the query never leaves the device.
+    /// Returns [`LocalAnswer::Answered`] when a reply was emitted, in which case
+    /// no upstream flow is created and the query never leaves the device.
     #[allow(clippy::too_many_arguments)]
     fn answer_dns_locally(
         &mut self,
@@ -353,31 +397,49 @@ impl UdpRelay {
         out: &mut Vec<Vec<u8>>,
         planner: &mut Planner,
         stats: &mut Stats,
-    ) -> bool {
+    ) -> LocalAnswer {
         let Ok(query) = dns::Message::parse(payload) else {
             stats.dns_unparsable += 1;
-            return false;
+            return LocalAnswer::Ignored;
         };
         // Only plain queries are answered. Anything else — a response that leaked
         // into the tunnel, an update, a notify — is forwarded untouched.
         if !query.is_query() || query.opcode() != 0 {
-            return false;
+            return LocalAnswer::Ignored;
         }
         let Some(question) = query.first_question() else {
-            return false;
+            return LocalAnswer::Ignored;
         };
         if question.qclass != dns::CLASS_IN {
-            return false;
+            return LocalAnswer::Ignored;
         }
+
+        // Ownership is decided before the record type, and for a family the
+        // query may not even be asking about.
+        //
+        // `Strategy::is_matched` is true whenever the rule *set* claims the name,
+        // and it does not depend on the family: `Router::plan` returns `Direct`
+        // only when the domain lookup itself misses, so asking as v4 gets the
+        // right ownership answer for an AAAA query too. v4 is what a non-address
+        // type is asked as, on the same reasoning — a rule that lists anything
+        // lists v4 far more often than not.
+        //
+        // Deciding this first is what keeps "ours, but not answerable from an
+        // address list" from being read as "not ours" and handed to an upstream.
+        let family = match question.qtype {
+            dns::TYPE_AAAA => Family::V6,
+            _ => Family::V4,
+        };
+        let plan = planner.router().plan(now, &question.name, family);
+        if !plan.strategy.is_matched() {
+            return LocalAnswer::NotOurs;
+        }
+
         // Only address questions can be answered from a rule's `ips` list. A
         // query for a CNAME or an HTTPS record has to reach a real resolver.
-        let family = match question.qtype {
-            dns::TYPE_A => Family::V4,
-            dns::TYPE_AAAA => Family::V6,
-            _ => return false,
-        };
-
-        let plan = planner.router().plan(now, &question.name, family);
+        if question.qtype != dns::TYPE_A && question.qtype != dns::TYPE_AAAA {
+            return LocalAnswer::NotAnswerable;
+        }
 
         // A rule matched the domain but has nothing in this address family.
         //
@@ -398,18 +460,18 @@ impl UdpRelay {
                 dns::build_response_fitting(&query, &question.name, &[], self.tuning.dns_ttl, limit)
             else {
                 stats.udp_datagrams_dropped += 1;
-                return false;
+                return LocalAnswer::NotAnswerable;
             };
             stats.dns_answered_locally += 1;
             emit_udp(out, header.dst, header.src, dst_port, src_port, &response);
-            return true;
+            return LocalAnswer::Answered;
         }
 
         // A placeholder entry has nothing concrete to hand out. Inventing an
         // answer would be worse than letting a real resolver answer, so the query
         // is forwarded.
         if plan.strategy != Strategy::RuleAddresses || plan.addresses.is_empty() {
-            return false;
+            return LocalAnswer::NotAnswerable;
         }
         let addresses = plan.addresses;
 
@@ -427,7 +489,7 @@ impl UdpRelay {
             limit,
         ) else {
             stats.udp_datagrams_dropped += 1;
-            return false;
+            return LocalAnswer::NotAnswerable;
         };
 
         // Record the mapping before the client can act on it. Every address is
@@ -450,7 +512,96 @@ impl UdpRelay {
         }
 
         emit_udp(out, header.dst, header.src, dst_port, src_port, &response);
-        true
+        LocalAnswer::Answered
+    }
+
+    /// Hand a query the rule set does not own to the configured upstream.
+    ///
+    /// Returns `true` when a resolution was started, in which case the reply is
+    /// emitted later from [`UdpRelay::service`] — the query is answered, just not
+    /// yet. `false` means the caller should forward it, which is what it would
+    /// have done with no upstream configured.
+    fn start_upstream(&mut self, payload: &[u8], src_port: u16, header: &IpHeader) -> bool {
+        let Some(resolver) = &self.upstream_dns else {
+            return false;
+        };
+        // The transaction id is taken from the wire rather than from a re-parse,
+        // because the reply has to carry the id the client wrote. A payload too
+        // short to hold one cannot be a query — `answer_dns_locally` parsed it
+        // already, so this is unreachable in practice and is refused rather than
+        // assumed.
+        let Some(id) = payload
+            .get(..2)
+            .map(|head| u16::from_be_bytes([head[0], head[1]]))
+        else {
+            return false;
+        };
+        let waiter = Waiter {
+            client: SocketAddr::new(header.src, src_port),
+            from: header.dst,
+            id,
+        };
+        resolver.resolve(waiter, payload)
+    }
+
+    /// Hand back whatever the upstream resolver has finished with.
+    ///
+    /// The answers arrive on the resolver's own threads, so they are collected
+    /// here rather than in `handle`: a resolution started in one pass finishes in
+    /// a later one, and the client is waiting for it in between.
+    fn deliver_upstream(
+        &mut self,
+        now: Instant,
+        out: &mut Vec<Vec<u8>>,
+        planner: &mut Planner,
+        stats: &mut Stats,
+    ) {
+        let Some(resolver) = &self.upstream_dns else {
+            return;
+        };
+
+        // Sampled rather than pushed: the resolver counts its own work, including
+        // the retries that happen inside a thread, and the engine's counters are
+        // cumulative snapshots of it.
+        let counters = resolver.take_counters();
+        stats.dns_upstream_queries += counters.queries;
+        stats.dns_upstream_answered += counters.answered;
+        stats.dns_upstream_failed += counters.failed;
+        stats.dns_upstream_retries += counters.retries;
+        stats.dns_upstream_overflowed += counters.overflowed;
+
+        let answers = resolver.take_ready();
+        if answers.is_empty() {
+            return;
+        }
+        let limit = self.client_payload_limit();
+        for answer in answers {
+            // A resolution that used every attempt is not answered. The client is
+            // told nothing: an ICMP error would claim the name does not exist,
+            // which is a lie about a name that may well exist, and the client's
+            // own retry is the right next step — it will land here again.
+            let Ok(payload) = &answer.outcome else {
+                continue;
+            };
+            // The same observation the forwarded path makes. It matters more
+            // here, not less: a real answer is what teaches the data plane which
+            // domain an address belongs to, and that is the thing a forged answer
+            // can never do.
+            if self.tuning.observe_dns {
+                observe_dns_answer(payload, now, planner, stats);
+            }
+            match fit_payload(payload, limit) {
+                Some(fitted) => emit_udp(
+                    out,
+                    answer.waiter.from,
+                    answer.waiter.client.ip(),
+                    DNS_PORT,
+                    answer.waiter.client.port(),
+                    &fitted,
+                ),
+                None => stats.udp_datagrams_dropped += 1,
+            }
+        }
     }
 
     /// Register every upstream descriptor with the poll loop.
@@ -566,6 +717,10 @@ impl UdpRelay {
         }
 
         self.reap(now, stats);
+
+        // Last, because a resolution that finished while this pass was running
+        // should be handed back in the same pass rather than the next one.
+        self.deliver_upstream(now, out, planner, stats);
     }
 
     /// Make sure there is room for one more flow, forgetting the least recently

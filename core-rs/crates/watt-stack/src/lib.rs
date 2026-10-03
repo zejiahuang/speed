@@ -31,8 +31,16 @@
 //!   the names other answers belong to.
 //! * [`flow`] — flow identity and the bounded address-to-domain cache.
 //! * [`planner`] — the routing policy: rewrites, then rules, then direct.
+//! * [`sni`] — the domain recovered from a client's own TLS handshake, for the
+//!   flows the planner cannot name because the client resolved somewhere else.
+//! * [`doh`] — the upstream resolver, for the names the rule set does not own.
+//!   The transport is encrypted because port 53 to a foreign resolver is
+//!   intercepted, but the resolver is the variable, not the encryption.
 //! * [`upstream`] — non-blocking sockets created through `libc`, so a platform
 //!   protector can exempt them from the tunnel before they connect.
+//! * [`upstream_proxy`] — asking a SOCKS5 or HTTP CONNECT proxy to carry a flow,
+//!   for the domains that are unreachable from this network whatever address
+//!   they are given.
 //! * [`poller`] — `poll(2)` over the tunnel and every upstream socket.
 //! * [`tcp`] / [`udp`] — the two data planes.
 //! * [`engine`] — the loop that ties them together.
@@ -78,26 +86,32 @@
 
 pub mod config;
 pub mod dns;
+pub mod doh;
 pub mod engine;
 pub mod flow;
 pub mod packet;
 pub mod planner;
 pub mod poller;
+pub mod sni;
 pub mod tcp;
 pub mod udp;
 pub mod upstream;
+pub mod upstream_proxy;
 pub mod verify;
 
 pub use config::{DestinationOverride, StackConfig, Stats};
+pub use doh::{DohCounters, DohEndpoint, DohResolver};
 pub use engine::{open_tun_unprotected, Engine, FlowSnapshot};
 pub use flow::{FlowKey, ObservationCache};
 pub use planner::{Decision, Planner};
 pub use poller::{PollEvent, Poller};
+pub use sni::Sni;
 pub use tcp::{TcpFlowInfo, TcpRelay};
 pub use udp::{UdpFlowInfo, UdpRelay, DNS_PORT};
 pub use upstream::{
     ConnectState, MarkProtector, NoProtector, Protector, UpstreamSocket, DEFAULT_MARK,
 };
+pub use upstream_proxy::{ProxyConfig, ProxyKind};
 
 pub use watt_net::{MemoryDevice, PacketDevice, TunConfig, TunDevice};
 

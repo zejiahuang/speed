@@ -23,6 +23,7 @@
 //! than a NAT.
 
 use std::collections::{HashMap, VecDeque};
+use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::os::unix::io::RawFd;
 use std::time::{Duration, Instant};
@@ -42,7 +43,9 @@ use crate::flow::FlowKey;
 use crate::packet::{self, PROTO_TCP};
 use crate::planner::Planner;
 use crate::poller::{Poller, INTEREST_READ, INTEREST_WRITE};
+use crate::sni;
 use crate::upstream::{is_retryable, ConnectState, Protector, UpstreamSocket};
+use crate::upstream_proxy::{Handshake, ProxyConfig, Step};
 use crate::verify::{self, Verdicts};
 
 /// Bytes moved in one relay step per direction.
@@ -171,6 +174,13 @@ impl Device for QueueDevice {
 struct Upstream {
     socket: UpstreamSocket,
     /// The address this socket was dialled for.
+    ///
+    /// On a proxied dial this is still the **destination** — the address the
+    /// proxy is asked to reach — while the socket itself is connected to the
+    /// proxy. Keeping the destination here rather than the proxy's address is
+    /// what lets everything built on top of it stay true: the winner is named by
+    /// the address the flow is for, the address health table is keyed by it, and
+    /// the log line for a cut names the server the client was talking to.
     target: SocketAddr,
     /// Which entry of the flow's candidate list this dial came from.
     ///
@@ -185,6 +195,15 @@ struct Upstream {
     /// Set once this dial has been given up on. Only ever set on a socket that
     /// is about to leave the window, but named so the state is explicit.
     failed: bool,
+    /// The proxy handshake this dial is running, when the flow is proxied.
+    ///
+    /// `Some` from the moment the socket is created until the dial leaves the
+    /// window, and deliberately **not** cleared when the handshake finishes.
+    /// Its presence is the one thing that says "this dial's outcome is the
+    /// proxy's report rather than a measurement taken from here", which is what
+    /// keeps a proxy-side failure out of the address health table and stops a
+    /// cut line from claiming the destination answered.
+    handshake: Option<Handshake>,
 }
 
 /// One relayed TCP connection.
@@ -217,18 +236,65 @@ struct TcpFlow {
     to_client: VecDeque<u8>,
     client_eof: bool,
     upstream_eof: bool,
+    /// Set once an upstream socket failure has been described in the log.
+    ///
+    /// `move_bytes` keeps running on a flow whose socket has already failed —
+    /// the flow lives until both sides are closed — so without this the same
+    /// reset would be reported on every tick until it was reaped. A diagnostic
+    /// that repeats is one nobody reads, and the repetition would also bury the
+    /// one thing the line is for: how far the conversation got.
+    cut_reported: bool,
     /// Bytes received from the upstream over this flow's life.
     ///
     /// Zero at close time means the connection was established and nothing ever
     /// came back — the one failure the connect-time report cannot see. Tracked per
     /// flow rather than globally because the judgement is per destination.
     bytes_from_upstream: u64,
+    /// Bytes handed to the winner's socket over this flow's life.
+    ///
+    /// The counterpart of `bytes_from_upstream`, and the only way to say how far
+    /// the conversation got before it was cut. `sent_any` says a byte moved at
+    /// all; this says how many, which is what separates a ClientHello that was
+    /// answered with a reset (a few hundred bytes) from an ordinary mid-stream
+    /// drop (tens of kilobytes). The attribution log turns on exactly that
+    /// difference, so the count has to be kept rather than inferred from the
+    /// buffer, which the successful writes have already drained.
+    bytes_to_upstream: u64,
     /// The domain this flow is for, when the planner has observed one.
     ///
     /// The tunnel is handed an address; the name only exists because the planner
     /// records the answers to the DNS it forwards. Without it there is nothing to
     /// check a candidate's certificate against.
+    ///
+    /// Set at open from the observation cache, and set later from the client's own
+    /// handshake when the cache had nothing — see [`TcpFlow::watch_handshake`] and
+    /// [`TcpRelay::adopt_handshake_name`].
     host: Option<String>,
+    /// The rule entry the routing decision came from, when it came from one.
+    ///
+    /// Kept so a name recovered later can be told apart from the name the address
+    /// already implied. If both point at the same rule there is nothing to
+    /// re-plan, and restarting the race would spend the client's patience on a
+    /// handshake it was already going to make.
+    rule_key: Option<u32>,
+    /// Client bytes held while the domain is still unknown.
+    ///
+    /// `Some` from open until the name is settled — found, or provably not
+    /// coming. Only ever non-empty on a flow that opened without a name, and
+    /// bounded by [`sni::MAX_HELLO`]: these are a copy of the client's own
+    /// handshake, held on its behalf, and there is no reason to hold them once
+    /// they have been read.
+    ///
+    /// A copy, not the original. The bytes are in `to_upstream` already and must
+    /// reach the winner unchanged; this buffer only ever gets looked at.
+    hello: Option<Vec<u8>>,
+    /// A domain read out of the client's handshake, not yet acted on.
+    ///
+    /// Separate from `host` because adopting it is not free: the flow has to stop
+    /// the race it is running and start a different one. Reading the name here and
+    /// applying it in [`TcpRelay::relay`] keeps that decision in the one place
+    /// that has a planner, a protector and the stats to hand.
+    sni_pending: Option<String>,
     /// While set and still in the future, do not dial: a certificate check is
     /// running and its answer decides which candidate to use.
     ///
@@ -258,6 +324,120 @@ struct TcpFlow {
     last_activity: Instant,
 }
 
+/// A short, log-safe name for why an upstream socket failed.
+///
+/// Deliberately not `io::Error`'s `Display`. Every error this is called with
+/// comes from `last_os_error()`, and rendering one runs `strerror_r`, which
+/// indexes a table through the errno — not a call to make on the relay path, and
+/// pointless here, since the errno is the whole of what the diagnosis needs. The
+/// `ErrorKind` fallback exists only for errors built in-process, which carry no
+/// errno at all.
+fn upstream_error_label(err: &io::Error) -> &'static str {
+    match err.raw_os_error() {
+        Some(libc::ECONNRESET) => "reset by peer",
+        Some(libc::EPIPE) => "broken pipe",
+        Some(libc::ECONNABORTED) => "connection aborted",
+        Some(libc::ECONNREFUSED) => "refused",
+        Some(libc::ETIMEDOUT) => "timed out",
+        Some(libc::ENETUNREACH) => "network unreachable",
+        Some(libc::EHOSTUNREACH) => "host unreachable",
+        _ => match err.kind() {
+            io::ErrorKind::ConnectionReset => "reset by peer",
+            io::ErrorKind::BrokenPipe => "broken pipe",
+            io::ErrorKind::ConnectionRefused => "refused",
+            io::ErrorKind::TimedOut => "timed out",
+            io::ErrorKind::NotConnected => "not connected",
+            _ => "socket error",
+        },
+    }
+}
+
+/// Describe an upstream socket that died *after* its dial succeeded.
+///
+/// This is the only place the "connected, then cut" case is described, and it
+/// exists to separate it from a dial that never completed. The two are
+/// indistinguishable to the client — a session that goes nowhere either way —
+/// but they mean opposite things operationally. A dial that is refused or times
+/// out says the **address** is wrong, and the connect-time log already says so.
+/// A reset that arrives after the client's first bytes went out, with nothing
+/// ever coming back, says the address answered and something above it refused
+/// *this* conversation. The name is what such a thing is keyed on, so the name
+/// is in the line: read the lines for one address across two names and the
+/// difference between the names is the entire answer. Without a name on the line
+/// that comparison cannot be made from the log at all.
+///
+/// Returned as data rather than logged in place so the judgement can be asserted
+/// without a logger installed. With no logger set the `log` macros are no-ops,
+/// so a test that only called the logging function would evaluate no format
+/// argument and assert nothing about the text.
+fn describe_upstream_cut(
+    flow: &TcpFlow,
+    stage: &str,
+    err: &io::Error,
+    now: Instant,
+) -> (log::Level, String) {
+    let label = upstream_error_label(err);
+    let name = flow.host.as_deref().unwrap_or("no name observed");
+    let elapsed_ms = now.saturating_duration_since(flow.opened_at).as_millis();
+
+    // Whether this flow was carried by a proxy, read off the winner's own dial.
+    //
+    // The winner is the only socket that ever carried a byte, so it is the only
+    // one whose handshake state describes this flow. A flow with no winner never
+    // reached anything and is not described here at all.
+    let carried_by_proxy = flow
+        .winner
+        .and_then(|index| flow.upstreams.get(index))
+        .is_some_and(|up| up.handshake.is_some());
+
+    if flow.sent_any && flow.bytes_from_upstream == 0 && carried_by_proxy {
+        // The shape this log was written for, but through a proxy — so the one
+        // claim the direct version makes cannot be made. `send` succeeding means
+        // the connection was ESTABLISHED, and the connection is to the *proxy*;
+        // where the cut is, between the proxy and the destination, this host
+        // cannot see. Saying "the address answered" here would be exactly the
+        // kind of plausible-sounding inference this project keeps having to
+        // retract, so the line says what was measured and stops.
+        (
+            log::Level::Warn,
+            format!(
+                "watt: flow {} ({name}) upstream {label} on {stage} after {} bytes sent / 0 received \
+                 ({elapsed_ms} ms) — the flow was carried by a proxy, so the cut is somewhere past it",
+                flow.key.dst, flow.bytes_to_upstream
+            ),
+        )
+    } else if flow.sent_any && flow.bytes_from_upstream == 0 {
+        // The shape this log was written for: bytes went out, not one came back,
+        // and the socket then failed.
+        //
+        // The trailing clause claims only what the measurements support. `send`
+        // succeeding on a connected socket means the connection was ESTABLISHED,
+        // so the address answered — that much is a protocol fact, not a reading
+        // of the code. It does **not** follow that nothing at that address is
+        // responsible: a middlebox can sit in front of a reachable host and cut
+        // one name while serving another. So the line says the address answered
+        // and the cut is above it, and leaves the cause to the comparison the
+        // name in the middle of the line makes possible.
+        (
+            log::Level::Warn,
+            format!(
+                "watt: flow {} ({name}) upstream {label} on {stage} after {} bytes sent / 0 received \
+                 ({elapsed_ms} ms) — the dial completed, so the address answered and the cut is above it",
+                flow.key.dst, flow.bytes_to_upstream
+            ),
+        )
+    } else {
+        (
+            log::Level::Info,
+            format!(
+                "watt: flow {} ({name}) upstream {label} on {stage} after {} bytes sent / {} received \
+                 ({elapsed_ms} ms)",
+                flow.key.dst, flow.bytes_to_upstream, flow.bytes_from_upstream
+            ),
+        )
+    }
+}
+
 impl TcpFlow {
     fn new(
         key: FlowKey,
@@ -280,13 +460,93 @@ impl TcpFlow {
             to_client: VecDeque::new(),
             client_eof: false,
             upstream_eof: false,
+            cut_reported: false,
             bytes_from_upstream: 0,
+            bytes_to_upstream: 0,
             host: None,
+            rule_key: None,
+            hello: None,
+            sni_pending: None,
             verify_by: None,
             delivered_any: false,
             sent_any: false,
             opened_at: now,
             last_activity: now,
+        }
+    }
+
+    /// The name this flow was dialled for, for a log line.
+    ///
+    /// A flow only has a name when the planner saw the DNS answer that produced
+    /// its address — the tunnel itself is handed an address, never a name. A
+    /// connection to a bare address has none, and the placeholder says so rather
+    /// than leaving the field looking like a name that failed to render.
+    fn name(&self) -> &str {
+        self.host.as_deref().unwrap_or("no name observed")
+    }
+
+    /// Whether this flow is still trying to learn its domain from the client.
+    ///
+    /// True only for a flow that opened without a name. A flow the planner could
+    /// name already has everything the handshake would add.
+    fn watching_handshake(&self) -> bool {
+        self.hello.is_some()
+    }
+
+    /// Feed the client's bytes to the handshake watcher.
+    ///
+    /// Re-parsed from the start on every call rather than kept as a cursor. The
+    /// buffer is a few hundred bytes in practice, this runs at most twice on a
+    /// flow that has one, and a parser that restarts cannot drift out of step
+    /// with the bytes it is restarting on.
+    ///
+    /// Watching stops at the first answer that is not "need more bytes". A
+    /// ClientHello with no name will not grow one — TLS permits a second
+    /// ClientHello, but by then the flow has already carried bytes and the
+    /// re-plan in [`TcpRelay::adopt_handshake_name`] would be refused anyway — and
+    /// a flow that is not TLS at all will never have one.
+    fn watch_handshake(&mut self, bytes: &[u8]) {
+        let Some(buffer) = self.hello.as_mut() else {
+            return;
+        };
+        // The parser only ever reads the first record, so a handshake that claims
+        // more than a plausible ClientHello would otherwise be buffered forever.
+        // Stopping loses the name; continuing would hold the client's bytes for
+        // the life of the flow. A missing name is the failure mode to prefer.
+        if buffer.len() + bytes.len() > sni::MAX_HELLO {
+            self.hello = None;
+            return;
+        }
+        buffer.extend_from_slice(bytes);
+
+        match sni::from_client_hello(buffer) {
+            sni::Sni::Incomplete => {}
+            sni::Sni::Found(name) => {
+                self.hello = None;
+                self.sni_pending = Some(name);
+            }
+            sni::Sni::Absent | sni::Sni::Covered | sni::Sni::NotTls => {
+                self.hello = None;
+            }
+        }
+    }
+
+    /// Report an upstream socket failure once, at the level it deserves.
+    ///
+    /// Called from both directions of [`TcpRelay::move_bytes`], which is where an
+    /// upstream socket error is otherwise folded into `upstream_eof` and lost.
+    /// The guard is what keeps a flow that is already dead from re-reporting on
+    /// every tick before it is reaped.
+    fn log_upstream_cut(&mut self, stage: &str, err: &io::Error, now: Instant) {
+        if self.cut_reported {
+            return;
+        }
+        self.cut_reported = true;
+        let (level, line) = describe_upstream_cut(self, stage, err, now);
+        if level == log::Level::Warn {
+            log::warn!("{line}");
+        } else {
+            log::info!("{line}");
         }
     }
 
@@ -487,6 +747,16 @@ pub struct TcpRelay {
     verdicts: Verdicts,
     /// Whether the certificate check runs at all. See `StackConfig`.
     certificate_check: bool,
+    /// The upstream exit every public TCP flow is handed to, when one is set.
+    ///
+    /// Held here rather than in [`Tuning`] because it owns strings and `Tuning`
+    /// is `Copy`, and copied out of the config once at construction so a
+    /// settings reload cannot change the exit under a running flow.
+    ///
+    /// See [`StackConfig::upstream_proxy`] for what it is for, and
+    /// [`TcpRelay::open_race`] for which flows it carries and why the rest are
+    /// left alone.
+    upstream_proxy: Option<ProxyConfig>,
 }
 
 impl std::fmt::Debug for TcpRelay {
@@ -530,6 +800,7 @@ impl TcpRelay {
 
         let verdicts = Verdicts::new();
         let certificate_check = config.certificate_check;
+        let upstream_proxy = config.upstream_proxy.clone();
         let mut device = QueueDevice::new(config.mtu);
         let mut iface_config = IfaceConfig::new(HardwareAddress::Ip);
         iface_config.random_seed = seed;
@@ -564,6 +835,7 @@ impl TcpRelay {
             dialing: 0,
             verdicts,
             certificate_check,
+            upstream_proxy,
         }
     }
 
@@ -733,6 +1005,13 @@ impl TcpRelay {
     }
 
     /// Register every upstream descriptor with the poll loop.
+    ///
+    /// A socket still dialling can only be waited on for writability. Once the
+    /// dial is done the descriptor is both a tunnel and, on a proxied flow, a
+    /// handshake waiting to be answered — and both want `READ | WRITE`, so
+    /// nothing here has to know which of the two it is looking at. The handshake
+    /// is driven on every relay pass regardless; the read interest is what stops
+    /// the proxy's reply from having to wait out the poll timeout.
     pub fn register(&self, poller: &mut Poller) {
         for flow in self.flows.values() {
             for upstream in &flow.upstreams {
@@ -896,6 +1175,20 @@ impl TcpRelay {
                 .first()
                 .map(|name| name.to_string());
 
+            // Counted at open, next to the matched/direct pair above, because it
+            // is decided at the same moment. Everything below this point is gated
+            // on `host`, so a blind flow is one where the rule set, the
+            // certificate check and the attribution log all go quiet at once —
+            // and until this counter existed that state was only visible as a
+            // log line per flow, which is not a rate anyone can act on.
+            //
+            // A flow counted here is not necessarily blind for its whole life:
+            // the client's own handshake may still name it, which is what
+            // `flows_named_by_sni` counts and what the watcher below is for.
+            if host.is_none() {
+                stats.flows_without_name += 1;
+            }
+
             // Diagnostic: how many flows have a name to check a certificate
             // against. Without a name the whole verification path is skipped, and
             // from the outside that looks identical to a verification that ran and
@@ -911,6 +1204,15 @@ impl TcpRelay {
 
             let mut flow =
                 TcpFlow::new(flow_key, candidates, decision.is_steered(), decision.reason(), now);
+            flow.rule_key = decision.plan.entry_key;
+
+            // A flow the planner could not name is the one worth watching: the
+            // client's own handshake is the remaining chance to learn the domain,
+            // and with it the rule set and the certificate check come back. A flow
+            // that already has a name has nothing to gain from the same bytes.
+            if host.is_none() {
+                flow.hello = Some(Vec::new());
+            }
 
             if let Some(name) = &host {
                 flow.host = Some(name.clone());
@@ -1009,6 +1311,15 @@ impl TcpRelay {
 
             // --- move bytes through the winner ----------------------------
             self.move_bytes(handle, now, &mut scratch, stats);
+
+            // A flow the planner could not name may be named by the client's own
+            // handshake, which `move_bytes` has just read. Adopting the name throws
+            // away the race that was running, so the new one has to be driven in
+            // this same tick: the client is waiting on a handshake and has no idea
+            // any of this happened.
+            if self.adopt_handshake_name(handle, now, planner, stats) {
+                self.advance_dials(handle, now, planner, protector, stats);
+            }
         }
     }
 
@@ -1022,7 +1333,7 @@ impl TcpRelay {
         stats: &mut Stats,
     ) {
         // 1. Retire dials that have finished — a winner, a refusal or a timeout.
-        self.retire_dials(handle, now, planner);
+        self.retire_dials(handle, now, planner, stats);
 
         // 2. A winner ends the race for this flow; there is nothing left to
         //    launch and the window is now a single established socket.
@@ -1061,7 +1372,22 @@ impl TcpRelay {
     /// or that outlived its budget while there was somewhere else to go, is
     /// retired and its descriptor closed. No byte is written to any of them yet:
     /// the client's bytes stay buffered until a winner exists.
-    fn retire_dials(&mut self, handle: SocketHandle, now: Instant, planner: &mut Planner) {
+    ///
+    /// On a proxied flow "whose `SO_ERROR` clears" is only half the question. The
+    /// connect that succeeded is to the **proxy**, which says nothing about the
+    /// destination: the flow exists once the proxy has agreed to carry it, so the
+    /// handshake is driven here, in the same scan, and a dial only becomes a
+    /// candidate for the win once the handshake is done. Driving it in this scan
+    /// rather than in a pass of its own is what keeps the two questions — "did the
+    /// dial finish" and "did the proxy accept" — answered from one place, with one
+    /// budget and one failure list.
+    fn retire_dials(
+        &mut self,
+        handle: SocketHandle,
+        now: Instant,
+        planner: &mut Planner,
+        stats: &mut Stats,
+    ) {
         let can_rotate = self
             .flows
             .get(&handle)
@@ -1070,6 +1396,11 @@ impl TcpRelay {
         // A dial with an alternative behind it gets the short budget so the
         // window keeps rotating; one that is the flow's last hope gets the full
         // `connect_timeout`, because a slow but honest server deserves it.
+        //
+        // The budget covers the handshake as well as the connect, because both
+        // are one wait from the client's point of view — and a proxy that accepts
+        // the connection and then says nothing is the one failure that would
+        // otherwise hold a flow forever.
         let budget = if can_rotate {
             self.tuning.first_connect_timeout
         } else {
@@ -1078,51 +1409,87 @@ impl TcpRelay {
 
         let mut winner: Option<(usize, SocketAddr, Duration)> = None;
         let mut failures: Vec<(usize, SocketAddr, &'static str)> = Vec::new();
+        // Counted rather than applied in place: `dialing` is a field of the relay
+        // and the loop below holds `self.flows` mutably, so the decrement happens
+        // once, after the scan.
+        let mut connected = 0usize;
+        let mut accepted = 0usize;
+        let mut refused = 0usize;
         {
-            let Some(flow) = self.flows.get(&handle) else {
+            let Some(flow) = self.flows.get_mut(&handle) else {
                 return;
             };
-            for (index, up) in flow.upstreams.iter().enumerate() {
+            for (index, up) in flow.upstreams.iter_mut().enumerate() {
                 if up.failed {
                     continue;
                 }
-                if !up.connecting {
-                    // Completed synchronously when it was launched. It is a
-                    // winner; the earliest one takes it.
-                    if winner.is_none() {
-                        winner =
-                            Some((index, up.target, now.saturating_duration_since(up.started_at)));
+                if up.connecting {
+                    // The poll loop's `connect_ready` is what says the dial has
+                    // *finished*. `SO_ERROR` cannot stand in for it: a non-blocking
+                    // connect that is still in progress reports 0 too, so reading it
+                    // early would take a socket still in SYN_SENT for a winner and
+                    // close the losers around it — the very failure racing exists to
+                    // prevent. Only once the descriptor is writable is `SO_ERROR` a
+                    // verdict.
+                    if !up.connect_ready {
+                        if now.saturating_duration_since(up.started_at) > budget {
+                            // Still dialling and out of patience: rotate the window.
+                            failures.push((index, up.target, "timed out"));
+                        }
+                        continue;
                     }
-                    continue;
-                }
-                // The poll loop's `connect_ready` is what says the dial has
-                // *finished*. `SO_ERROR` cannot stand in for it: a non-blocking
-                // connect that is still in progress reports 0 too, so reading it
-                // early would take a socket still in SYN_SENT for a winner and
-                // close the losers around it — the very failure racing exists to
-                // prevent. Only once the descriptor is writable is `SO_ERROR` a
-                // verdict.
-                if up.connect_ready {
                     match up.socket.take_connect_error() {
                         Ok(()) => {
-                            if winner.is_none() {
-                                winner = Some((
-                                    index,
-                                    up.target,
-                                    now.saturating_duration_since(up.started_at),
-                                ));
-                            }
+                            up.connecting = false;
+                            connected += 1;
                         }
                         // `SO_ERROR` was not ready to be read yet.
-                        Err(err) if is_retryable(&err) => {}
-                        Err(_) => failures.push((index, up.target, "refused")),
+                        Err(err) if is_retryable(&err) => continue,
+                        Err(_) => {
+                            failures.push((index, up.target, "refused"));
+                            continue;
+                        }
                     }
-                } else if now.saturating_duration_since(up.started_at) > budget {
-                    // Still dialling and out of patience: rotate the window.
-                    failures.push((index, up.target, "timed out"));
+                }
+
+                // The connect is done. With a proxy in the path that means the
+                // proxy answered, and nothing more — the destination has not been
+                // dialled by this host at all.
+                if let Some(handshake) = up.handshake.as_mut() {
+                    match handshake.advance(&up.socket) {
+                        Step::Done => {
+                            accepted += 1;
+                        }
+                        Step::Pending => {
+                            if now.saturating_duration_since(up.started_at) > budget {
+                                refused += 1;
+                                failures.push((index, up.target, "the proxy did not answer"));
+                            }
+                            continue;
+                        }
+                        Step::Refused(why) => {
+                            refused += 1;
+                            failures.push((index, up.target, why));
+                            continue;
+                        }
+                    }
+                }
+
+                // A dial that completed synchronously when it was launched, or one
+                // whose handshake has just finished. The earliest takes the win.
+                if winner.is_none() {
+                    // `rtt` is measured from the dial's launch, so on a proxied flow
+                    // it includes the handshake. That is the right number for both
+                    // uses: how long the flow took to become usable, which is what
+                    // the log reports and what the selector should rank by.
+                    winner = Some((index, up.target, now.saturating_duration_since(up.started_at)));
                 }
             }
         }
+
+        self.dialing = self.dialing.saturating_sub(connected);
+        stats.proxy_handshakes += accepted as u64;
+        stats.proxy_refusals += refused as u64;
 
         if let Some((winner_index, winner_target, rtt)) = winner {
             self.confirm_winner(handle, winner_index, winner_target, rtt, now, planner);
@@ -1139,6 +1506,10 @@ impl TcpRelay {
         // exactly one place.
         let flow = self.flows.get_mut(&handle).expect("checked above");
         let dst = flow.key.dst;
+        // Read as a field rather than through `name()`: the loop below holds
+        // `flow.upstreams` mutably, and a method taking `&self` borrows the whole
+        // flow. `dst` is captured above for the same reason.
+        let name = flow.host.as_deref().unwrap_or("no name observed");
         let candidate_total = flow.candidates.len();
         let mut kept = Vec::with_capacity(flow.upstreams.len());
         let mut removed: Vec<Upstream> = Vec::new();
@@ -1155,13 +1526,29 @@ impl TcpRelay {
             // mistake a dial that was given up on for one still in flight.
             up.failed = true;
             log::warn!(
-                "watt: flow {} upstream to {} died (candidate {}/{}, {why})",
+                "watt: flow {} ({}) upstream to {} died (candidate {}/{}, {why})",
                 dst,
+                name,
                 up.target.ip(),
                 up.candidate_index + 1,
                 candidate_total
             );
-            planner.report_failure(up.target.ip(), now);
+            // Only a dial this host made itself is evidence about the address.
+            //
+            // `report_failure` pushes the address to the back of the selector for
+            // a whole `failure_cooldown`, and on a proxied dial the reason is the
+            // *proxy's* report: it may mean the proxy could not reach the
+            // destination, or it may mean the proxy is down, wants a password, or
+            // forbids this host. Writing the second group into the table would
+            // quietly degrade the direct path — for a minute after a user turns a
+            // misconfigured exit off, every address it complained about would
+            // still be at the back of the list, with nothing in the log to connect
+            // the two. The connect-time signal is skipped for proxied dials; the
+            // session-level one in `reap` is not, because a session that carried
+            // bytes or did not is an end-to-end fact about the address either way.
+            if up.handshake.is_none() {
+                planner.report_failure(up.target.ip(), now);
+            }
             removed.push(up);
         }
         flow.upstreams = kept;
@@ -1181,9 +1568,18 @@ impl TcpRelay {
         now: Instant,
         planner: &mut Planner,
     ) {
+        // Read before the flow is borrowed: the log has to be able to say *how*
+        // the flow was carried, and a line that named an address without saying
+        // it went through an exit would read as a direct connection this host
+        // never made.
+        let proxy = self.upstream_proxy.as_ref().map(|config| config.address);
         let flow = self.flows.get_mut(&handle).expect("checked above");
         let winner_fd = flow.upstreams[winner_index].socket.raw_fd();
+        let carried_by_proxy = flow.upstreams[winner_index].handshake.is_some();
         // The winner has finished dialling, so it leaves the handshake budget.
+        // On a proxied flow `retire_dials` has already cleared this when the
+        // connect itself completed, which is why the decrement is conditional:
+        // the count must move exactly once per dial.
         if flow.upstreams[winner_index].connecting {
             flow.upstreams[winner_index].connecting = false;
             self.dialing = self.dialing.saturating_sub(1);
@@ -1191,12 +1587,23 @@ impl TcpRelay {
         flow.last_launch = None;
 
         let losers = flow.upstreams.len().saturating_sub(1);
-        log::info!(
-            "watt: flow {} upstream connected via {} ({} ms) — closed {losers} loser(s)",
-            flow.key.dst,
-            winner_target.ip(),
-            rtt.as_millis()
-        );
+        match (carried_by_proxy, proxy) {
+            (true, Some(address)) => log::info!(
+                "watt: flow {} ({}) upstream connected to {} through the proxy at {address} \
+                 ({} ms) — closed {losers} loser(s)",
+                flow.key.dst,
+                flow.name(),
+                winner_target.ip(),
+                rtt.as_millis()
+            ),
+            _ => log::info!(
+                "watt: flow {} ({}) upstream connected via {} ({} ms) — closed {losers} loser(s)",
+                flow.key.dst,
+                flow.name(),
+                winner_target.ip(),
+                rtt.as_millis()
+            ),
+        }
         planner.report_success(winner_target.ip(), rtt, now);
 
         // Keep only the winner, named by descriptor rather than by position so a
@@ -1304,7 +1711,38 @@ impl TcpRelay {
             (target, index)
         };
 
-        let family = Family::of(target.ip());
+        // Which address this dial actually connects to, and whether a proxy
+        // carries the flow.
+        //
+        // The gate is `is_blocked_target`, so the proxy is handed every public
+        // destination and nothing else. A target on loopback or the local network
+        // is reachable from here by definition and is not the internet: a rewrite
+        // pointing a flow at a local stub has to keep working, and LAN traffic
+        // must not leave the device. `can_relay` has already refused every flow
+        // that is not a rewrite to such an address, so the only flows this
+        // excludes are the rewrites — which is exactly the set that must stay
+        // direct.
+        //
+        // Note what this does *not* gate on: whether a rule matched. A flow with
+        // no rule still has a target — the address the client resolved — and
+        // whether that address is reachable from here is a question about the
+        // path, not about the rule set. Carrying it too is the honest reading of
+        // "send the internet through this exit".
+        let proxy = self
+            .upstream_proxy
+            .as_ref()
+            .filter(|_| !planner.is_blocked_target(target.ip()));
+        // The handshake names the destination; the socket goes to the proxy.
+        // Built before the flow is borrowed so it owns everything it needs and
+        // the flow map is free to be borrowed mutably a moment later.
+        let handshake = proxy.map(|config| Handshake::new(config, target));
+        let dial_target = proxy.map(|config| config.address).unwrap_or(target);
+
+        // The socket's family follows the address it dials, which under a proxy is
+        // the proxy's and not the destination's. That is what lets an IPv6 rule
+        // address be reached over an IPv4 proxy connection: the destination is
+        // named in the handshake, where its form does not depend on the socket.
+        let family = Family::of(dial_target.ip());
         let mut socket = match UpstreamSocket::tcp(family, protector) {
             Ok(socket) => socket,
             Err(err) => {
@@ -1321,7 +1759,7 @@ impl TcpRelay {
             }
         };
 
-        match socket.start_connect(target) {
+        match socket.start_connect(dial_target) {
             Ok(state) => {
                 let connecting = state == ConnectState::InProgress;
                 let up = Upstream {
@@ -1332,6 +1770,7 @@ impl TcpRelay {
                     connect_ready: !connecting,
                     started_at: now,
                     failed: false,
+                    handshake,
                 };
                 {
                     let flow = self.flows.get_mut(&handle).expect("checked above");
@@ -1344,14 +1783,28 @@ impl TcpRelay {
                 // The socket never made it into the window, so dropping it here
                 // closes its descriptor; there is nothing to unregister.
                 let flow = self.flows.get_mut(&handle).expect("checked above");
-                log::warn!(
-                    "watt: flow {} connect to {} failed, rotating to the next candidate",
-                    flow.key.dst,
-                    target.ip()
-                );
+                if handshake.is_some() {
+                    log::warn!(
+                        "watt: flow {} could not reach the upstream proxy at {}, rotating to the \
+                         next candidate",
+                        flow.key.dst,
+                        dial_target.ip()
+                    );
+                } else {
+                    log::warn!(
+                        "watt: flow {} connect to {} failed, rotating to the next candidate",
+                        flow.key.dst,
+                        dial_target.ip()
+                    );
+                }
                 flow.next_candidate = candidate_index + 1;
                 flow.last_launch = Some(now);
-                planner.report_failure(target.ip(), now);
+                // A failure to reach the proxy says nothing about the address the
+                // proxy would have been asked for, so only a direct dial's failure
+                // is reported against it. See `retire_dials` for the full reason.
+                if handshake.is_none() {
+                    planner.report_failure(target.ip(), now);
+                }
                 drop(socket);
             }
         }
@@ -1421,6 +1874,28 @@ impl TcpRelay {
             stats.bytes_client_to_upstream += taken as u64;
             up_budget = up_budget.saturating_sub(taken);
 
+            // A flow that opened without a name can still be named by the client
+            // itself: a TLS ClientHello carries the domain in the clear, and these
+            // are those bytes. Nothing is decrypted and nothing is modified — the
+            // same bytes go on to the winner unchanged.
+            if flow.watching_handshake() {
+                flow.watch_handshake(&chunk[..taken]);
+                if flow.sni_pending.is_some() {
+                    // Stop short of the flush below rather than falling through.
+                    //
+                    // The flow may be about to be re-planned, and a byte that
+                    // reaches the current winner cannot be taken back: the two
+                    // servers would be spliced into one stream. Waiting one tick
+                    // for the decision costs nothing, because the bytes are
+                    // already in `to_upstream`.
+                    //
+                    // Only a TLS client can reach this point, and a TLS server
+                    // cannot have answered before the ClientHello it is answering
+                    // — so returning here skips no upstream byte.
+                    return;
+                }
+            }
+
             // Nothing more buffered — the next `recv` would report
             // `InvalidState` and cost a syscall for the privilege.
             if taken < cap {
@@ -1442,15 +1917,25 @@ impl TcpRelay {
                 }
                 let cap = RELAY_CHUNK.min(room);
                 let chunk = &mut scratch[..cap];
+                // The error is carried out of the block rather than reported
+                // inside it: `up` borrows the window, and the report is about the
+                // flow as a whole.
+                let mut read_error: Option<io::Error> = None;
                 let (read, eof) = {
                     let up = &flow.upstreams[winner];
                     match up.socket.read(chunk) {
                         Ok(0) => (0, true),
                         Ok(n) => (n, false),
                         Err(err) if is_retryable(&err) => (0, false),
-                        Err(_) => (0, true),
+                        Err(err) => {
+                            read_error = Some(err);
+                            (0, true)
+                        }
                     }
                 };
+                if let Some(err) = read_error {
+                    flow.log_upstream_cut("read", &err, now);
+                }
                 if read == 0 {
                     if eof {
                         flow.upstream_eof = true;
@@ -1488,11 +1973,22 @@ impl TcpRelay {
                     Ok(0) => break,
                     Ok(n) => {
                         flow.to_upstream.drain(..n);
+                        // Counted on the way out, not derived from the buffer: a
+                        // successful write drains the buffer, so the buffer at cut
+                        // time holds only what did *not* get through.
+                        flow.bytes_to_upstream += n as u64;
                         flow.last_activity = now;
                     }
                     Err(err) if is_retryable(&err) => break,
-                    Err(_) => {
+                    Err(err) => {
+                        // In practice the read arm above is what sees a reset
+                        // first: it runs earlier in this function, and a reset
+                        // makes the descriptor readable the moment it lands. This
+                        // arm is the one that catches it when that read was
+                        // skipped for want of buffer room, which is why both
+                        // directions report rather than only the likely one.
                         flow.upstream_eof = true;
+                        flow.log_upstream_cut("write", &err, now);
                         break;
                     }
                 }
@@ -1533,6 +2029,139 @@ impl TcpRelay {
         if flow.upstream_eof && flow.to_client.is_empty() && socket.is_active() {
             socket.close();
         }
+    }
+
+    /// Give a flow the domain the client itself put in its handshake.
+    ///
+    /// A flow that opened without a name is relayed blind: the rule set is never
+    /// consulted and no candidate's certificate can be judged. The client's
+    /// ClientHello names the domain in the clear, and those bytes are already
+    /// passing through this process — see [`crate::sni`]. This is where that name
+    /// becomes a route.
+    ///
+    /// # Why this is only allowed before the first byte
+    ///
+    /// Once a byte has reached an upstream socket the client is in a conversation
+    /// with one particular server, and moving the flow would splice two of them
+    /// into a stream neither agreed to. A wrong address is the better outcome
+    /// then, so the re-plan is refused and the flow carries on where it was. That
+    /// is also why `move_bytes` returns early when the name arrives: it is the one
+    /// moment the flush can still be held back.
+    ///
+    /// Returns true when the flow was re-planned, in which case its race has been
+    /// emptied and the caller must drive it again.
+    fn adopt_handshake_name(
+        &mut self,
+        handle: SocketHandle,
+        now: Instant,
+        planner: &mut Planner,
+        stats: &mut Stats,
+    ) -> bool {
+        let tuning = self.tuning;
+        let mut removed: Vec<Upstream> = Vec::new();
+        let adopted;
+
+        {
+            let Some(flow) = self.flows.get_mut(&handle) else {
+                return false;
+            };
+            let Some(name) = flow.sni_pending.take() else {
+                return false;
+            };
+
+            // The name is known from here on either way, so the flow carries it
+            // in the log even when there is nothing to re-plan. That is worth
+            // having on its own: the attribution line for a cut flow is only
+            // comparable across two names, and for a client that resolves
+            // elsewhere this is the only place the name can come from.
+            flow.host = Some(name.clone());
+
+            if flow.bytes_to_upstream > 0 {
+                // Too late to move it, and normal rather than exceptional: a
+                // ClientHello split across segments has had its first fragment
+                // flushed by the time the name is complete.
+                log::debug!(
+                    "watt: flow {} already carries bytes; the name {name} came too late to re-plan",
+                    flow.key.dst
+                );
+                return false;
+            }
+
+            let requested = SocketAddr::new(flow.key.dst, flow.key.dst_port);
+            let decision = planner.decide_by_name(now, requested, &name);
+
+            // Two ways for there to be nothing to do, and both must leave the flow
+            // exactly where it is. The target staying put means the rule set has no
+            // addresses for this name — `decide_by_name` moves it only when it
+            // does. An unchanged rule key means the address already led to the
+            // same rule, so the candidates are the ones it would produce and
+            // re-dialling would cost the client a handshake for nothing.
+            if decision.target == requested || decision.plan.entry_key == flow.rule_key {
+                log::debug!(
+                    "watt: flow {} stays on {}; the handshake named {name} and there is nothing to re-plan",
+                    flow.key.dst,
+                    requested.ip()
+                );
+                return false;
+            }
+
+            let mut candidates = vec![decision.target];
+            for alternative in &decision.alternatives {
+                if planner.is_blocked_target(*alternative) {
+                    continue;
+                }
+                candidates.push(SocketAddr::new(*alternative, requested.port()));
+            }
+            if candidates.len() > tuning.max_candidates {
+                candidates.truncate(tuning.max_candidates);
+            }
+
+            // Drop the race in flight. Nothing was ever written to any of these
+            // sockets, so closing one is a bare FIN — the peer sees a connection
+            // that went away before it was asked anything, which is exactly what a
+            // client-side abort looks like to a server.
+            removed.append(&mut flow.upstreams);
+            let target = candidates[0];
+            let count = candidates.len();
+            flow.candidates = candidates;
+            flow.next_candidate = 0;
+            flow.winner = None;
+            flow.verify_by = None;
+            flow.steered = true;
+            flow.reason = decision.reason();
+            flow.rule_key = decision.plan.entry_key;
+            flow.last_launch = None;
+            adopted = (flow.key.dst, name, target, count);
+        }
+
+        for up in removed {
+            self.unlink_upstream(&up);
+        }
+
+        // The treatment a named flow gets at open, for the same reason: a cached
+        // verdict decides the *order* of candidates, and a pending one holds the
+        // dial until it answers. Skipping it here would make a name read off the
+        // wire worth less than one the kernel observed.
+        let (dst, name, target, count) = adopted;
+        {
+            let Some(flow) = self.flows.get_mut(&handle) else {
+                return false;
+            };
+            flow.order_by_verdicts(&name, &self.verdicts);
+            flow.skip_rejected(&name, &self.verdicts);
+            let addresses: Vec<IpAddr> = flow.candidates.iter().map(|c| c.ip()).collect();
+            self.verdicts.check(&name, &addresses);
+            if self.verdicts.any_pending(&name, &addresses) {
+                flow.verify_by = Some(now + verify::WAIT);
+            }
+        }
+
+        stats.flows_named_by_sni += 1;
+        log::info!(
+            "watt: flow {dst} was relayed blind; the client's handshake named {name} — \
+             re-planned to {target} ({count} candidate(s))"
+        );
+        true
     }
 
     /// Register an upstream in a flow's window, keeping `fd_index` in step.
@@ -1691,8 +2320,10 @@ mod tests {
     use crate::config::StackConfig;
     use crate::planner::Planner;
     use crate::upstream::NoProtector;
+    use crate::upstream_proxy::ProxyKind;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
     use watt_rules::{RuleSet, RuleSource};
 
     /// Drive a full TCP handshake and payload exchange through the relay.
@@ -1849,6 +2480,12 @@ mod tests {
         })
     }
 
+    /// The one flow a harness has open, for assertions about it.
+    fn sole_flow(relay: &TcpRelay) -> &TcpFlow {
+        assert_eq!(relay.flows.len(), 1, "the harness expects exactly one flow");
+        relay.flows.values().next().expect("checked above")
+    }
+
     #[test]
     fn completes_a_handshake_and_relays_payload_both_ways() {
         // A real server on loopback, reached through an override so the test does
@@ -1930,6 +2567,121 @@ mod tests {
         );
         assert!(harness.stats.bytes_upstream_to_client >= 9);
         assert!(harness.stats.bytes_client_to_upstream >= 12);
+    }
+
+    /// A client's opening bytes must not reach a server before the flow has been
+    /// named, and must not be lost while the naming happens.
+    ///
+    /// Both halves matter and they pull in opposite directions. Holding the bytes
+    /// is what makes a re-plan possible at all — a byte that reaches the abandoned
+    /// server cannot be taken back — but a hold that dropped them would break every
+    /// connection it was meant to help. So the test checks the server received
+    /// nothing on the tick the hello arrived, and then received it whole on the
+    /// next one.
+    ///
+    /// The dialled address is overridden to a real listener so the abandoned server
+    /// is observable. That also makes this the test for the other half of the
+    /// precedence rule: an override is explicit operator intent, so the recovered
+    /// name is recorded but does not move the route.
+    #[test]
+    fn a_client_hello_is_held_back_until_the_flow_has_been_named() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let server_addr = listener.local_addr().unwrap();
+        let dialled: IpAddr = "198.51.100.9".parse().unwrap();
+
+        let mut harness = Harness::new(
+            server_addr,
+            vec![crate::config::DestinationOverride::endpoint(
+                dialled,
+                443,
+                IpAddr::V4(Ipv4Addr::LOCALHOST),
+                server_addr.port(),
+            )],
+        );
+        harness.server_ip = dialled;
+        harness.server_port = 443;
+
+        let syn_ack = harness.handshake_syn();
+        let ack = syn_ack.seq.wrapping_add(1);
+        harness.send(
+            harness.client_seq + 1,
+            ack,
+            packet::TcpFlags { ack: true, ..Default::default() },
+            b"",
+        );
+
+        let (mut accepted, _) = listener.accept().expect("the relay must connect upstream");
+        // One more pass, so the dial is confirmed and the flow has a winner to
+        // write to. Without it the assertions below would hold for the wrong
+        // reason.
+        harness.send(
+            harness.client_seq + 1,
+            ack,
+            packet::TcpFlags { ack: true, ..Default::default() },
+            b"",
+        );
+
+        {
+            let flow = sole_flow(&harness.relay);
+            assert_eq!(flow.host, None, "nothing observed a name for this address");
+            assert!(flow.watching_handshake(), "so the handshake is watched instead");
+            assert!(flow.winner.is_some(), "and the dial has somewhere to go");
+            assert_eq!(flow.bytes_to_upstream, 0);
+        }
+        assert_eq!(harness.stats.flows_without_name, 1);
+
+        // The client's own opening bytes.
+        let hello = watt_net::probe::debug_hello("sni.example");
+        harness.send(
+            harness.client_seq + 1,
+            ack,
+            packet::TcpFlags { ack: true, psh: true, ..Default::default() },
+            &hello,
+        );
+
+        {
+            let flow = sole_flow(&harness.relay);
+            assert_eq!(
+                flow.host.as_deref(),
+                Some("sni.example"),
+                "the flow is named by its own handshake"
+            );
+            assert_eq!(
+                flow.bytes_to_upstream, 0,
+                "and nothing has been written to a server yet"
+            );
+        }
+        assert_eq!(
+            harness.stats.flows_named_by_sni, 0,
+            "the override outranks the name, so there is no re-plan to count"
+        );
+
+        accepted
+            .set_read_timeout(Some(Duration::from_millis(200)))
+            .unwrap();
+        let mut buf = [0u8; 8];
+        match accepted.read(&mut buf) {
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {}
+            other => panic!("the server must not see the hello yet, got {other:?}"),
+        }
+
+        // The next pass releases the bytes, unchanged and in order.
+        harness.send(
+            harness.client_seq + 1 + hello.len() as u32,
+            ack,
+            packet::TcpFlags { ack: true, ..Default::default() },
+            b"",
+        );
+        assert_eq!(harness.stats.bytes_client_to_upstream, hello.len() as u64);
+
+        let mut received = vec![0u8; hello.len()];
+        accepted
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        accepted
+            .read_exact(&mut received)
+            .expect("the held bytes must arrive whole");
+        assert_eq!(received, hello);
     }
 
     #[test]
@@ -2260,6 +3012,372 @@ mod tests {
         flow
     }
 
+    /// A socket error must be named from its errno alone.
+    ///
+    /// The unknown-errno case is the one that matters: it is the branch that
+    /// would reach for `io::Error`'s `Display` if the table were the only path,
+    /// and `Display` on an errno-derived error is the call this avoids. A test
+    /// that only covered the known errnos would not pin that down.
+    #[test]
+    fn socket_errors_are_named_by_errno() {
+        use std::io::{Error, ErrorKind};
+        assert_eq!(
+            upstream_error_label(&Error::from_raw_os_error(libc::ECONNRESET)),
+            "reset by peer"
+        );
+        assert_eq!(
+            upstream_error_label(&Error::from_raw_os_error(libc::EPIPE)),
+            "broken pipe"
+        );
+        assert_eq!(
+            upstream_error_label(&Error::from_raw_os_error(libc::ETIMEDOUT)),
+            "timed out"
+        );
+        // Built in-process, so there is no errno and the kind is all there is.
+        assert_eq!(
+            upstream_error_label(&Error::new(ErrorKind::ConnectionRefused, "no errno")),
+            "refused"
+        );
+        assert_eq!(upstream_error_label(&Error::from_raw_os_error(9999)), "socket error");
+    }
+
+    /// The attribution this was written for: a reset after the client's first
+    /// bytes went out and before anything came back is *not* about the address.
+    #[test]
+    fn a_reset_before_anything_came_back_is_reported_as_a_path_problem() {
+        use std::io::Error;
+        let mut flow = flow_with(&["203.0.113.1"], "blocked.example");
+        // The client's bytes reached the socket, so the dial had completed —
+        // which is the only reason the address can be ruled out.
+        flow.sent_any = true;
+        flow.bytes_to_upstream = 517;
+
+        let (level, line) = describe_upstream_cut(
+            &flow,
+            "write",
+            &Error::from_raw_os_error(libc::ECONNRESET),
+            Instant::now(),
+        );
+
+        assert_eq!(level, log::Level::Warn, "{line}");
+        // The name is the whole point: without it the same address working for
+        // another name cannot be told from the address being dead.
+        assert!(line.contains("blocked.example"), "{line}");
+        assert!(line.contains("203.0.113.1"), "{line}");
+        assert!(line.contains("reset by peer"), "{line}");
+        assert!(line.contains("517 bytes sent / 0 received"), "{line}");
+    }
+
+    /// The same socket error after data has flowed is ordinary and stays quiet.
+    #[test]
+    fn a_cut_after_data_flowed_is_not_reported_as_a_path_problem() {
+        use std::io::Error;
+        let mut flow = flow_with(&["203.0.113.1"], "healthy.example");
+        flow.sent_any = true;
+        flow.bytes_to_upstream = 4096;
+        flow.bytes_from_upstream = 65536;
+
+        let (level, line) = describe_upstream_cut(
+            &flow,
+            "read",
+            &Error::from_raw_os_error(libc::EPIPE),
+            Instant::now(),
+        );
+
+        assert_eq!(level, log::Level::Info, "{line}");
+        assert!(line.contains("broken pipe"), "{line}");
+        assert!(line.contains("4096 bytes sent / 65536 received"), "{line}");
+    }
+
+    /// A flow with no observed name must still produce a readable line.
+    #[test]
+    fn a_flow_without_a_name_says_so_rather_than_leaving_a_gap() {
+        use std::io::Error;
+        let mut flow = flow_with(&["203.0.113.1"], "placeholder.example");
+        flow.host = None;
+        flow.sent_any = true;
+
+        let (_, line) =
+            describe_upstream_cut(&flow, "read", &Error::from_raw_os_error(libc::ECONNRESET), Instant::now());
+
+        assert!(line.contains("no name observed"), "{line}");
+    }
+
+    /// `move_bytes` runs again on a dead flow, so the report has to be once-only.
+    #[test]
+    fn an_upstream_cut_is_reported_at_most_once() {
+        use std::io::Error;
+        let mut flow = flow_with(&["203.0.113.1"], "blocked.example");
+        assert!(!flow.cut_reported);
+
+        flow.log_upstream_cut("write", &Error::from_raw_os_error(libc::ECONNRESET), Instant::now());
+        assert!(flow.cut_reported);
+
+        // A second failure — the read that follows the write that already failed
+        // — must not re-report.
+        flow.log_upstream_cut("read", &Error::from_raw_os_error(libc::EPIPE), Instant::now());
+        assert!(flow.cut_reported);
+    }
+
+    /// A relay with one flow that opened blind, dialling an address no rule claims.
+    ///
+    /// The address is the whole point. The rule set owns `203.0.113.10`; the client
+    /// dialled `198.51.100.9`; and nothing observed a DNS answer for it. Without a
+    /// name there is no path from one to the other, which is exactly the state the
+    /// handshake watcher exists to leave.
+    fn blind_flow() -> (TcpRelay, Planner, Stats, SocketHandle) {
+        let config = StackConfig::default();
+        let rules = RuleSet::from_str(
+            r#"{"groups":[{"entries":[{"id":"1","name":"T","domains":["t.example"],"ips":["203.0.113.10"],"port":"443"}]}]}"#,
+            RuleSource::Provided,
+        )
+        .unwrap();
+        let epoch = Instant::now();
+        let mut relay = TcpRelay::new(&config, epoch, 0x1234_5678);
+        let planner = Planner::new(watt_rules::Router::new(rules), &config);
+        let handle = relay.sockets.add(tcp::Socket::new(
+            tcp::SocketBuffer::new(vec![0u8; 1024]),
+            tcp::SocketBuffer::new(vec![0u8; 1024]),
+        ));
+
+        let dialled: SocketAddr = "198.51.100.9:443".parse().unwrap();
+        let key = FlowKey::new(
+            PROTO_TCP,
+            "10.0.0.2".parse().unwrap(),
+            dialled.ip(),
+            40000,
+            dialled.port(),
+        );
+        let mut flow = TcpFlow::new(key, vec![dialled], false, "direct", epoch);
+        // As `promote_accepted` leaves a flow it could not name.
+        flow.hello = Some(Vec::new());
+        relay.flows.insert(handle, flow);
+
+        (relay, planner, Stats::default(), handle)
+    }
+
+    /// The name the kernel could not get from DNS, taken from the client itself.
+    ///
+    /// The hello is built by `watt-net`'s probe — an independent implementation,
+    /// written to ask a *server* for its certificate rather than to be read. Two
+    /// separately written halves agreeing is evidence about the wire format; a
+    /// shared test helper would be evidence about the helper.
+    #[test]
+    fn the_client_hello_names_the_flow_the_dns_never_did() {
+        let mut flow = flow_with(&["203.0.113.1"], "placeholder.example");
+        flow.host = None;
+        flow.hello = Some(Vec::new());
+
+        flow.watch_handshake(&watt_net::probe::debug_hello("t.example"));
+
+        assert_eq!(flow.sni_pending.as_deref(), Some("t.example"));
+        assert!(
+            !flow.watching_handshake(),
+            "the client's bytes are released once they have been read"
+        );
+    }
+
+    #[test]
+    fn a_hello_split_across_segments_is_waited_for_rather_than_abandoned() {
+        // A TLS record is one logical unit and TCP may split it anywhere. Treating
+        // the first fragment as "no name here" would lose the name for a client
+        // that was about to send it.
+        let hello = watt_net::probe::debug_hello("t.example");
+        let cut = hello.len() / 2;
+        let mut flow = flow_with(&["203.0.113.1"], "placeholder.example");
+        flow.host = None;
+        flow.hello = Some(Vec::new());
+
+        flow.watch_handshake(&hello[..cut]);
+        assert!(flow.watching_handshake(), "half a hello is not an answer");
+        assert_eq!(flow.sni_pending, None);
+
+        flow.watch_handshake(&hello[cut..]);
+        assert_eq!(flow.sni_pending.as_deref(), Some("t.example"));
+    }
+
+    #[test]
+    fn a_stream_that_will_never_have_a_name_stops_being_watched() {
+        // Holding the client's bytes for a name that is not coming would keep them
+        // for the life of the flow. Both of these are answers, not pauses.
+        for opening in [b"GET / HTTP/1.1\r\n".as_slice(), &[0x17, 0x03, 0x03, 0x00, 0x10]] {
+            let mut flow = flow_with(&["203.0.113.1"], "placeholder.example");
+            flow.host = None;
+            flow.hello = Some(Vec::new());
+
+            flow.watch_handshake(opening);
+
+            assert!(!flow.watching_handshake(), "{opening:?} is not a ClientHello");
+            assert_eq!(flow.sni_pending, None);
+        }
+    }
+
+    #[test]
+    fn a_name_read_from_the_handshake_re_plans_the_flow_and_closes_the_old_race() {
+        let (mut relay, mut planner, mut stats, handle) = blind_flow();
+        let now = Instant::now();
+        // A dial to the address the client chose, in flight and about to be
+        // abandoned. Nothing has been written to it, so closing it is a bare FIN.
+        let dial = dialing_upstream(UNROUTABLE.parse().unwrap(), now);
+        let dial_fd = dial.socket.raw_fd();
+        relay.insert_upstream(handle, dial);
+        {
+            let flow = relay.flows.get_mut(&handle).expect("inserted above");
+            flow.next_candidate = 1;
+            flow.sni_pending = Some("t.example".to_string());
+        }
+
+        assert!(relay.adopt_handshake_name(handle, now, &mut planner, &mut stats));
+
+        let flow = &relay.flows[&handle];
+        assert_eq!(flow.host.as_deref(), Some("t.example"));
+        assert!(flow.steered, "the flow now follows a rule");
+        assert_eq!(flow.reason, "rule-addresses");
+        assert_eq!(
+            flow.candidates,
+            vec!["203.0.113.10:443".parse::<SocketAddr>().unwrap()]
+        );
+        assert_eq!(flow.next_candidate, 0, "the new race starts from the front");
+        assert!(flow.winner.is_none());
+        assert!(flow.upstreams.is_empty(), "the dial to the wrong address is gone");
+        assert!(
+            !relay.fd_index.contains_key(&dial_fd),
+            "and its descriptor is released with it"
+        );
+        assert_eq!(relay.dialing, 0);
+        assert_eq!(stats.flows_named_by_sni, 1);
+    }
+
+    #[test]
+    fn a_name_is_not_adopted_once_a_byte_has_reached_an_upstream() {
+        // Past that point the client is in a conversation with one server, and
+        // moving the flow would splice two of them into a stream neither agreed to.
+        // The name is still worth recording — the attribution log is keyed on it —
+        // but the route must not move.
+        let (mut relay, mut planner, mut stats, handle) = blind_flow();
+        {
+            let flow = relay.flows.get_mut(&handle).expect("inserted above");
+            flow.bytes_to_upstream = 7;
+            flow.sni_pending = Some("t.example".to_string());
+        }
+
+        assert!(!relay.adopt_handshake_name(handle, Instant::now(), &mut planner, &mut stats));
+
+        let flow = &relay.flows[&handle];
+        assert_eq!(flow.host.as_deref(), Some("t.example"));
+        assert_eq!(flow.candidates, vec!["198.51.100.9:443".parse::<SocketAddr>().unwrap()]);
+        assert!(!flow.steered);
+        assert_eq!(stats.flows_named_by_sni, 0);
+    }
+
+    #[test]
+    fn a_name_the_rule_set_does_not_cover_leaves_the_route_alone() {
+        let (mut relay, mut planner, mut stats, handle) = blind_flow();
+        relay.flows.get_mut(&handle).expect("inserted above").sni_pending =
+            Some("nowhere.example".to_string());
+
+        assert!(!relay.adopt_handshake_name(handle, Instant::now(), &mut planner, &mut stats));
+
+        assert_eq!(
+            relay.flows[&handle].candidates,
+            vec!["198.51.100.9:443".parse::<SocketAddr>().unwrap()]
+        );
+        assert_eq!(stats.flows_named_by_sni, 0);
+    }
+
+    #[test]
+    fn a_name_that_names_the_rule_the_address_already_implied_is_not_re_dialled() {
+        // `plan_for_ip` steered the flow from the address alone, with no name. The
+        // handshake then confirms the same rule — so the candidates are already the
+        // ones the name would produce, and restarting the race would cost the client
+        // a handshake for nothing.
+        let (mut relay, mut planner, mut stats, handle) = blind_flow();
+        {
+            let flow = relay.flows.get_mut(&handle).expect("inserted above");
+            flow.rule_key = Some(0);
+            flow.sni_pending = Some("t.example".to_string());
+        }
+
+        assert!(!relay.adopt_handshake_name(handle, Instant::now(), &mut planner, &mut stats));
+
+        assert_eq!(stats.flows_named_by_sni, 0);
+        assert_eq!(
+            relay.flows[&handle].candidates,
+            vec!["198.51.100.9:443".parse::<SocketAddr>().unwrap()]
+        );
+    }
+
+    /// Make `close` on `stream` send a reset instead of a FIN.
+    ///
+    /// `SO_LINGER` with a zero timeout is the only portable way to ask for this
+    /// from userspace. A plain close would look like a clean end of stream and
+    /// never reach the error arm the test below is about.
+    fn reset_on_close(stream: &std::net::TcpStream) {
+        use std::os::unix::io::AsRawFd;
+        let linger = libc::linger {
+            l_onoff: 1,
+            l_linger: 0,
+        };
+        // SAFETY: `stream` owns an open descriptor, and `linger` is the value
+        // `SO_LINGER` expects, at its own size.
+        let result = unsafe {
+            libc::setsockopt(
+                stream.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_LINGER,
+                (&linger as *const libc::linger).cast::<libc::c_void>(),
+                std::mem::size_of::<libc::linger>() as libc::socklen_t,
+            )
+        };
+        assert_eq!(result, 0, "SO_LINGER: {}", std::io::Error::last_os_error());
+    }
+
+    /// A reset from a real peer must reach the attribution path.
+    ///
+    /// The tests above assert the *judgement*; this one asserts the wiring — that
+    /// a reset arriving from an actual socket is what `move_bytes` sees as a
+    /// non-retryable error, and that it is reported as a cut rather than being
+    /// folded into `upstream_eof` and lost, which is what it did before this
+    /// existed. An arm nothing ever enters looks exactly like a working one in
+    /// the log, so it has to be driven by something real at least once.
+    #[test]
+    fn a_real_reset_is_attributed_to_the_flow_it_cut() {
+        let (listener, addr) = live_listener();
+        let up = connected_upstream(addr);
+        let (server, _) = listener.accept().unwrap();
+
+        let (mut relay, _planner, handle) = relay_with_window(vec![up], vec![addr]);
+        {
+            let flow = relay.flows.get_mut(&handle).unwrap();
+            flow.winner = Some(0);
+            // Stand in for the client's first bytes having gone out. Without this
+            // the cut would be judged "nothing ever happened" rather than "the
+            // dial succeeded", which is the whole distinction being tested.
+            flow.sent_any = true;
+            flow.bytes_to_upstream = 517;
+        }
+
+        reset_on_close(&server);
+        drop(server);
+
+        // Wait for the reset to be observable on the client descriptor. Without
+        // this wait the first `move_bytes` could run before it arrived, see a
+        // healthy socket, and the test would pass or fail for the wrong reason.
+        let fd = relay.flows[&handle].upstreams[0].socket.raw_fd();
+        poll_until(fd, libc::POLLIN, Duration::from_secs(5));
+
+        let mut stats = Stats::default();
+        let mut scratch = vec![0u8; RELAY_CHUNK];
+        relay.move_bytes(handle, Instant::now(), &mut scratch, &mut stats);
+
+        let flow = &relay.flows[&handle];
+        assert!(flow.upstream_eof, "a reset must end the upstream direction");
+        assert!(
+            flow.cut_reported,
+            "a reset from a real peer must be attributed, not silently dropped"
+        );
+    }
+
     /// Record a settled verdict without running a probe.
     fn settle(verdicts: &Verdicts, host: &str, ip: &str, covers: bool) {
         verdicts.put_for_test(
@@ -2388,6 +3506,7 @@ mod tests {
             connect_ready: false,
             started_at: Instant::now(),
             failed: false,
+            handshake: None,
         });
     }
 
@@ -2462,6 +3581,7 @@ mod tests {
             connect_ready: !connecting,
             started_at,
             failed: false,
+            handshake: None,
         }
     }
 
@@ -2479,10 +3599,11 @@ mod tests {
         let stuck = dialing_upstream(UNROUTABLE.parse().unwrap(), started);
         let (mut relay, mut planner, handle) =
             relay_with_window(vec![stuck], vec![UNROUTABLE.parse().unwrap()]);
+        let mut stats = Stats::default();
 
         // A tick right after the launch: `SO_ERROR` is 0, but the dial has not
         // finished, so it must not be taken as a win.
-        relay.retire_dials(handle, started, &mut planner);
+        relay.retire_dials(handle, started, &mut planner, &mut stats);
         assert!(
             relay.flows[&handle].winner.is_none(),
             "a dial still in SYN_SENT is not a winner"
@@ -2494,7 +3615,7 @@ mod tests {
         );
 
         // Past the budget it is retired as a timeout, still never promoted.
-        relay.retire_dials(handle, started + Duration::from_secs(30), &mut planner);
+        relay.retire_dials(handle, started + Duration::from_secs(30), &mut planner, &mut stats);
         assert!(relay.flows[&handle].winner.is_none());
         assert!(
             relay.flows[&handle].upstreams.is_empty(),
@@ -2520,8 +3641,9 @@ mod tests {
             vec![stuck, live],
             vec![UNROUTABLE.parse().unwrap(), live_target],
         );
+        let mut stats = Stats::default();
 
-        relay.retire_dials(handle, started + Duration::from_millis(1), &mut planner);
+        relay.retire_dials(handle, started + Duration::from_millis(1), &mut planner, &mut stats);
         let flow = &relay.flows[&handle];
         assert_eq!(
             flow.winner_target(),
@@ -2684,6 +3806,7 @@ mod tests {
             connect_ready: true,
             started_at: Instant::now(),
             failed: false,
+            handshake: None,
         }
     }
 
@@ -2776,6 +3899,33 @@ mod tests {
             } else {
                 None
             }
+        }
+
+        /// Whether the dial window is empty, counting a flow that is already gone
+        /// as empty.
+        ///
+        /// A flow whose last dial is retired with nothing won is marked `failed`,
+        /// and the reaper collects it in the same step — so "the window is empty"
+        /// and "the flow is gone" are the same observation one tick apart. A test
+        /// that waits for the former has to survive the latter, and indexing
+        /// `flows` would panic on exactly the tick that matters.
+        fn window_is_empty(&self) -> bool {
+            self.relay
+                .flows
+                .get(&self.handle)
+                .map(|flow| flow.upstreams.is_empty())
+                .unwrap_or(true)
+        }
+
+        /// Whether the flow has settled on an upstream, counting a flow that is
+        /// already gone as not settled. The companion to `window_is_empty`, and
+        /// for the same reason.
+        fn has_winner(&self) -> bool {
+            self.relay
+                .flows
+                .get(&self.handle)
+                .map(|flow| flow.winner.is_some())
+                .unwrap_or(false)
         }
 
         /// One engine-like tick: report every finished dial the way the poll loop
@@ -2948,8 +4098,8 @@ mod tests {
                     connect_ready: false,
                     started_at: now,
                     failed: false,
-                },
-                Upstream {
+                    handshake: None,
+                },                Upstream {
                     socket: done,
                     target,
                     candidate_index: 1,
@@ -2957,12 +4107,14 @@ mod tests {
                     connect_ready: true,
                     started_at: now,
                     failed: false,
+                    handshake: None,
                 },
             ],
             vec![stuck_target, target],
         );
+        let mut stats = Stats::default();
 
-        relay.retire_dials(handle, now, &mut planner);
+        relay.retire_dials(handle, now, &mut planner, &mut stats);
 
         let flow = &relay.flows[&handle];
         assert_eq!(
@@ -3301,5 +4453,370 @@ mod tests {
              captures the kernel's own upstream traffic"
         );
         let _ = listener.accept();
+    }
+
+    // -----------------------------------------------------------------------
+    // The upstream exit.
+    //
+    // Every test here talks to a real SOCKS5 server on loopback, because the part
+    // of this that can silently be wrong is the part no canned byte string can
+    // see: the relay has to drive a handshake over a socket it is about to treat
+    // as a tunnel, and it has to stop at exactly the last byte of the reply.
+    // -----------------------------------------------------------------------
+
+    /// A SOCKS5 success reply: version, success, reserved, IPv4 bound address.
+    const SOCKS5_OK: [u8; 10] = [0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, 0x1f, 0x90];
+
+    /// A SOCKS5 refusal: `REP = 0x05`, "connection refused by the destination".
+    const SOCKS5_REFUSED: [u8; 10] = [0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0];
+
+    /// The CONNECT request the relay must send for [`proxied_destination`]:
+    /// version, CONNECT, reserved, IPv4, `203.0.113.7`, port 443.
+    const SOCKS5_REQUEST: [u8; 10] = [0x05, 0x01, 0x00, 0x01, 203, 0, 113, 7, 0x01, 0xbb];
+
+    /// The greeting the relay must open with: SOCKS5, one method, "no auth".
+    const SOCKS5_GREETING: [u8; 3] = [0x05, 0x01, 0x00];
+
+    /// The address the proxy tests ask for.
+    ///
+    /// TEST-NET-3 is public by every predicate the relay applies — so the flow is
+    /// proxied — and routable nowhere, which is the point: the proxy is the far
+    /// end and the destination is never dialled by this host.
+    fn proxied_destination() -> SocketAddr {
+        SocketAddr::from((Ipv4Addr::new(203, 0, 113, 7), 443))
+    }
+
+    /// A one-connection SOCKS5 proxy on loopback that then becomes the far end of
+    /// the tunnel.
+    ///
+    /// `reply` is the whole CONNECT reply and `early` is written in the **same
+    /// call** as it, so the two arrive in one segment. That is the entire reason
+    /// this is a socket and not a canned byte string: a handshake that read a byte
+    /// past the end of its own reply would swallow the start of the tunnel it had
+    /// just opened, and a test that wrote the two separately would never see it.
+    ///
+    /// Everything the proxy is handed is recorded in order, so the caller can
+    /// assert on the greeting, the CONNECT request and the client's payload as one
+    /// uninterrupted stream — which is also how a byte lost in either direction
+    /// shows up.
+    struct Socks5Proxy {
+        address: SocketAddr,
+        seen: Arc<Mutex<Vec<u8>>>,
+        thread: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl Socks5Proxy {
+        /// Start a proxy that answers the CONNECT with `reply` plus `early`, then
+        /// reads `payload` bytes of client traffic and stops.
+        fn start(reply: &'static [u8], early: &'static [u8], payload: usize) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            let recorder = Arc::clone(&seen);
+            let thread = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(10)))
+                    .unwrap();
+                let record = |bytes: &[u8]| recorder.lock().unwrap().extend_from_slice(bytes);
+                let mut greeting = [0u8; SOCKS5_GREETING.len()];
+                stream.read_exact(&mut greeting).unwrap();
+                record(&greeting);
+                stream.write_all(&[0x05, 0x00]).unwrap();
+                let mut request = [0u8; SOCKS5_REQUEST.len()];
+                stream.read_exact(&mut request).unwrap();
+                record(&request);
+                let mut answer = Vec::from(reply);
+                answer.extend_from_slice(early);
+                stream.write_all(&answer).unwrap();
+                // Whatever arrives now is the relay's own traffic, and it has to
+                // be exactly the client's bytes.
+                if payload > 0 {
+                    let mut buf = vec![0u8; payload];
+                    stream.read_exact(&mut buf).unwrap();
+                    record(&buf);
+                }
+                // Hold the socket open briefly. Dropping it here would put a FIN
+                // on the wire that the relay's next read could see before the test
+                // has looked at what it delivered.
+                std::thread::sleep(Duration::from_millis(200));
+            });
+            Self {
+                address,
+                seen,
+                thread: Some(thread),
+            }
+        }
+
+        fn config(&self) -> ProxyConfig {
+            ProxyConfig {
+                kind: ProxyKind::Socks5,
+                address: self.address,
+                username: None,
+                password: None,
+            }
+        }
+
+        /// Join the proxy thread and return everything it was handed, greeting
+        /// first.
+        fn finish(mut self) -> Vec<u8> {
+            self.thread
+                .take()
+                .unwrap()
+                .join()
+                .expect("the proxy thread must not panic");
+            let seen = self.seen.lock().unwrap().clone();
+            seen
+        }
+    }
+
+    /// Tick a race harness until `done`, pausing between ticks.
+    ///
+    /// The proxy answers on its own thread, so a tight loop would run its whole
+    /// tick budget before the reply had been written. The pause is what makes the
+    /// harness wait for a real socket instead of for a clock.
+    fn tick_until<P: Protector>(
+        harness: &mut RaceHarness<P>,
+        mut done: impl FnMut(&RaceHarness<P>) -> bool,
+    ) -> bool {
+        for _ in 0..200 {
+            harness.tick(Duration::from_millis(1));
+            if done(harness) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        false
+    }
+
+    /// Whether a byte queue begins with `prefix`.
+    ///
+    /// `VecDeque` has no `starts_with`, and this is the whole reason it exists.
+    fn begins_with(queue: &VecDeque<u8>, prefix: &[u8]) -> bool {
+        queue.len() >= prefix.len() && queue.iter().zip(prefix).all(|(byte, want)| byte == want)
+    }
+
+    #[test]
+    fn a_proxied_flow_is_carried_by_the_proxy_and_keeps_the_destination_as_its_target() {
+        let proxy = Socks5Proxy::start(&SOCKS5_OK, b"early", 12);
+        let destination = proxied_destination();
+        let mut harness = RaceHarness::new(
+            vec![destination],
+            StackConfig {
+                upstream_proxy: Some(proxy.config()),
+                ..StackConfig::default()
+            },
+            NoProtector,
+        );
+
+        // The reply and the payload behind it arrive in one segment. Delivering
+        // that payload is the whole test: it is the byte a handshake that read one
+        // past its own reply would have eaten, and the symptom would be a session
+        // that works for HTTP and breaks for TLS.
+        let delivered = tick_until(&mut harness, |harness| {
+            begins_with(&harness.flow().to_client, b"early")
+        });
+        assert!(
+            delivered,
+            "the bytes the proxy sent after its reply never reached the client"
+        );
+        assert_eq!(
+            harness.winner(),
+            Some(destination),
+            "the flow is for the destination; the proxy is only how it gets there"
+        );
+        assert_eq!(harness.stats.proxy_handshakes, 1, "one dial, one handshake");
+        assert_eq!(harness.stats.proxy_refusals, 0);
+
+        // Now the other direction: the client's bytes must reach the proxy
+        // untouched, and the CONNECT must have named the destination.
+        {
+            let flow = harness.relay.flows.get_mut(&harness.handle).unwrap();
+            flow.to_upstream.extend(b"hello server");
+        }
+        let mut scratch = vec![0u8; RELAY_CHUNK];
+        harness.relay.move_bytes(
+            harness.handle,
+            harness.now,
+            &mut scratch,
+            &mut harness.stats,
+        );
+
+        let mut expected = Vec::from(SOCKS5_GREETING);
+        expected.extend_from_slice(&SOCKS5_REQUEST);
+        expected.extend_from_slice(b"hello server");
+        assert_eq!(
+            proxy.finish(),
+            expected,
+            "the proxy must be handed the greeting, a CONNECT naming the destination, and \
+             then the client's bytes with nothing added and nothing missing"
+        );
+    }
+
+    #[test]
+    fn a_proxy_that_refuses_the_connect_fails_the_flow_without_blaming_the_destination() {
+        let proxy = Socks5Proxy::start(&SOCKS5_REFUSED, b"", 0);
+        let destination = proxied_destination();
+        let mut harness = RaceHarness::new(
+            vec![destination],
+            StackConfig {
+                upstream_proxy: Some(proxy.config()),
+                ..StackConfig::default()
+            },
+            NoProtector,
+        );
+
+        let emptied = tick_until(&mut harness, |harness| harness.window_is_empty());
+        assert!(emptied, "the refused dial must leave the window");
+        assert!(
+            !harness.has_winner(),
+            "a refused CONNECT is not a win"
+        );
+        assert!(
+            harness.stats.proxy_refusals >= 1,
+            "the refusal must be counted, saw {}",
+            harness.stats.proxy_refusals
+        );
+        assert_eq!(harness.stats.proxy_handshakes, 0);
+
+        // The one thing that must not happen: the proxy's answer written into the
+        // address table as though this host had measured it. `report_failure` cools
+        // an address for a whole cooldown, and a proxy that is down, wants a
+        // password, or forbids this host would cool every address it was asked
+        // about — leaving the direct path quietly degraded for a minute after the
+        // exit is switched off, with nothing in the log to connect the two.
+        assert!(
+            !harness
+                .planner
+                .router()
+                .selector()
+                .is_cooled(destination.ip(), harness.now),
+            "a proxy's refusal was recorded as this host's measurement of the address"
+        );
+        proxy.finish();
+    }
+
+    #[test]
+    fn an_exit_that_never_answers_is_given_up_on_rather_than_waited_on_forever() {
+        // A proxy that accepts the connection and then says nothing is the one
+        // failure that would hold a flow for the life of the tunnel: the connect
+        // succeeded, so nothing else would ever move it along. The handshake shares
+        // the dial's budget for exactly this reason.
+        let silent = TcpListener::bind("127.0.0.1:0").unwrap();
+        let silent_address = silent.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let _held = silent.accept().unwrap();
+            std::thread::sleep(Duration::from_secs(30));
+        });
+
+        let destination = proxied_destination();
+        let mut harness = RaceHarness::new(
+            vec![destination],
+            StackConfig {
+                upstream_proxy: Some(ProxyConfig {
+                    kind: ProxyKind::Socks5,
+                    address: silent_address,
+                    username: None,
+                    password: None,
+                }),
+                ..StackConfig::default()
+            },
+            NoProtector,
+        );
+
+        // The only candidate is also the last hope, so the budget is the full
+        // `connect_timeout`; the steps are sized to cross it.
+        let mut emptied = false;
+        for _ in 0..80 {
+            harness.tick(Duration::from_millis(500));
+            if harness.window_is_empty() {
+                emptied = true;
+                break;
+            }
+        }
+        assert!(
+            emptied,
+            "a proxy that never answers must be given up on, not waited on"
+        );
+        assert!(!harness.has_winner());
+        assert!(
+            harness.stats.proxy_refusals >= 1,
+            "a handshake that never completed must be counted as a refusal, saw {}",
+            harness.stats.proxy_refusals
+        );
+        assert!(
+            !harness
+                .planner
+                .router()
+                .selector()
+                .is_cooled(destination.ip(), harness.now),
+            "a silent proxy must not cool the destination it was asked about"
+        );
+    }
+
+    #[test]
+    fn a_local_destination_is_dialled_directly_even_with_an_exit_configured() {
+        // The gate, from the side that matters most: a rewrite pointing a flow at a
+        // local stub is explicit operator intent, and a stub on loopback is not
+        // reachable through an exit at all. A service on the same LAN is the same
+        // argument — it is not the internet, and it must not leave the device.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let server = listener.local_addr().unwrap();
+        let proxy = Socks5Proxy::start(&SOCKS5_OK, b"", 0);
+
+        let fake_dst: IpAddr = "203.0.113.10".parse().unwrap();
+        let mut harness = Harness::with_config(
+            server,
+            StackConfig {
+                upstream_proxy: Some(proxy.config()),
+                overrides: vec![crate::config::DestinationOverride::endpoint(
+                    fake_dst,
+                    server.port(),
+                    IpAddr::V4(Ipv4Addr::LOCALHOST),
+                    server.port(),
+                )],
+                ..StackConfig::default()
+            },
+        );
+        harness.server_ip = fake_dst;
+
+        let syn_ack = harness.handshake_syn();
+        harness.send(
+            harness.client_seq + 1,
+            syn_ack.seq.wrapping_add(1),
+            packet::TcpFlags {
+                ack: true,
+                ..Default::default()
+            },
+            b"",
+        );
+        for _ in 0..200 {
+            if sole_flow(&harness.relay).winner.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+            let now = harness.now();
+            harness.pump(now);
+        }
+
+        let flow = sole_flow(&harness.relay);
+        assert!(
+            flow.winner.is_some(),
+            "the local target must settle the race on its own"
+        );
+        assert_eq!(flow.winner_target(), Some(server));
+        assert!(
+            flow.upstreams.iter().all(|up| up.handshake.is_none()),
+            "a dial to a local address must not carry a proxy handshake"
+        );
+        assert_eq!(
+            harness.stats.proxy_handshakes, 0,
+            "the exit must not have been used for a local destination"
+        );
+        // And the exit really was not touched, rather than merely unused on paper.
+        listener
+            .accept()
+            .expect("the local target must have been dialled directly");
+        drop(proxy);
     }
 }

@@ -16,3 +16,12 @@ watt-net = { workspace = true }
 watt-rules = { workspace = true }
 # Diagnostics through `log` so the Android shell can route them to logcat.
 log = "0.4"
+# The upstream resolver's transport. `ring` rather than the default `aws-lc-rs`:
+# the latter needs cmake and a full C toolchain, which the Android NDK does not
+# provide, and the two providers are interchangeable here. Both ABIs the app
+# ships were verified to build and link with this pairing before it was added.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+# Trust anchors, compiled in. The device's own store is not reachable from a
+# library that has no platform TLS, and a resolver that cannot verify its
+# endpoint is a resolver that can be impersonated.
+webpki-roots = "0.26"

@@ -3,6 +3,8 @@
 use std::net::IpAddr;
 use std::time::Duration;
 
+use crate::doh::DohEndpoint;
+use crate::upstream_proxy::ProxyConfig;
 use crate::DEFAULT_MTU;
 
 /// A static destination rewrite.
@@ -244,6 +246,48 @@ pub struct StackConfig {
     pub overrides: Vec<DestinationOverride>,
     /// Addresses that must never be relayed, to stop the kernel feeding itself.
     pub excluded_destinations: Vec<IpAddr>,
+
+    /// An upstream proxy every TCP flow is handed to, when one is configured.
+    ///
+    /// This is the only mechanism in the kernel that changes the **path** rather
+    /// than the address. It exists because address choice is measurably not
+    /// enough on some networks: the reset that kills a blocked domain follows the
+    /// name in the client's handshake and not the address it was sent to, so four
+    /// unrelated addresses all fail the same way (`memory/2026-10-02.md` §5.1).
+    /// A proxy that opens the connection from elsewhere is the remaining lever
+    /// that needs neither a root certificate nor a decrypted byte.
+    ///
+    /// `None` — the default — means every flow is dialled directly, which is what
+    /// the kernel did before this existed. There is deliberately no "enabled"
+    /// flag beside the endpoint: a switch that can be on with nothing behind it
+    /// is a control that cannot take effect, and those are not shipped here.
+    ///
+    /// **UDP does not use it.** SOCKS5's UDP association is a second protocol and
+    /// HTTP CONNECT has no UDP at all, so QUIC still goes direct even when a
+    /// proxy is configured. See `udp.rs` for why that is not papered over.
+    pub upstream_proxy: Option<ProxyConfig>,
+
+    /// The resolver that answers names the rule set does not own.
+    ///
+    /// The lever here is the **resolver**, not the encryption. Measured: one
+    /// resolver, three transports — plain UDP/53, plain TCP/53, DoH — returned
+    /// the same forged addresses, so the forgery is produced by the resolver and
+    /// not by the path to it (`memory/2026-10-02.md` §14). What makes a resolver
+    /// worth configuring is that its recursive exit is outside the wall and its
+    /// own name is not blocked; DoH is only how that resolver is spoken to, and
+    /// it is the transport used here because port 53 to a foreign resolver is
+    /// intercepted while 443 is not.
+    ///
+    /// `None` — the default — forwards every query the rule set cannot answer to
+    /// whatever resolver the client chose, which is what the kernel did before
+    /// this existed. As with [`StackConfig::upstream_proxy`] there is
+    /// deliberately no "enabled" flag beside the endpoint: a switch that can be
+    /// on with nothing behind it is a control that cannot take effect.
+    ///
+    /// **Names the rule set owns are unaffected.** A query a rule can answer is
+    /// answered from the rule, and one a rule owns but cannot answer is
+    /// forwarded exactly as before. Only "no rule matched" reaches this.
+    pub dns_upstream: Option<DohEndpoint>,
 }
 
 impl Default for StackConfig {
@@ -297,6 +341,8 @@ impl Default for StackConfig {
             dial_names: true,
             overrides: Vec::new(),
             excluded_destinations: Vec::new(),
+            upstream_proxy: None,
+            dns_upstream: None,
         }
     }
 }
@@ -406,6 +452,77 @@ pub struct Stats {
 
     pub flows_matched_rules: u64,
     pub flows_direct: u64,
+    /// Flows relayed without the kernel knowing which domain they were for.
+    ///
+    /// Every steering mechanism hangs off the name: rule addresses are found by
+    /// looking the destination up in the DNS observation cache, and the
+    /// certificate check needs a name to judge a candidate against. A client that
+    /// resolves over HTTPS — the default in every current browser — never shows
+    /// the kernel a query, so the name is unknown and the flow is relayed blind.
+    ///
+    /// Kept separate from [`Stats::flows_direct`] because the two answer
+    /// different questions. `flows_direct` says no rule matched; this says there
+    /// was nothing to match *against*. A flow can be direct and named (a domain
+    /// the rule set simply does not cover) or steered and unnamed (the client
+    /// dialled a rule address it never looked up through this kernel).
+    pub flows_without_name: u64,
+    /// Flows that opened without a name and then recovered one from the client's
+    /// own TLS handshake.
+    ///
+    /// The subset of [`Stats::flows_without_name`] the handshake rescued. Counted
+    /// separately because the two answer opposite questions: `flows_without_name`
+    /// measures how often the kernel is blind, this measures how much of that
+    /// blindness the handshake removes. Without it the only evidence the recovery
+    /// works is a log line per flow, which is not a rate anyone can read, and the
+    /// only evidence it *fails* is a guess.
+    ///
+    /// A flow is not counted here when the recovered name turns out to name the
+    /// rule the address already implied — that is a recovery with nothing to do.
+    /// The difference between the two counters is the traffic that is still
+    /// relayed blind, and that is the number worth watching.
+    pub flows_named_by_sni: u64,
+
+    /// Handshakes a configured upstream proxy accepted.
+    ///
+    /// Only ever non-zero when [`StackConfig::upstream_proxy`] is set. Counted
+    /// per dial rather than per flow, because a flow that races three candidates
+    /// through the proxy makes three of them — which is the honest number for
+    /// "how much of the proxy's work did we ask for".
+    pub proxy_handshakes: u64,
+    /// Handshakes a configured upstream proxy refused, or that never completed.
+    ///
+    /// Worth separating from `tcp_connect_failures`: this is the proxy answering,
+    /// which means the proxy is reachable and the *request* is the problem — a
+    /// missing credential, a destination its rules forbid, or a destination it
+    /// cannot reach from where it is. That is a different thing to fix, and a
+    /// single combined counter would hide which one is happening.
+    pub proxy_refusals: u64,
+
+    /// Questions handed to the configured upstream resolver.
+    ///
+    /// Only ever non-zero when [`StackConfig::dns_upstream`] is set. The
+    /// denominator for the three below: without it, "the upstream failed" has no
+    /// rate and "it retried" has no base.
+    pub dns_upstream_queries: u64,
+    /// Questions the upstream answered, and whose answer reached the client.
+    pub dns_upstream_answered: u64,
+    /// Questions the upstream used every attempt on and still did not answer.
+    ///
+    /// The client was told nothing. Kept apart from `dns_forwarded` because the
+    /// two are opposite outcomes for the same query: one reached a resolver, the
+    /// other did not reach anything.
+    pub dns_upstream_failed: u64,
+    /// Attempts after the first, across every resolution.
+    ///
+    /// Non-zero is normal — a DoH gateway is measurably unreliable per request
+    /// (Cloudflare answered between 67% and 100% of identical requests within
+    /// one sitting). A value approaching `dns_upstream_queries` means the
+    /// endpoint is barely working, and the retry is the only thing making it
+    /// usable at all.
+    pub dns_upstream_retries: u64,
+    /// Questions the upstream was never offered, because too many resolutions
+    /// were already in flight. Each was forwarded instead.
+    pub dns_upstream_overflowed: u64,
 }
 
 impl Stats {

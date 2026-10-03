@@ -73,6 +73,18 @@ import org.json.JSONObject
  * about one device does not travel inside a file of another device's
  * preferences, so the key is not written.
  *
+ * `upstream_proxy_password` is the third exclusion, and the only one that is a
+ * *secret* rather than a reference or a record. The document is a file the user
+ * exports, copies between devices and may hand to someone else; a proxy password
+ * inside it is a credential leaving the device inside something that does not look
+ * like a credential. [Prefs.restoreDefaults] does reset it — a restored device
+ * should not keep talking to the previous owner's proxy — so it is in the reset
+ * set, and this file simply does not carry it. The cost is stated rather than
+ * hidden: an imported document restores the endpoint, the protocol, the username
+ * and the switch, and leaves the password field empty for the user to fill in,
+ * which is a state the kernel already handles because it treats a half pair as no
+ * credentials at all.
+ *
  * `updateUrl` is the one addition: it is a setting that [Prefs.restoreDefaults]
  * resets, so it is in the reset set too, and it is added explicitly here so the
  * export set stays readable against the rule rather than being inferred. The
@@ -292,6 +304,27 @@ object SettingsBackup {
         int("max_dialing", { it.maxDialing }, { p, v -> p.updateMaxDialing(v) }),
         int("failure_cooldown", { it.failureCooldownSeconds }, { p, v -> p.updateFailureCooldown(v) }),
         bool("dial_names", { it.dialNames }, { p, v -> p.updateDialNames(v) }),
+        // The upstream exit. Four of its five keys travel; the password does not,
+        // and that is the third explicit exception to the membership rule stated
+        // in the class comment — see `Prefs.upstreamProxyPassword`.
+        //
+        // A document with an endpoint and no password imports as exactly what it
+        // is: an exit with no credentials. The kernel already treats a half pair as
+        // no pair (`ProxyConfig::credentials`), so the state is one it knows how to
+        // be in, the settings screen shows the password field empty, and the fix —
+        // type the password — is on the same screen as the symptom.
+        string("upstream_proxy_address", { it.upstreamProxyAddress }, { p, v -> p.updateUpstreamProxyAddress(v) }),
+        string("upstream_proxy_kind", { it.upstreamProxyKind }, { p, v -> p.updateUpstreamProxyKind(v) }),
+        string("upstream_proxy_username", { it.upstreamProxyUsername }, { p, v -> p.updateUpstreamProxyUsername(v) }),
+        bool("upstream_proxy_enabled", { it.upstreamProxyEnabled }, { p, v -> p.updateUpstreamProxyEnabled(v) }),
+        // The upstream resolver: two strings and no switch, because choosing a
+        // resolver *is* turning it on — there is no boolean to carry. Both travel
+        // together, and each is applied against the other half as it stands, so
+        // the pair is whole whichever order the document lists them in. A named
+        // URL with no address is not a resolver, and importing one would leave
+        // the screen reporting an error the file's author never saw.
+        string("dns_upstream_url", { it.dnsUpstreamUrl }, { p, v -> p.updateDnsUpstream(v, p.dnsUpstreamAddress) }),
+        string("dns_upstream_address", { it.dnsUpstreamAddress }, { p, v -> p.updateDnsUpstream(p.dnsUpstreamUrl, v) }),
         int("mtu", { it.mtu }, { p, v -> p.updateMtu(v) }),
         int("connect_timeout", { it.connectTimeoutSeconds }, { p, v -> p.updateConnectTimeout(v) }),
         int("tcp_idle", { it.tcpIdleSeconds }, { p, v -> p.updateTcpIdle(v) }),

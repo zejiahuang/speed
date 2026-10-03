@@ -41,6 +41,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -513,6 +514,236 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
                     hint = autoConnectHint,
                     checked = prefs.autoConnect,
                     onChange = { prefs.updateAutoConnect(it) },
+                )
+            },
+        )
+
+        // --- the upstream exit ------------------------------------------------
+
+        // One row, not five, and that is not a layout preference. The endpoint is
+        // what the enable switch is gated on, so splitting them would let a search
+        // surface the switch with its precondition filtered away — a control whose
+        // reason to exist is off screen. Kept together the row also answers the one
+        // question this setting is about: where does my traffic leave from.
+        //
+        // The endpoint field is read straight from and written straight to `prefs`
+        // rather than through a hoisted `remember`. That is the opposite of the
+        // console's row above, and the reason is the same one: a `remember` inside
+        // a row lambda is positionally unstable, and a plain read of Compose state
+        // has no position to be unstable about.
+        val exitLabel = stringResource(R.string.settings_upstream_proxy)
+        val exitHint = stringResource(R.string.settings_upstream_proxy_hint)
+        val exitAddressLabel = stringResource(R.string.settings_upstream_proxy_address)
+        val exitAddressBad = stringResource(R.string.settings_upstream_proxy_address_invalid)
+        val exitKindLabel = stringResource(R.string.settings_upstream_proxy_kind)
+        val exitUserLabel = stringResource(R.string.settings_upstream_proxy_username)
+        val exitPassLabel = stringResource(R.string.settings_upstream_proxy_password)
+        val exitEnableLabel = stringResource(R.string.settings_upstream_proxy_enable)
+        val exitEnableHint = stringResource(R.string.settings_upstream_proxy_enable_hint)
+        // The error state is "there is text and it is not an endpoint". An empty
+        // field is not an error — it is the state every install starts in — and
+        // marking it red would greet every user with a complaint about a setting
+        // they have not touched.
+        val exitAddressWrong = prefs.upstreamProxyAddress.isNotEmpty() && !prefs.upstreamProxyConfigured
+        // Spelled out on the local so the lambda is inferred as composable; inside
+        // an `if` the slot's expected type alone is not always enough for that. Same
+        // reason as the search field's `clearAction` above.
+        val exitAddressSupport: (@Composable () -> Unit)? = if (exitAddressWrong) {
+            { Text(exitAddressBad) }
+        } else {
+            null
+        }
+        add(
+            SettingsRow(
+                section = SettingsSection.CONNECTION,
+                searchText = listOf(
+                    exitLabel, exitHint, exitAddressLabel, exitKindLabel,
+                    exitUserLabel, exitPassLabel, exitEnableLabel, exitEnableHint,
+                ),
+            ) {
+                Text(
+                    exitLabel,
+                    modifier = Modifier.padding(start = 16.dp, top = 12.dp),
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                Text(
+                    exitHint,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedTextField(
+                    value = prefs.upstreamProxyAddress,
+                    onValueChange = { prefs.updateUpstreamProxyAddress(it) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    singleLine = true,
+                    label = { Text(exitAddressLabel) },
+                    placeholder = { Text("203.0.113.7:1080") },
+                    isError = exitAddressWrong,
+                    supportingText = exitAddressSupport,
+                )
+                // The protocol control is the shared segmented row, which brings its
+                // own 16 dp inset — so nothing here wraps the row in a second one,
+                // or the control would sit 32 dp in while every field above it sits
+                // at 16.
+                DetourSegmentedRow(
+                    label = exitKindLabel,
+                    options = listOf(
+                        Prefs.PROXY_KIND_SOCKS5 to R.string.settings_upstream_proxy_kind_socks5,
+                        Prefs.PROXY_KIND_HTTP_CONNECT to R.string.settings_upstream_proxy_kind_http,
+                    ),
+                    selected = prefs.upstreamProxyKind,
+                    onSelect = { prefs.updateUpstreamProxyKind(it) },
+                )
+                OutlinedTextField(
+                    value = prefs.upstreamProxyUsername,
+                    onValueChange = { prefs.updateUpstreamProxyUsername(it) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    singleLine = true,
+                    label = { Text(exitUserLabel) },
+                )
+                OutlinedTextField(
+                    value = prefs.upstreamProxyPassword,
+                    onValueChange = { prefs.updateUpstreamProxyPassword(it) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 16.dp, end = 16.dp, top = 8.dp),
+                    singleLine = true,
+                    label = { Text(exitPassLabel) },
+                    visualTransformation = PasswordVisualTransformation(),
+                )
+                // The switch, and only once the endpoint is one the kernel can dial.
+                // This is the whole gate: with the address blank, or a name, or
+                // missing a port, there is no control to turn on rather than a
+                // control that turns on and does nothing. The flag behind it is kept
+                // across the address being cleared, so retyping the same endpoint
+                // comes back with the exit still on — and `Prefs.upstreamProxyActive`
+                // makes the blank case off regardless of what the flag says, so the
+                // hidden state can never be "on with nothing proxied".
+                if (prefs.upstreamProxyConfigured) {
+                    DetourToggleRow(
+                        label = exitEnableLabel,
+                        hint = exitEnableHint,
+                        checked = prefs.upstreamProxyEnabled,
+                        onChange = { prefs.updateUpstreamProxyEnabled(it) },
+                    )
+                }
+            },
+        )
+
+        // The upstream resolver. A chip row, not a switch, and the difference is
+        // the whole point of the setting: the measurement behind it
+        // (`memory/2026-10-02.md` §14) held the resolver fixed and varied only
+        // the transport — plain UDP/53, plain TCP/53, DoH — and got the same
+        // forged addresses all three times. The forgery is made by the resolver,
+        // not by the path to it, so a switch labelled "DoH" would be selling the
+        // wrong variable. What is chosen here is *which resolver answers*, and
+        // DoH is only how it is spoken to.
+        //
+        // It sits next to the exit because both answer "where does this leave
+        // from", and they are independent: the exit is for names whose SNI is
+        // blocked, this is for names whose answer is forged. A user may want
+        // either, both, or neither.
+        val resolverLabel = stringResource(R.string.settings_dns_upstream)
+        val resolverHint = stringResource(R.string.settings_dns_upstream_hint)
+        val resolverNoneLabel = stringResource(R.string.settings_dns_upstream_none)
+        val resolverUrlLabel = stringResource(R.string.settings_dns_upstream_url)
+        val resolverUrlHint = stringResource(R.string.settings_dns_upstream_url_hint)
+        val resolverUrlBad = stringResource(R.string.settings_dns_upstream_url_invalid)
+        val resolverAddressLabel = stringResource(R.string.settings_dns_upstream_address)
+        val resolverAddressHint = stringResource(R.string.settings_dns_upstream_address_hint)
+        // Which chip is lit is *derived* from the stored pair rather than
+        // remembered beside it, so the stored URL stays the single source of
+        // truth: a chip that claimed a selection the kernel would not act on is
+        // exactly the "control that cannot take effect" this screen exists to
+        // avoid. A pair matching no preset is a custom endpoint, and then no chip
+        // is lit — which is the honest reading, not a missing selection.
+        val resolverPreset = Prefs.DNS_UPSTREAM_PRESETS.firstOrNull {
+            it.url == prefs.dnsUpstreamUrl && it.address == prefs.dnsUpstreamAddress
+        }
+        val resolverSelected = when {
+            resolverPreset != null -> resolverPreset.id
+            prefs.dnsUpstreamUrl.isEmpty() -> ""
+            else -> "custom"
+        }
+        // "There is text and it is not an endpoint". An empty field is not an
+        // error — it is the state every install starts in — and marking it red
+        // would greet every user with a complaint about a setting they have not
+        // touched.
+        val resolverWrong = prefs.dnsUpstreamUrl.isNotEmpty() && !prefs.dnsUpstreamConfigured
+        val resolverSupport: (@Composable () -> Unit)? = if (resolverWrong) {
+            { Text(resolverUrlBad) }
+        } else {
+            null
+        }
+        add(
+            SettingsRow(
+                section = SettingsSection.CONNECTION,
+                searchText = buildList {
+                    add(resolverLabel)
+                    add(resolverHint)
+                    add(resolverNoneLabel)
+                    Prefs.DNS_UPSTREAM_PRESETS.forEach { add(stringResource(it.labelRes)) }
+                    add(resolverUrlLabel)
+                    add(resolverUrlHint)
+                    add(resolverAddressLabel)
+                    add(resolverAddressHint)
+                },
+            ) {
+                DetourChoiceRow(
+                    label = resolverLabel,
+                    hint = resolverHint,
+                    options = buildList {
+                        add("" to R.string.settings_dns_upstream_none)
+                        Prefs.DNS_UPSTREAM_PRESETS.forEach { add(it.id to it.labelRes) }
+                    },
+                    selected = resolverSelected,
+                    onSelect = { id ->
+                        // Every branch is the same single write, so a preset and
+                        // a hand-typed endpoint cannot take different paths into
+                        // the setting. `""` is "the client's own resolver", which
+                        // is both the first chip and the cleared state.
+                        val preset = Prefs.DNS_UPSTREAM_PRESETS.firstOrNull { it.id == id }
+                        when {
+                            id.isEmpty() -> prefs.updateDnsUpstream("", "")
+                            preset != null -> prefs.updateDnsUpstream(preset.url, preset.address)
+                            // The custom chip is derived, never rendered, so this
+                            // arm is unreachable — kept so a future chip cannot
+                            // silently do nothing.
+                            else -> Unit
+                        }
+                    },
+                )
+                OutlinedTextField(
+                    value = prefs.dnsUpstreamUrl,
+                    onValueChange = { prefs.updateDnsUpstream(it, prefs.dnsUpstreamAddress) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    singleLine = true,
+                    label = { Text(resolverUrlLabel) },
+                    placeholder = { Text("https://1.1.1.1/dns-query") },
+                    supportingText = resolverSupport,
+                    isError = resolverWrong,
+                )
+                // Drawn unconditionally rather than only for a named endpoint.
+                // Whether a name needs this is a property of the URL, and hiding
+                // the field would mean the state changed shape under the user's
+                // fingers as they typed the authority — the one moment they need
+                // to see where it goes. The hint says when it matters.
+                OutlinedTextField(
+                    value = prefs.dnsUpstreamAddress,
+                    onValueChange = { prefs.updateDnsUpstream(prefs.dnsUpstreamUrl, it) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 16.dp, end = 16.dp, top = 8.dp),
+                    singleLine = true,
+                    label = { Text(resolverAddressLabel) },
+                    supportingText = { Text(resolverAddressHint) },
                 )
             },
         )

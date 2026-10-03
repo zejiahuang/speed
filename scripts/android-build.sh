@@ -40,7 +40,25 @@ fi
 
 export PATH="$HOME/.cargo/bin:$PATH"
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/.cache/watt-target}"
-export "CARGO_TARGET_$(echo "$ANDROID_ABI" | tr 'a-z-' 'A-Z_')_LINKER=$CC"
+
+# Two spellings of the same target, and they are not interchangeable:
+#
+#   * cargo's linker var is upper-cased  -- CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER
+#   * the `cc` crate's compiler var keeps the target as written, with `-` -> `_`
+#     -- CC_aarch64_linux_android
+#
+# `cc` is what a dependency with C sources needs; `ring`, behind the upstream
+# resolver's TLS, is the first such dependency this kernel has had. Exporting
+# only the upper-cased form leaves `cc` with nothing, and it then fails with
+# `failed to find tool "aarch64-linux-android-clang"` — a missing *variable*
+# reported as a missing *compiler*.
+KEY="$(echo "$ANDROID_ABI" | tr '-' '_')"
+KEY_UP="$(echo "$ANDROID_ABI" | tr 'a-z-' 'A-Z_')"
+export "CARGO_TARGET_${KEY_UP}_LINKER=$CC"
+export "CC_${KEY}=$CC"
+export "CXX_${KEY}=$TOOLCHAIN/bin/${ANDROID_ABI}${ANDROID_API}-clang++"
+export "AR_${KEY}=$TOOLCHAIN/bin/llvm-ar"
+# The bare names as well: some build scripts read `AR` before `AR_<target>`.
 export AR="$TOOLCHAIN/bin/llvm-ar"
 
 echo "android-build: target=$ANDROID_ABI api=$ANDROID_API"

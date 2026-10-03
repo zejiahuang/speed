@@ -379,6 +379,24 @@ fun HomeScreen() {
                 DetourKeyValueRow(stringResource(R.string.home_hits_direct), direct.toString())
                 DetourDivider()
                 DetourKeyValueRow(stringResource(R.string.home_hits_live), stats.liveFlows.toString())
+                DetourDivider()
+                // The two rows below answer the question the three above raise when
+                // the ratio is low: a client that resolves over DoH arrives as a
+                // bare address, so the rule set cannot be consulted at all and the
+                // flow is counted as direct whatever the rules say. "无名流量" is
+                // how much of the traffic that was; "其中握手补名" is how much of it
+                // the client's own TLS handshake put back under the rules. Read
+                // together they say whether the tunnel is actually steering, which
+                // the ratio on its own cannot.
+                DetourKeyValueRow(
+                    stringResource(R.string.home_hits_unnamed),
+                    stats.flowsWithoutName.toString(),
+                )
+                DetourDivider()
+                DetourKeyValueRow(
+                    stringResource(R.string.home_hits_named_by_sni),
+                    stats.flowsNamedBySni.toString(),
+                )
             }
         }
 
@@ -737,6 +755,12 @@ private fun DeveloperRows(stats: dev.detour.core.Kernel.Stats) {
         stringResource(R.string.dev_udp_open_evict) to "${stats.udpOpened} / ${stats.udpEvicted}",
         stringResource(R.string.dev_dns_local) to "${stats.dnsAnsweredLocally} / ${stats.dnsQueries}",
         stringResource(R.string.dev_dns_trimmed) to stats.dnsTrimmed.toString(),
+        // Answered over queries, the same shape as the row above. Both stay zero
+        // until an upstream resolver is configured and a query for a name the
+        // rule set does not own actually leaves — which is the whole point of
+        // showing it: it is the only on-screen proof the resolver is in use.
+        stringResource(R.string.dev_dns_upstream) to
+            "${stats.dnsUpstreamAnswered} / ${stats.dnsUpstreamQueries}",
         stringResource(R.string.dev_live_flows) to stats.liveFlows.toString(),
         stringResource(R.string.dev_packets) to "${stats.packetsIn} / ${stats.packetsOut}",
     )

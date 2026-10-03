@@ -309,6 +309,11 @@ private fun SliderInputDialog(
  * `RulesScreen.kt`'s source-chip row, whose comment records the identical
  * reasoning ("a plain row would push the button off the edge"). Two rows with
  * the same failure mode now have the same answer.
+ *
+ * [hint] exists for the same reason [DetourSegmentedRow] has one: a setting
+ * whose meaning is not obvious from its options needs a line of explanation, and
+ * folding it into the label makes the label long enough that the chips below it
+ * stop reading as its answer.
  */
 @Composable
 fun DetourChoiceRow(
@@ -317,9 +322,17 @@ fun DetourChoiceRow(
     selected: String,
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
+    hint: String? = null,
 ) {
     Column(modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
         Text(label, style = MaterialTheme.typography.bodyLarge)
+        if (hint != null) {
+            Text(
+                hint,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         Spacer(Modifier.height(8.dp))
         Row(
             modifier = Modifier

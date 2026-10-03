@@ -274,6 +274,17 @@ pub extern "system" fn Java_dev_detour_core_Kernel_nativeStats(
         stats.live_flows,
         stats.flows_matched_rules,
         stats.flows_direct,
+        stats.flows_without_name,
+        stats.flows_named_by_sni,
+        // Appended, never inserted: `Kernel.Stats` reads these by index, so a new
+        // counter goes on the end and the two files' orders stay one list.
+        stats.proxy_handshakes,
+        stats.proxy_refusals,
+        stats.dns_upstream_queries,
+        stats.dns_upstream_answered,
+        stats.dns_upstream_failed,
+        stats.dns_upstream_retries,
+        stats.dns_upstream_overflowed,
     ];
 
     let widened: Vec<jlong> = values.iter().map(|v| *v as jlong).collect();

@@ -153,6 +153,43 @@ object ControlConsole {
             .put("live_flows", stats.liveFlows)
             .put("flows_matched_rules", stats.flowsMatchedRules)
             .put("flows_direct", stats.flowsDirect)
+            // Flows the kernel relayed blind. The gap between this and
+            // `flows_direct` is "no rule covers it"; this counter is "no name was
+            // ever known", which is what a DoH-resolving client produces and what
+            // the SNI recovery exists to close.
+            .put("flows_without_name", stats.flowsWithoutName)
+            // Of those, the ones the client's own TLS handshake named. The two
+            // have to be read together: their difference is the traffic still
+            // relayed blind, and either one alone cannot be judged. A large
+            // `flows_without_name` with a large value here means the recovery is
+            // carrying the DoH case; a large one with a small value here means it
+            // is not, and the next thing to look at is why (no TLS, or a hello
+            // split across segments).
+            .put("flows_named_by_sni", stats.flowsNamedBySni)
+            // The upstream exit, when one is configured. `proxy_handshakes` is the
+            // only proof that the exit is carrying anything: the settings document
+            // and the switch both describe what was asked for, not what happened.
+            // `proxy_refusals` is read against it — a non-zero refusal count means
+            // the exit answered and the problem is the request, while neither
+            // counter moving means it was never reached.
+            .put("proxy_handshakes", stats.proxyHandshakes)
+            .put("proxy_refusals", stats.proxyRefusals)
+            // The upstream resolver, when one is configured. Read exactly like
+            // the exit's pair above: `dns_upstream_queries` is the only proof
+            // that queries are leaving for it — the setting describes what was
+            // asked for, not what happened — and `answered` / `failed` are read
+            // against it. A query that is neither is still in flight.
+            //
+            // `retries` says how intermittent the endpoint is, which is the
+            // number that decides whether the retry loop is doing real work or
+            // papering over a dead endpoint. `overflowed` is a capacity answer,
+            // not a correctness one: each of those was forwarded as it would have
+            // been without a resolver.
+            .put("dns_upstream_queries", stats.dnsUpstreamQueries)
+            .put("dns_upstream_answered", stats.dnsUpstreamAnswered)
+            .put("dns_upstream_failed", stats.dnsUpstreamFailed)
+            .put("dns_upstream_retries", stats.dnsUpstreamRetries)
+            .put("dns_upstream_overflowed", stats.dnsUpstreamOverflowed)
             // The count of TCP flows the kernel refused to relay and answered
             // with a RST. It is the one counter that explains "the tunnel is up
             // but this site does not load": the flow never reached an upstream,
@@ -476,6 +513,37 @@ object ControlConsole {
             .put("max_candidates", prefs.maxCandidates)
             .put("connect_stagger", prefs.connectStaggerMillis)
             .put("dial_names", prefs.dialNames)
+            // The upstream exit. The password is reported as **whether it is set**,
+            // not as its value: `dump` is written to a file for `adb pull` and
+            // echoed to logcat, and a credential has no business in either. A
+            // boolean is still enough to confirm a `set` — the read-back that every
+            // other key gets works here as "set, or not set" — which is the trade
+            // this makes.
+            //
+            // `configured` and `active` are reported as well because they are what
+            // the switch is gated on, and a script cannot compute either without a
+            // second copy of the endpoint parser.
+            .put("upstream_proxy_address", prefs.upstreamProxyAddress)
+            .put("upstream_proxy_kind", prefs.upstreamProxyKind)
+            .put("upstream_proxy_username", prefs.upstreamProxyUsername)
+            .put("upstream_proxy_password_set", prefs.upstreamProxyPassword.isNotEmpty())
+            .put("upstream_proxy_enabled", prefs.upstreamProxyEnabled)
+            .put("upstream_proxy_configured", prefs.upstreamProxyConfigured)
+            .put("upstream_proxy_active", prefs.upstreamProxyActive)
+            // The upstream resolver. Reported unconditionally — unlike the exit's
+            // keys, which only exist while the exit is on — because there is no
+            // switch here to gate them on: the URL *is* the setting, and an empty
+            // one is the real "the client's own resolver" state rather than a
+            // missing key.
+            //
+            // `configured` and `active` are reported as well, for the same reason
+            // the exit reports them: a script cannot compute either without a
+            // second copy of the endpoint parser, and `active` is the one that
+            // says whether a `set` actually produced a resolver.
+            .put("dns_upstream_url", prefs.dnsUpstreamUrl)
+            .put("dns_upstream_address", prefs.dnsUpstreamAddress)
+            .put("dns_upstream_configured", prefs.dnsUpstreamConfigured)
+            .put("dns_upstream_active", prefs.dnsUpstreamActive)
             .put("race_width", prefs.raceWidth)
             .put("race_launch", prefs.raceLaunchMillis)
             .put("max_dialing", prefs.maxDialing)
@@ -583,6 +651,34 @@ object ControlConsole {
             "max_candidates" -> asInt?.let { prefs.updateMaxCandidates(it) } ?: return bad("int")
             "connect_stagger" -> asInt?.let { prefs.updateConnectStagger(it) } ?: return bad("int")
             "dial_names" -> asBool?.let { prefs.updateDialNames(it) } ?: return bad("bool")
+            // The upstream exit. The address takes a plain string like `update_url`
+            // — its setter trims it and stores it as typed, and an endpoint the
+            // kernel cannot dial is a valid state to be in (it just means no exit),
+            // so there is nothing here to reject. The kind is collapsed by its
+            // setter the way `update_channel` is, so a misspelled protocol is a
+            // silent no-op that the read-back catches.
+            //
+            // The password is the one key whose *value* `dump` does not report, so
+            // its read-back is `upstream_proxy_password_set`. A script that sets it
+            // and reads back `true` has confirmed the write; the value itself is
+            // deliberately unreadable from here.
+            "upstream_proxy_address" -> prefs.updateUpstreamProxyAddress(value)
+            "upstream_proxy_kind" -> prefs.updateUpstreamProxyKind(value)
+            "upstream_proxy_username" -> prefs.updateUpstreamProxyUsername(value)
+            "upstream_proxy_password" -> prefs.updateUpstreamProxyPassword(value)
+            "upstream_proxy_enabled" ->
+                asBool?.let { prefs.updateUpstreamProxyEnabled(it) } ?: return bad("bool")
+            // The upstream resolver. Two independent keys rather than one, so a
+            // script can set the address *before* the URL and land on a working
+            // pair — and, just as usefully, set a URL alone and observe that a
+            // named endpoint without an address is not a resolver. That is the
+            // gate worth being able to exercise from a shell, and a single
+            // two-argument key could not express either ordering. Each write
+            // keeps the other half as it stands; whether the pair as a whole took
+            // effect is `dns_upstream_active` in the read-back, never the
+            // command's own reply.
+            "dns_upstream_url" -> prefs.updateDnsUpstream(value, prefs.dnsUpstreamAddress)
+            "dns_upstream_address" -> prefs.updateDnsUpstream(prefs.dnsUpstreamUrl, value)
             // The three racing knobs. They were reachable only by dragging a
             // stepper on a phone screen, which made the one thing worth scripting
             // — the serial-vs-racing rollback — impossible to test from a shell.

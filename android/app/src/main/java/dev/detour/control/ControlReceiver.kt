@@ -20,17 +20,46 @@ import java.io.File
  * release build that any app on the device can tell to connect would be a
  * remote-control surface, not a convenience.
  *
+ * **`-n` is load-bearing, not decoration.** A bare `am broadcast -a <action>` is
+ * an *implicit* broadcast, and since Android 8 a manifest-declared receiver does
+ * not get those: the platform drops it at enqueue and records
+ *
+ * ```text
+ * reason: skipped by policy at enqueue: Background execution not allowed:
+ *         receiving Intent { act=dev.detour.CONTROL } to dev.detour/.control.ControlReceiver
+ * ```
+ *
+ * in `dumpsys activity broadcasts`. Nothing reaches the app, and `am` still
+ * prints `Broadcast completed: result=0` — the same line it prints on success, so
+ * that number cannot be used to tell delivery from refusal. The only judge is
+ * whether `files/control.jsonl` gained a line.
+ *
+ * Measured on the Android 14 emulator, six rounds each, judged by the line count
+ * of `control.jsonl`:
+ *
+ * ```text
+ * bare -a dev.detour.CONTROL                   0/6    dropped at enqueue
+ * -n <component> -a dev.detour.CONTROL         3/3
+ * -p dev.detour -a dev.detour.CONTROL         11/11
+ * -f 0x01000000 -a dev.detour.CONTROL          6/6    FLAG_RECEIVER_INCLUDE_BACKGROUND
+ * ```
+ *
+ * Naming the component (or the package, or the include-background flag) makes the
+ * broadcast explicit and it arrives. The action still has to be present:
+ * `onReceive` returns early without it, so `-n <component>` on its own is
+ * delivered and then silently ignored — which looks exactly like a dead receiver.
+ *
  * ```bash
- * adb shell am broadcast -a dev.detour.CONTROL --es cmd status
- * adb shell am broadcast -a dev.detour.CONTROL --es cmd connect
- * adb shell am broadcast -a dev.detour.CONTROL --es cmd disconnect
- * adb shell am broadcast -a dev.detour.CONTROL --es cmd mode --es value vpn
- * adb shell am broadcast -a dev.detour.CONTROL --es cmd rules --es value refresh
- * adb shell am broadcast -a dev.detour.CONTROL --es cmd rules --es value add:https://example.com/hosts --es key 我的源
- * adb shell am broadcast -a dev.detour.CONTROL --es cmd rules --es value remove:custom:https://example.com/hosts
- * adb shell am broadcast -a dev.detour.CONTROL --es cmd log --es value clear
- * adb shell am broadcast -a dev.detour.CONTROL --es cmd set --es key dark_mode --es value always
- * adb shell am broadcast -a dev.detour.CONTROL --es cmd dump
+ * adb shell am broadcast -n dev.detour/.control.ControlReceiver -a dev.detour.CONTROL --es cmd status
+ * adb shell am broadcast -n dev.detour/.control.ControlReceiver -a dev.detour.CONTROL --es cmd connect
+ * adb shell am broadcast -n dev.detour/.control.ControlReceiver -a dev.detour.CONTROL --es cmd disconnect
+ * adb shell am broadcast -n dev.detour/.control.ControlReceiver -a dev.detour.CONTROL --es cmd mode --es value vpn
+ * adb shell am broadcast -n dev.detour/.control.ControlReceiver -a dev.detour.CONTROL --es cmd rules --es value refresh
+ * adb shell am broadcast -n dev.detour/.control.ControlReceiver -a dev.detour.CONTROL --es cmd rules --es value add:https://example.com/hosts --es key 我的源
+ * adb shell am broadcast -n dev.detour/.control.ControlReceiver -a dev.detour.CONTROL --es cmd rules --es value remove:custom:https://example.com/hosts
+ * adb shell am broadcast -n dev.detour/.control.ControlReceiver -a dev.detour.CONTROL --es cmd log --es value clear
+ * adb shell am broadcast -n dev.detour/.control.ControlReceiver -a dev.detour.CONTROL --es cmd set --es key dark_mode --es value always
+ * adb shell am broadcast -n dev.detour/.control.ControlReceiver -a dev.detour.CONTROL --es cmd dump
  * ```
  *
  * **Reading the answer.** A broadcast cannot return one, so every command writes

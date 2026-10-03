@@ -202,6 +202,66 @@ impl Planner {
         }
     }
 
+    /// Decide where to connect for a flow whose domain is already known.
+    ///
+    /// The counterpart of [`Planner::decide`] for the one case `decide` cannot
+    /// serve: the client resolved somewhere this kernel never saw, so the address
+    /// it dialled identifies nothing, and the domain arrives instead from the
+    /// client's own TLS handshake (see [`crate::sni`]).
+    ///
+    /// It differs from `decide` in what it does *not* do. There is no
+    /// observation-cache step, because the name is not being recovered from an
+    /// address — it is the input. And there is no address-ownership step, because
+    /// that step exists to guess a name from an address, which is no longer
+    /// necessary. What remains is the rule lookup itself.
+    ///
+    /// A name the rule set does not cover produces a `Direct` decision, and the
+    /// caller must treat that as "leave the flow where it is" rather than "connect
+    /// to `requested`": the address is still the client's, but the flow is
+    /// mid-flight and re-dialling it to where it was already going would cost the
+    /// client a handshake for nothing.
+    pub fn decide_by_name(&self, now: Instant, requested: SocketAddr, name: &str) -> Decision {
+        let family = Family::of(requested.ip());
+
+        // Rewrites stay keyed by address and keep their precedence: the client
+        // dialled this address, so an operator's rewrite of it still applies, and
+        // an override is explicit intent that a recovered name must not undo.
+        if let Some((addr, port)) = self
+            .overrides
+            .iter()
+            .find_map(|entry| entry.apply(requested.ip(), requested.port()))
+        {
+            return Decision {
+                target: SocketAddr::new(addr, port),
+                requested,
+                plan: Plan::direct(),
+                alternatives: Vec::new(),
+                overridden: true,
+            };
+        }
+
+        let plan = self.router.plan(now, name, family);
+        if plan.strategy == Strategy::RuleAddresses && !plan.addresses.is_empty() {
+            let mut addresses = plan.addresses.clone();
+            let first = addresses.remove(0);
+            return Decision {
+                target: SocketAddr::new(first, requested.port()),
+                requested,
+                plan,
+                alternatives: addresses,
+                overridden: false,
+            };
+        }
+
+        Decision {
+            target: requested,
+            requested,
+            plan,
+            alternatives: Vec::new(),
+            overridden: false,
+        }
+    }
+
     /// True when `addr` must not be used as a rule candidate.
     ///
     /// Used for the fallback addresses a rule supplies. A rule listing a loopback
@@ -403,6 +463,65 @@ mod tests {
         );
     }
 
+
+    #[test]
+    fn a_name_recovered_from_the_handshake_finds_the_rule_the_address_could_not() {
+        // The DNS-over-HTTPS case end to end: nothing was observed, and the
+        // address the client dialled belongs to no rule — so `decide` can only
+        // relay it blind. The name comes from the client's own handshake, and
+        // with it the rule is reachable again.
+        let planner = planner();
+        let now = Instant::now();
+
+        let blind = planner.decide(now, v4(99, 443));
+        assert!(!blind.is_steered(), "the address alone identifies nothing");
+
+        let named = planner.decide_by_name(now, v4(99, 443), "cdn.example");
+        assert!(named.is_steered());
+        assert_eq!(named.reason(), "rule-addresses");
+        assert_eq!(named.target, v4(10, 443));
+        assert_eq!(
+            named.alternatives,
+            vec![IpAddr::V4(Ipv4Addr::new(203, 0, 113, 20))]
+        );
+        assert_eq!(named.requested, v4(99, 443), "the client's address is kept");
+    }
+
+    #[test]
+    fn a_name_no_rule_covers_leaves_the_flow_alone() {
+        // The caller must be able to tell "nothing to re-plan" from "re-plan to
+        // where it already was". Only the first of those is true here.
+        let planner = planner();
+        let decision = planner.decide_by_name(Instant::now(), v4(99, 443), "unknown.example");
+        assert!(!decision.is_steered());
+        assert_eq!(decision.reason(), "direct");
+        assert!(decision.alternatives.is_empty());
+    }
+
+    #[test]
+    fn a_rewrite_outranks_a_recovered_name() {
+        // An override is explicit operator intent, and the operator wrote it
+        // against the address the client dialled. A name read off the wire is not
+        // a reason to undo it.
+        let rules = RuleSet::from_str(DOC, RuleSource::Provided).unwrap();
+        let config = StackConfig::default().with_override(
+            crate::config::DestinationOverride::endpoint(
+                IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)),
+                443,
+                IpAddr::V4(Ipv4Addr::new(10, 99, 99, 1)),
+                8443,
+            ),
+        );
+        let planner = Planner::new(Router::new(rules), &config);
+
+        let decision = planner.decide_by_name(Instant::now(), v4(10, 443), "cdn.example");
+        assert!(decision.overridden);
+        assert_eq!(decision.reason(), "override");
+        assert_eq!(
+            decision.target,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 99, 99, 1)), 8443)
+        );
+    }
 
     #[test]
     fn overrides_take_precedence_over_rules() {
