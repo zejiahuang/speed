@@ -333,6 +333,7 @@ core-rs/            内核（Rust workspace）
 android/            Android 壳层（Kotlin + Jetpack Compose）
 scripts/            构建入口：编内核 `.so` 与打包 APK 的两个脚本
 assets/             README 里的示意图
+tools/              DoH 探针：同一个解析器问两次（明文 UDP/53 与 DoH），对比两次的答案
 ```
 
 `assets/` 里每张图都有浅色与深色两套（`*-light.svg` / `*-dark.svg`），README 用

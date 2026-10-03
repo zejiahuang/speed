@@ -1,0 +1,711 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DoH 探测 · 真的发查询</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --panel: #f6f6f7;
+    --panel-2: #ececee;
+    --border: #dcdce0;
+    --text: #1a1a1c;
+    --muted: #6b6b73;
+    --faint: #9a9aa2;
+    --accent: #2563eb;
+    --ok: #1a7f4b;
+    --ok-bg: #e8f5ee;
+    --bad: #c0392b;
+    --bad-bg: #fdeceb;
+    --warn: #8a6100;
+    --warn-bg: #fdf3dd;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  html[data-theme="dark"] {
+    --bg: #161719;
+    --panel: #1e2023;
+    --panel-2: #26282c;
+    --border: #34373c;
+    --text: #ececee;
+    --muted: #9a9aa2;
+    --faint: #6e7076;
+    --accent: #6ea8fe;
+    --ok: #56d364;
+    --ok-bg: #16281c;
+    --bad: #ff7b72;
+    --bad-bg: #2c1a1a;
+    --warn: #e3b341;
+    --warn-bg: #2b2415;
+  }
+  @media (prefers-color-scheme: dark) {
+    html:not([data-theme="light"]) {
+      --bg: #161719;
+      --panel: #1e2023;
+      --panel-2: #26282c;
+      --border: #34373c;
+      --text: #ececee;
+      --muted: #9a9aa2;
+      --faint: #6e7076;
+      --accent: #6ea8fe;
+      --ok: #56d364;
+      --ok-bg: #16281c;
+      --bad: #ff7b72;
+      --bad-bg: #2c1a1a;
+      --warn: #e3b341;
+      --warn-bg: #2b2415;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; }
+  header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 4px; }
+  h1 { font-size: 19px; font-weight: 600; margin: 0; }
+  .sub { color: var(--muted); font-size: 13px; margin: 0 0 20px; max-width: 860px; }
+  .sub code { font-family: var(--mono); font-size: 12px; background: var(--panel-2); padding: 1px 5px; border-radius: 4px; }
+  #theme {
+    margin-left: auto; background: var(--panel); color: var(--muted);
+    border: 1px solid var(--border); border-radius: 8px; padding: 4px 10px;
+    font-size: 12px; cursor: pointer;
+  }
+  section {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px; margin-bottom: 16px;
+  }
+  h2 { font-size: 14px; font-weight: 600; margin: 0 0 12px; }
+  .note { color: var(--muted); font-size: 12px; margin: 0 0 12px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  input[type=text] {
+    flex: 1; min-width: 220px; background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px;
+    font-family: var(--mono); font-size: 12.5px;
+  }
+  input[type=text]:focus { outline: none; border-color: var(--accent); }
+  button {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 7px 13px; font-size: 13px; cursor: pointer;
+  }
+  button:hover { border-color: var(--faint); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 500; }
+  html[data-theme="dark"] button.primary, html:not([data-theme="light"]) button.primary { color: #0b0b0c; }
+  button:disabled { opacity: .5; cursor: default; }
+  ul.eps { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+  ul.eps li {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px;
+  }
+  .idx { color: var(--faint); font-family: var(--mono); font-size: 12px; width: 20px; }
+  .epname { font-weight: 500; min-width: 150px; }
+  .epurl { font-family: var(--mono); font-size: 12px; color: var(--muted); flex: 1; word-break: break-all; }
+  .drop { background: none; border: none; color: var(--faint); cursor: pointer; font-size: 15px; padding: 0 4px; }
+  .drop:hover { color: var(--bad); }
+  .tag { font-size: 11px; color: var(--faint); border: 1px solid var(--border); border-radius: 999px; padding: 1px 7px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .chip {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 999px;
+    padding: 3px 10px; font-family: var(--mono); font-size: 12px;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .chip button { background: none; border: none; color: var(--faint); cursor: pointer; padding: 0; font-size: 13px; }
+  .chip button:hover { color: var(--bad); }
+  .actions { display: flex; gap: 8px; align-items: center; margin-top: 4px; }
+  .status { color: var(--muted); font-size: 12px; margin-left: auto; }
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { font-weight: 500; color: var(--muted); font-size: 12px; white-space: nowrap; }
+  th .u { display: block; font-family: var(--mono); font-size: 10.5px; color: var(--faint); font-weight: 400; }
+  td.dom { font-family: var(--mono); white-space: nowrap; }
+  td.dom .role { display: block; color: var(--faint); font-size: 10.5px; font-family: inherit; }
+  td.cell { font-family: var(--mono); font-size: 11.5px; min-width: 132px; }
+  td.cell .ms { color: var(--faint); }
+  td.cell .err { color: var(--bad); }
+  .flag { display: inline-block; font-family: inherit; font-size: 10.5px; border-radius: 4px; padding: 0 5px; margin-top: 3px; }
+  .flag.bad { background: var(--bad-bg); color: var(--bad); }
+  .flag.warn { background: var(--warn-bg); color: var(--warn); }
+  .flag.ok { background: var(--ok-bg); color: var(--ok); }
+  .pending { color: var(--faint); }
+  .legend { color: var(--muted); font-size: 12px; margin-top: 12px; display: grid; gap: 4px; }
+  .legend b { color: var(--text); font-weight: 500; }
+  .empty { color: var(--faint); font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>DoH 探测</h1>
+    <span class="tag" id="mode">检测后端…</span>
+    <button id="theme">切换主题</button>
+  </header>
+  <p class="sub">
+    真的发一次 RFC 8484 查询（<code>POST application/dns-message</code>），把应答里的 A / AAAA 解出来。
+    参考的 doh-web 用 <code>fetch(url, {mode:"no-cors"})</code>，读不到任何响应，也从不带 <code>?dns=</code>，
+    所以它只证明「443 能连上」。这里另外把「不通」和「没发 CORS 头」分开报——浏览器里这两者
+    都是同一句 <code>Failed to fetch</code>，但只有后者值得留。
+  </p>
+
+  <section>
+    <h2>解析器</h2>
+    <ul class="eps" id="eps"></ul>
+    <div class="row" style="margin-top:10px">
+      <input type="text" id="newEp" placeholder="https://your-doh/dns-query 或 1muef7ql4f.cloudflare-gateway.com">
+      <button id="addEp">添加</button>
+    </div>
+    <p class="note" style="margin:8px 0 0">
+      填域名会自动补成 <code>https://&lt;域名&gt;/dns-query</code>。示例：
+      <code>1muef7ql4f.cloudflare-gateway.com</code>
+    </p>
+  </section>
+
+  <section>
+    <h2>域名</h2>
+    <p class="note">同一批名字问每一台解析器，答案不一样才有信息。红字那批是之前在本机测到过假地址的。</p>
+    <div class="row">
+      <input type="text" id="newDom" placeholder="example.com">
+      <button id="addDom">添加域名</button>
+      <button id="resetDom">恢复默认</button>
+    </div>
+    <div class="chips" id="doms"></div>
+  </section>
+
+  <section>
+    <div class="actions">
+      <button class="primary" id="run">全部测试</button>
+      <button id="export">导出 JSON</button>
+      <span class="status" id="status">未开始</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>结果</h2>
+    <div class="scroll" id="results"><p class="empty">还没有结果。</p></div>
+    <div class="legend" id="legend" style="display:none">
+      <div><b>与多数不一致</b> —— 同一域名下，多数解析器给出同一组地址，这台给出的地址和它们完全不重叠。这条判据不依赖任何内置黑名单。</div>
+      <div><b>一个地址服务多个域名</b> —— 这台解析器把同一个地址发给了两个不相关的域名。正常解析器不会这样做，这是注入的特征。</div>
+      <div><b>已知黑洞地址</b> —— 落在常见的伪造地址表里（表不全，只是提示）。</div>
+    </div>
+  </section>
+
+</div>
+
+<script>
+"use strict";
+
+const STORE = "doh-probe-v1";
+
+// The four the user asked for, in order. Entry 0 is not a DoH endpoint: a
+// browser has no way to send a plain UDP/53 query or to read what the system
+// resolver answered, so the baseline can only answer "does this name work on
+// this path at all". It is labelled as such rather than dressed up as a
+// resolution result.
+const DEFAULT_EPS = [
+  { id: "sys",  name: "当前解析器", kind: "direct", url: "",                                  tag: "直连基线" },
+  { id: "ali",  name: "阿里 DoH",   kind: "doh",    url: "https://dns.alidns.com/dns-query",  tag: "国内" },
+  { id: "tx",   name: "腾讯 DoH",   kind: "doh",    url: "https://doh.pub/dns-query",         tag: "国内" },
+  { id: "cf",   name: "1.1.1.1 DoH", kind: "doh",   url: "https://cloudflare-dns.com/dns-query", tag: "境外" },
+];
+
+const DEFAULT_DOMAINS = [
+  { name: "www.instagram.com",  role: "测到过假地址" },
+  { name: "discord.com",        role: "测到过假地址" },
+  { name: "www.reddit.com",     role: "测到过假地址" },
+  { name: "medium.com",         role: "测到过假地址" },
+  { name: "www.pinterest.com",  role: "测到过假地址" },
+  { name: "steamcommunity.com", role: "真地址被按名字切" },
+  { name: "www.google.com",     role: "" },
+  { name: "example.com",        role: "对照" },
+  { name: "www.baidu.com",      role: "对照" },
+];
+
+// Advisory only. These prefixes are the classic injected addresses, but a real
+// host can legitimately live inside some of them (157.240/16 is Facebook), so
+// this list never decides on its own -- the two structural checks above carry
+// the weight.
+const BLACKHOLE_PREFIXES = [
+  "4.36.66.", "8.7.198.", "37.61.54.", "46.82.174.", "59.24.3.", "64.33.88.",
+  "64.33.99.", "64.66.163.", "65.104.202.", "65.160.219.", "66.45.252.",
+  "72.14.205.", "78.16.49.", "93.46.8.", "118.5.49.", "128.121.126.",
+  "159.106.121.", "169.132.13.", "192.67.198.", "202.106.1.", "203.98.7.",
+  "203.161.230.", "207.12.88.", "208.56.31.", "209.36.73.", "209.145.54.",
+  "209.220.30.", "211.94.66.", "213.169.251.", "216.221.188.", "216.234.179.",
+  "243.185.187.", "249.129.46.", "253.157.14.",
+];
+
+const QTYPE_A = 1, QTYPE_AAAA = 28;
+const TIMEOUT_MS = 9000;
+
+let state = { eps: null, domains: null, results: null, running: false };
+
+/* ---------- wire format ---------- */
+
+function encodeName(name) {
+  const bytes = [];
+  for (const label of name.split(".")) {
+    const raw = new TextEncoder().encode(label);
+    bytes.push(raw.length, ...raw);
+  }
+  bytes.push(0);
+  return new Uint8Array(bytes);
+}
+
+function buildQuery(name, qtype) {
+  const qname = encodeName(name);
+  const buf = new Uint8Array(12 + qname.length + 4);
+  const dv = new DataView(buf.buffer);
+  const id = Math.floor(Math.random() * 65536);
+  dv.setUint16(0, id);
+  dv.setUint16(2, 0x0100);   // recursion desired
+  dv.setUint16(4, 1);        // one question
+  buf.set(qname, 12);
+  dv.setUint16(12 + qname.length, qtype);
+  dv.setUint16(14 + qname.length, 1);  // class IN
+  return { buf, id };
+}
+
+function skipName(bytes, off) {
+  for (;;) {
+    if (off >= bytes.length) throw new Error("名字越界");
+    const len = bytes[off];
+    if (len === 0) return off + 1;
+    if ((len & 0xc0) === 0xc0) return off + 2;
+    off += 1 + len;
+  }
+}
+
+function formatV6(bytes) {
+  const groups = [];
+  for (let i = 0; i < 16; i += 2) groups.push(((bytes[i] << 8) | bytes[i + 1]).toString(16));
+  return groups.join(":");
+}
+
+function parseResponse(buffer) {
+  const bytes = new Uint8Array(buffer);
+  if (bytes.length < 12) throw new Error("比头部还短");
+  const dv = new DataView(buffer);
+  const flags = dv.getUint16(2);
+  const qd = dv.getUint16(4), an = dv.getUint16(6);
+  let off = 12;
+  for (let i = 0; i < qd; i++) off = skipName(bytes, off) + 4;
+  const addrs = [];
+  for (let i = 0; i < an; i++) {
+    off = skipName(bytes, off);
+    const rtype = dv.getUint16(off);
+    const rdlen = dv.getUint16(off + 8);
+    off += 10;
+    const rdata = bytes.subarray(off, off + rdlen);
+    off += rdlen;
+    if (rtype === QTYPE_A && rdlen === 4) addrs.push(Array.from(rdata).join("."));
+    else if (rtype === QTYPE_AAAA && rdlen === 16) addrs.push(formatV6(rdata));
+  }
+  return { rcode: flags & 0xf, addrs };
+}
+
+/* ---------- probes ---------- */
+
+// Set once /api/ping answers. A backend removes both of the browser's hard
+// limits at once: the same-origin policy (both domestic resolvers answer the
+// POST but fail the preflight, so a page can never read what they said) and the
+// absence of UDP sockets (so a page cannot ask the resolver this machine
+// actually uses, which is the whole point of the first column).
+const API = { available: false, resolvers: [] };
+
+async function detectBackend() {
+  try {
+    const resp = await fetch("/api/ping", { cache: "no-store", signal: AbortSignal.timeout(2500) });
+    if (!resp.ok) return;
+    const info = await resp.json();
+    if (info && info.backend) {
+      API.available = true;
+      API.resolvers = info.resolvers || [];
+    }
+  } catch (_) { /* opened as a file, or no server running: browser mode is fine */ }
+}
+
+function apiQuery(path, params) {
+  const qs = new URLSearchParams(params).toString();
+  return fetch(path + "?" + qs, { cache: "no-store", signal: AbortSignal.timeout(TIMEOUT_MS + 4000) })
+    .then((r) => r.json());
+}
+
+// The CORS retry is the point of this function. `mode: "cors"` failing proves
+// nothing on its own: a server without Access-Control-Allow-Origin and a host
+// that is simply unreachable both reject the promise. A follow-up no-cors
+// request does not need to read the body -- resolving it at all means the
+// request completed a round trip, so the endpoint is up and only the headers
+// are missing. Without this step the tool would repeat the reference tool's
+// mistake of calling a CORS-less server "无响应".
+async function probeDoh(url, name, qtype) {
+  if (API.available) {
+    try {
+      return await apiQuery("/api/probe", { endpoint: url, name, type: qtype === QTYPE_AAAA ? "AAAA" : "A" });
+    } catch (err) {
+      return { ok: false, ms: 0, kind: "backend", error: "后端无响应：" + (err.message || err) };
+    }
+  }
+
+  const { buf, id } = buildQuery(name, qtype);
+  const started = performance.now();
+  const headers = { "content-type": "application/dns-message", "accept": "application/dns-message" };
+
+  try {
+    const resp = await fetch(url, {
+      method: "POST", headers, body: buf, mode: "cors", cache: "no-store",
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    const ms = Math.round(performance.now() - started);
+    if (!resp.ok) return { ok: false, ms, kind: "http", error: "HTTP " + resp.status };
+    const parsed = parseResponse(await resp.arrayBuffer());
+    return { ok: true, ms, id, ...parsed };
+  } catch (err) {
+    const ms = Math.round(performance.now() - started);
+    if (err && err.name === "AbortError") return { ok: false, ms, kind: "timeout", error: "超时" };
+    try {
+      await fetch(url, { method: "POST", mode: "no-cors", body: buf, cache: "no-store",
+                         signal: AbortSignal.timeout(TIMEOUT_MS) });
+      return { ok: false, ms, kind: "cors", error: "可达，但没发 CORS 头" };
+    } catch (_) {
+      return { ok: false, ms, kind: "unreachable", error: "不通" };
+    }
+  }
+}
+
+// Column 0. With a backend this is the real thing: a plain UDP/53 query to the
+// resolver this machine is configured to use, plus the same query over TCP/53.
+// The two are not redundant -- the injector only ever sees UDP/53, so when the
+// transports disagree about one name, that disagreement is the injection and
+// nothing else has to be assumed.
+//
+// Without a backend it degrades to the only question a page can answer about
+// the system resolver: whether the name works at all on this path.
+async function probeBaseline(name) {
+  if (API.available) {
+    try {
+      const out = await apiQuery("/api/baseline", { name, resolver: API.resolvers[0] || "" });
+      return { ok: true, ms: out.udp ? out.udp.ms : 0, baseline: out };
+    } catch (err) {
+      return { ok: false, ms: 0, kind: "backend", error: "后端无响应：" + (err.message || err) };
+    }
+  }
+  const started = performance.now();
+  try {
+    await fetch("https://" + name + "/", {
+      mode: "no-cors", cache: "no-store", redirect: "follow",
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    return { ok: true, ms: Math.round(performance.now() - started), direct: true };
+  } catch (err) {
+    return {
+      ok: false,
+      ms: Math.round(performance.now() - started),
+      kind: err && err.name === "AbortError" ? "timeout" : "unreachable",
+      error: err && err.name === "AbortError" ? "超时" : "不通",
+      direct: true,
+    };
+  }
+}
+
+/* ---------- verdicts ---------- */
+
+function isBlackhole(addr) {
+  return BLACKHOLE_PREFIXES.some((p) => addr.startsWith(p));
+}
+
+// Two checks that need no blocklist, because a blocklist of injected addresses
+// is always out of date and always over-broad.
+//
+//   disagreement -- when most endpoints agree on a set of addresses and one
+//   reports a set that does not touch it, the odd one out is the suspect. This
+//   is the same shape as the pinned-address experiment: a sibling name on the
+//   same address worked, so the address was not the problem.
+//
+//   reuse -- one address handed to two unrelated names. A correct resolver does
+//   not do that, and the injected addresses are handed out in exactly that way.
+function judge(results, domains) {
+  const verdicts = {};
+  for (const ep of results.endpoints) {
+    verdicts[ep.id] = { disagree: false, reuse: false, blackhole: false };
+  }
+
+  for (const dom of domains) {
+    const perEp = [];
+    for (const ep of results.endpoints) {
+      const cell = results.cells[ep.id + "|" + dom.name];
+      if (cell && cell.A && cell.A.ok && cell.A.addrs && cell.A.addrs.length) perEp.push([ep.id, cell.A.addrs]);
+    }
+    if (perEp.length < 2) continue;
+    const counts = new Map();
+    for (const [, addrs] of perEp) for (const a of addrs) counts.set(a, (counts.get(a) || 0) + 1);
+    const majority = new Set([...counts.entries()].filter(([, n]) => n >= 2).map(([a]) => a));
+    if (!majority.size) continue;
+    for (const [id, addrs] of perEp) {
+      if (!addrs.some((a) => majority.has(a))) verdicts[id].disagree = true;
+    }
+  }
+
+  const owner = new Map();
+  for (const dom of domains) {
+    for (const ep of results.endpoints) {
+      const cell = results.cells[ep.id + "|" + dom.name];
+      if (!cell || !cell.A || !cell.A.ok) continue;
+      for (const a of cell.A.addrs) {
+        const key = ep.id + "|" + a;
+        if (!owner.has(key)) owner.set(key, new Set());
+        owner.get(key).add(dom.name);
+      }
+      if (cell.A.addrs.some(isBlackhole)) verdicts[ep.id].blackhole = true;
+    }
+  }
+  for (const [key, names] of owner) {
+    if (names.size < 2) continue;
+    verdicts[key.split("|")[0]].reuse = true;
+  }
+  return verdicts;
+}
+
+/* ---------- rendering ---------- */
+
+function esc(text) {
+  return String(text).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+function renderEps() {
+  const list = document.getElementById("eps");
+  list.innerHTML = state.eps.map((ep, i) => {
+    const url = ep.kind === "doh"
+      ? esc(ep.url)
+      : (API.available
+          ? "系统解析器 · UDP/53 与 TCP/53 对照"
+          : "https://&lt;域名&gt;/ —— 浏览器只能测这个名字通不通");
+    const drop = ep.locked ? "" : `<button class="drop" data-drop="${esc(ep.id)}" title="移除">×</button>`;
+    return `<li>
+      <span class="idx">${i === 0 ? "①" : i === 1 ? "②" : i === 2 ? "③" : i === 3 ? "④" : "＋"}</span>
+      <span class="epname">${esc(ep.name)}</span>
+      <span class="epurl">${url}</span>
+      ${ep.tag ? `<span class="tag">${esc(ep.tag)}</span>` : ""}
+      ${drop}
+    </li>`;
+  }).join("");
+  list.querySelectorAll("[data-drop]").forEach((btn) => {
+    btn.onclick = () => {
+      state.eps = state.eps.filter((e) => e.id !== btn.dataset.drop);
+      persist(); renderEps();
+    };
+  });
+}
+
+function renderDoms() {
+  const box = document.getElementById("doms");
+  box.innerHTML = state.domains.map((d) => `<span class="chip">${esc(d.name)}
+    <button data-drop-dom="${esc(d.name)}" title="移除">×</button></span>`).join("");
+  box.querySelectorAll("[data-drop-dom]").forEach((btn) => {
+    btn.onclick = () => {
+      state.domains = state.domains.filter((d) => d.name !== btn.dataset.dropDom);
+      persist(); renderDoms();
+    };
+  });
+}
+
+function cellHtml(ep, cell) {
+  if (!cell) return `<span class="pending">—</span>`;
+  const a = cell.A;
+  if (!a) return `<span class="pending">…</span>`;
+  const v6 = cell.AAAA && cell.AAAA.ok && cell.AAAA.addrs.length
+    ? `<br><span class="ms">AAAA ${esc(cell.AAAA.addrs[0])}</span>` : "";
+
+  if (a.baseline) {
+    const { udp, tcp, resolver } = a.baseline;
+    const line = (r, tag) => {
+      if (!r) return "";
+      if (!r.ok) return `<br><span class="err">${tag} ${esc(r.error || "失败")}</span>`;
+      const body = r.addrs && r.addrs.length ? r.addrs.map(esc).join("<br>") : `rcode ${r.rcode}`;
+      return `<br>${body}<br><span class="ms">${tag} ${r.ms} ms</span>`;
+    };
+    const head = a.baseline.ok === false
+      ? `<span class="err">${esc(a.baseline.error)}</span>`
+      : `<span class="ms">${esc(resolver)}</span>`;
+    return head + line(udp, "UDP") + line(tcp, "TCP");
+  }
+
+  if (!a.ok) return `<span class="err">${esc(a.error)}</span><br><span class="ms">${a.ms} ms</span>`;
+  if (a.direct) return `<span class="flag ok">可达</span><br><span class="ms">${a.ms} ms · 不显示地址</span>`;
+  if (!a.addrs.length) return `<span class="pending">无地址 (rcode ${a.rcode})</span><br><span class="ms">${a.ms} ms</span>`;
+  return a.addrs.map(esc).join("<br>") + `<br><span class="ms">${a.ms} ms</span>` + v6;
+}
+
+function renderResults() {
+  const box = document.getElementById("results");
+  const legend = document.getElementById("legend");
+  if (!state.results) { box.innerHTML = `<p class="empty">还没有结果。</p>`; legend.style.display = "none"; return; }
+  const { cells, endpoints, domains } = state.results;
+  const verdicts = judge(state.results, domains);
+  const head = endpoints.map((ep) => {
+    const v = verdicts[ep.id] || {};
+    const bad = [];
+    if (v.disagree) bad.push(`<span class="flag bad">与多数不一致</span>`);
+    if (v.reuse) bad.push(`<span class="flag bad">一个地址服务多个域名</span>`);
+    if (v.blackhole) bad.push(`<span class="flag warn">已知黑洞地址</span>`);
+    return `<th>${esc(ep.name)}${ep.kind === "doh" ? `<span class="u">${esc(ep.url.replace(/^https:\/\//, "").replace(/\/dns-query$/, ""))}</span>` : `<span class="u">直连基线</span>`}${bad.join("")}</th>`;
+  }).join("");
+  const rows = domains.map((dom) => {
+    const tds = endpoints.map((ep) => `<td class="cell">${cellHtml(ep, cells[ep.id + "|" + dom.name])}</td>`).join("");
+    return `<tr><td class="dom">${esc(dom.name)}${dom.role ? `<span class="role">${esc(dom.role)}</span>` : ""}</td>${tds}</tr>`;
+  }).join("");
+  box.innerHTML = `<table><thead><tr><th>域名</th>${head}</tr></thead><tbody>${rows}</tbody></table>`;
+  legend.style.display = "grid";
+}
+
+/* ---------- run ---------- */
+
+async function run() {
+  if (state.running) return;
+  state.running = true;
+  document.getElementById("run").disabled = true;
+  const endpoints = state.eps.slice();
+  const domains = state.domains.slice();
+  state.results = { cells: {}, endpoints, domains, at: new Date().toISOString() };
+  renderResults();
+
+  let done = 0;
+  const total = endpoints.length * domains.length;
+  const tick = () => {
+    done++;
+    document.getElementById("status").textContent = `测试中 ${done}/${total}`;
+  };
+  document.getElementById("status").textContent = `测试中 0/${total}`;
+
+  await Promise.all(endpoints.map(async (ep) => {
+    for (const dom of domains) {
+      const cell = {};
+      if (ep.kind === "doh") {
+        cell.A = await probeDoh(ep.url, dom.name, QTYPE_A);
+        cell.AAAA = await probeDoh(ep.url, dom.name, QTYPE_AAAA);
+      } else {
+        cell.A = await probeBaseline(dom.name);
+      }
+      state.results.cells[ep.id + "|" + dom.name] = cell;
+      tick();
+      renderResults();
+    }
+  }));
+
+  state.running = false;
+  document.getElementById("run").disabled = false;
+  document.getElementById("status").textContent = `完成 · ${new Date().toLocaleTimeString()}`;
+  renderResults();
+}
+
+function exportJson() {
+  if (!state.results) return;
+  const blob = new Blob([JSON.stringify(state.results, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "doh-probe-" + Date.now() + ".json";
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+/* ---------- persistence ---------- */
+
+function persist() {
+  try {
+    localStorage.setItem(STORE, JSON.stringify({ eps: state.eps, domains: state.domains }));
+  } catch (_) { /* private mode: the defaults still work */ }
+}
+
+function restore() {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(STORE) || "null"); } catch (_) { saved = null; }
+  state.eps = saved && Array.isArray(saved.eps) && saved.eps.length ? saved.eps : DEFAULT_EPS.slice();
+  state.domains = saved && Array.isArray(saved.domains) && saved.domains.length
+    ? saved.domains : DEFAULT_DOMAINS.slice();
+  for (const ep of state.eps) if (ep.kind === "direct") ep.locked = true;
+}
+
+// Accepts what people actually paste: a bare host, a host with a path, or a
+// full URL. The Cloudflare Gateway endpoint the user gave is a bare host, and
+// requiring them to append /dns-query by hand is the kind of friction that
+// makes a tool go unused.
+function normalizeEndpoint(raw) {
+  let text = raw.trim();
+  if (!text) return null;
+  if (!/^https?:\/\//i.test(text)) text = "https://" + text;
+  let url;
+  try { url = new URL(text); } catch (_) { return null; }
+  if (url.protocol !== "https:") return null;
+  let path = url.pathname.replace(/\/+$/, "");
+  if (!path || path === "") path = "/dns-query";
+  url.pathname = path;
+  url.search = "";
+  url.hash = "";
+  const name = url.hostname;
+  return { id: "c:" + url.href, name, kind: "doh", url: url.href, tag: "自定义" };
+}
+
+/* ---------- wiring ---------- */
+
+function addEndpoint() {
+  const input = document.getElementById("newEp");
+  const ep = normalizeEndpoint(input.value);
+  if (!ep) return;
+  if (state.eps.some((e) => e.url === ep.url)) { input.value = ""; return; }
+  state.eps.push(ep);
+  input.value = "";
+  persist(); renderEps();
+}
+
+function addDomain() {
+  const input = document.getElementById("newDom");
+  const name = input.value.trim().replace(/^https?:\/\//, "").replace(/\/.*$/, "").toLowerCase();
+  if (!name || !name.includes(".")) return;
+  if (state.domains.some((d) => d.name === name)) { input.value = ""; return; }
+  state.domains.push({ name, role: "" });
+  input.value = "";
+  persist(); renderDoms();
+}
+
+function initTheme() {
+  let saved = null;
+  try { saved = localStorage.getItem(STORE + ":theme"); } catch (_) { saved = null; }
+  if (saved) document.documentElement.setAttribute("data-theme", saved);
+  document.getElementById("theme").onclick = () => {
+    const isDark = getComputedStyle(document.body).backgroundColor === "rgb(22, 23, 25)";
+    const next = isDark ? "light" : "dark";
+    document.documentElement.setAttribute("data-theme", next);
+    try { localStorage.setItem(STORE + ":theme", next); } catch (_) {}
+  };
+}
+
+(async function boot() {
+  restore();
+  initTheme();
+  await detectBackend();
+
+  const mode = document.getElementById("mode");
+  mode.textContent = API.available
+    ? "后端已连接" + (API.resolvers.length ? " · 解析器 " + API.resolvers.join(" / ") : " · 未识别到系统解析器")
+    : "浏览器模式 · 无 CORS 头的端点读不到答案";
+
+  renderEps();
+  renderDoms();
+  document.getElementById("addEp").onclick = addEndpoint;
+  document.getElementById("newEp").onkeydown = (e) => { if (e.key === "Enter") addEndpoint(); };
+  document.getElementById("addDom").onclick = addDomain;
+  document.getElementById("newDom").onkeydown = (e) => { if (e.key === "Enter") addDomain(); };
+  document.getElementById("resetDom").onclick = () => {
+    state.domains = DEFAULT_DOMAINS.slice(); persist(); renderDoms();
+  };
+  document.getElementById("run").onclick = run;
+  document.getElementById("export").onclick = exportJson;
+})();
+</script>
+</body>
+</html>
