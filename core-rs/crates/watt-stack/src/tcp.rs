@@ -51,6 +51,25 @@ use crate::verify::{self, Verdicts};
 /// Bytes moved in one relay step per direction.
 const RELAY_CHUNK: usize = 16 * 1024;
 
+/// What feeding client bytes to a flow's handshake watcher concluded.
+///
+/// Handed back to the caller instead of counted where it is decided: the
+/// counters live on `Stats`, which a [`TcpFlow`] has no access to, and giving the
+/// flow a `&mut Stats` just to increment something would put a second writer on
+/// the same struct in the middle of a borrow of `self.flows`.
+#[must_use = "the verdict is what the counters are made of; dropping it loses the measurement"]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HelloWatch {
+    /// Not enough bytes for a verdict yet; keep feeding.
+    Pending,
+    /// A name was taken. Whether it arrived under ECH is on the flow.
+    Named,
+    /// Watching stopped with no name to take — a ClientHello that carries no
+    /// server_name, something that is not TLS, or a hello that outgrew the
+    /// buffer. All three are the same answer to "did the handshake help".
+    NoName,
+}
+
 /// Tunables copied out of [`StackConfig`].
 #[derive(Debug, Clone, Copy)]
 struct Tuning {
@@ -295,6 +314,16 @@ struct TcpFlow {
     /// applying it in [`TcpRelay::relay`] keeps that decision in the one place
     /// that has a planner, a protector and the stats to hand.
     sni_pending: Option<String>,
+    /// Whether the name in `sni_pending` came from a hello carrying
+    /// `encrypted_client_hello`.
+    ///
+    /// Kept only so the counters can separate the two sources, because the two
+    /// carry different confidence. Under GREASE ECH the visible name is the real
+    /// one; under real ECH it is a cover name the server picked. RFC 9849 designs
+    /// the two to be indistinguishable from where this code stands, so taking the
+    /// name either way is a deliberate bet — and this is what keeps the size of
+    /// that bet a number rather than an opinion.
+    sni_pending_ech: bool,
     /// While set and still in the future, do not dial: a certificate check is
     /// running and its answer decides which candidate to use.
     ///
@@ -467,6 +496,7 @@ impl TcpFlow {
             rule_key: None,
             hello: None,
             sni_pending: None,
+            sni_pending_ech: false,
             verify_by: None,
             delivered_any: false,
             sent_any: false,
@@ -505,9 +535,9 @@ impl TcpFlow {
     /// ClientHello, but by then the flow has already carried bytes and the
     /// re-plan in [`TcpRelay::adopt_handshake_name`] would be refused anyway — and
     /// a flow that is not TLS at all will never have one.
-    fn watch_handshake(&mut self, bytes: &[u8]) {
+    fn watch_handshake(&mut self, bytes: &[u8]) -> HelloWatch {
         let Some(buffer) = self.hello.as_mut() else {
-            return;
+            return HelloWatch::Pending;
         };
         // The parser only ever reads the first record, so a handshake that claims
         // more than a plausible ClientHello would otherwise be buffered forever.
@@ -515,18 +545,26 @@ impl TcpFlow {
         // the life of the flow. A missing name is the failure mode to prefer.
         if buffer.len() + bytes.len() > sni::MAX_HELLO {
             self.hello = None;
-            return;
+            return HelloWatch::NoName;
         }
         buffer.extend_from_slice(bytes);
 
         match sni::from_client_hello(buffer) {
-            sni::Sni::Incomplete => {}
+            sni::Sni::Incomplete => HelloWatch::Pending,
             sni::Sni::Found(name) => {
                 self.hello = None;
                 self.sni_pending = Some(name);
+                HelloWatch::Named
             }
-            sni::Sni::Absent | sni::Sni::Covered | sni::Sni::NotTls => {
+            sni::Sni::Ech(name) => {
                 self.hello = None;
+                self.sni_pending = Some(name);
+                self.sni_pending_ech = true;
+                HelloWatch::Named
+            }
+            sni::Sni::Absent | sni::Sni::NotTls => {
+                self.hello = None;
+                HelloWatch::NoName
             }
         }
     }
@@ -1879,7 +1917,9 @@ impl TcpRelay {
             // are those bytes. Nothing is decrypted and nothing is modified — the
             // same bytes go on to the winner unchanged.
             if flow.watching_handshake() {
-                flow.watch_handshake(&chunk[..taken]);
+                if let HelloWatch::NoName = flow.watch_handshake(&chunk[..taken]) {
+                    stats.hellos_without_name += 1;
+                }
                 if flow.sni_pending.is_some() {
                     // Stop short of the flush below rather than falling through.
                     //
@@ -2060,6 +2100,11 @@ impl TcpRelay {
         let tuning = self.tuning;
         let mut removed: Vec<Upstream> = Vec::new();
         let adopted;
+        // Carried out of the block so the counter below can tell a name the client
+        // volunteered in the clear from one it sent alongside ECH. Declared with no
+        // initial value: the only way out of the block that is not a `return` is the
+        // one that assigns it, so an initial value could only ever be dead.
+        let ech;
 
         {
             let Some(flow) = self.flows.get_mut(&handle) else {
@@ -2068,6 +2113,8 @@ impl TcpRelay {
             let Some(name) = flow.sni_pending.take() else {
                 return false;
             };
+            ech = flow.sni_pending_ech;
+            flow.sni_pending_ech = false;
 
             // The name is known from here on either way, so the flow carries it
             // in the log even when there is nothing to re-plan. That is worth
@@ -2084,6 +2131,7 @@ impl TcpRelay {
                     "watt: flow {} already carries bytes; the name {name} came too late to re-plan",
                     flow.key.dst
                 );
+                stats.flows_named_without_move += 1;
                 return false;
             }
 
@@ -2102,6 +2150,7 @@ impl TcpRelay {
                     flow.key.dst,
                     requested.ip()
                 );
+                stats.flows_named_without_move += 1;
                 return false;
             }
 
@@ -2157,9 +2206,23 @@ impl TcpRelay {
         }
 
         stats.flows_named_by_sni += 1;
+        if ech {
+            // A subset, not an alternative: these flows are also in
+            // `flows_named_by_sni`, because the name did move them. What this adds
+            // is how many of those names came out of a hello that also carried
+            // ECH, which is the population whose confidence is a bet rather than a
+            // certainty.
+            stats.flows_named_under_ech += 1;
+        }
+        // The marker matters because it is the only thing that tells the two
+        // failure modes apart after the fact: a flow that ends up somewhere wrong
+        // under ECH means the cover-name bet lost, while the same flow without it
+        // means the parser read the wrong name. The counter says how often; only
+        // the line says which one.
+        let under_ech = if ech { ", under ECH" } else { "" };
         log::info!(
             "watt: flow {dst} was relayed blind; the client's handshake named {name} — \
-             re-planned to {target} ({count} candidate(s))"
+             re-planned to {target} ({count} candidate(s)){under_ech}"
         );
         true
     }
@@ -3168,7 +3231,11 @@ mod tests {
         flow.host = None;
         flow.hello = Some(Vec::new());
 
-        flow.watch_handshake(&watt_net::probe::debug_hello("t.example"));
+        assert_eq!(
+            flow.watch_handshake(&watt_net::probe::debug_hello("t.example")),
+            HelloWatch::Named,
+            "a hello with a name is what the counter calls a rescue"
+        );
 
         assert_eq!(flow.sni_pending.as_deref(), Some("t.example"));
         assert!(
@@ -3188,11 +3255,15 @@ mod tests {
         flow.host = None;
         flow.hello = Some(Vec::new());
 
-        flow.watch_handshake(&hello[..cut]);
+        assert_eq!(
+            flow.watch_handshake(&hello[..cut]),
+            HelloWatch::Pending,
+            "half a hello is not an answer"
+        );
         assert!(flow.watching_handshake(), "half a hello is not an answer");
         assert_eq!(flow.sni_pending, None);
 
-        flow.watch_handshake(&hello[cut..]);
+        assert_eq!(flow.watch_handshake(&hello[cut..]), HelloWatch::Named);
         assert_eq!(flow.sni_pending.as_deref(), Some("t.example"));
     }
 
@@ -3205,7 +3276,11 @@ mod tests {
             flow.host = None;
             flow.hello = Some(Vec::new());
 
-            flow.watch_handshake(opening);
+            assert_eq!(
+                flow.watch_handshake(opening),
+                HelloWatch::NoName,
+                "this is the verdict the `hellos_without_name` counter is built from"
+            );
 
             assert!(!flow.watching_handshake(), "{opening:?} is not a ClientHello");
             assert_eq!(flow.sni_pending, None);
@@ -3268,6 +3343,10 @@ mod tests {
         assert_eq!(flow.candidates, vec!["198.51.100.9:443".parse::<SocketAddr>().unwrap()]);
         assert!(!flow.steered);
         assert_eq!(stats.flows_named_by_sni, 0);
+        assert_eq!(
+            stats.flows_named_without_move, 1,
+            "too late to move is still a name recovered, and still worth counting"
+        );
     }
 
     #[test]
@@ -3282,7 +3361,37 @@ mod tests {
             relay.flows[&handle].candidates,
             vec!["198.51.100.9:443".parse::<SocketAddr>().unwrap()]
         );
-        assert_eq!(stats.flows_named_by_sni, 0);
+        assert_eq!(
+            stats.flows_named_without_move, 1,
+            "a name the rules do not own is still a recovery, just not a re-route"
+        );
+    }
+
+    #[test]
+    fn a_name_taken_from_a_hello_that_carried_ech_is_counted_separately() {
+        // The name is used exactly as one sent in the clear would be, because RFC
+        // 9849 designs the two to be indistinguishable from here and refusing it
+        // costs every client that greases — measured, that is every browser. What
+        // the flag buys is a number: this is the population whose name is a bet.
+        let (mut relay, mut planner, mut stats, handle) = blind_flow();
+        {
+            let flow = relay.flows.get_mut(&handle).expect("inserted above");
+            flow.sni_pending = Some("t.example".to_string());
+            flow.sni_pending_ech = true;
+        }
+
+        assert!(relay.adopt_handshake_name(handle, Instant::now(), &mut planner, &mut stats));
+
+        assert_eq!(relay.flows[&handle].host.as_deref(), Some("t.example"));
+        assert_eq!(stats.flows_named_by_sni, 1);
+        assert_eq!(
+            stats.flows_named_under_ech, 1,
+            "the flag has to survive the trip from the watcher to the counter"
+        );
+        assert!(
+            !relay.flows[&handle].sni_pending_ech,
+            "the flag belongs to one name and must not leak onto the next one"
+        );
     }
 
     #[test]
@@ -3304,6 +3413,10 @@ mod tests {
         assert_eq!(
             relay.flows[&handle].candidates,
             vec!["198.51.100.9:443".parse::<SocketAddr>().unwrap()]
+        );
+        assert_eq!(
+            stats.flows_named_without_move, 1,
+            "the name was still recovered — it just had nowhere to move the flow"
         );
     }
 

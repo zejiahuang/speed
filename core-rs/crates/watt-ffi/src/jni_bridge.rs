@@ -285,6 +285,9 @@ pub extern "system" fn Java_dev_detour_core_Kernel_nativeStats(
         stats.dns_upstream_failed,
         stats.dns_upstream_retries,
         stats.dns_upstream_overflowed,
+        stats.flows_named_without_move,
+        stats.flows_named_under_ech,
+        stats.hellos_without_name,
     ];
 
     let widened: Vec<jlong> = values.iter().map(|v| *v as jlong).collect();

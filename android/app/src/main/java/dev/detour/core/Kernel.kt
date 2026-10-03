@@ -94,6 +94,36 @@ object Kernel {
          */
         val flowsNamedBySni: Long = 0,
         /**
+         * Flows the handshake named but did not move.
+         *
+         * The rest of the handshake's work. A name that arrives after the client's
+         * bytes have gone out, or one that names the rule the address already
+         * implied, is recovered and used for attribution but cannot change the
+         * destination — and that is not a failure, it is a recovery with nothing
+         * to do. [flowsNamedBySni] counts only the ones that changed a route, so
+         * read the two together or the handshake looks far weaker than it is.
+         */
+        val flowsNamedWithoutMove: Long = 0,
+        /**
+         * Of [flowsNamedBySni], how many names arrived alongside ECH.
+         *
+         * GREASE ECH leaves the client's real name in the clear; real ECH puts a
+         * cover name there. RFC 9849 designs the two to be indistinguishable from
+         * outside, so a name taken under ECH is a bet. A non-zero value here is the
+         * size of that bet, and it is the first place to look if flows are ever
+         * seen steering to the wrong address.
+         */
+        val flowsNamedUnderEch: Long = 0,
+        /**
+         * Handshakes watched that ended with no name to take.
+         *
+         * Not a TLS stream, a ClientHello with no server_name, or a hello that
+         * outgrew the buffer. Separates "the handshake could not help" from "the
+         * handshake was never given a chance" — the second is [flowsWithoutName]
+         * rising while this stays flat.
+         */
+        val hellosWithoutName: Long = 0,
+        /**
          * Flows the configured upstream exit agreed to carry.
          *
          * Always zero when no exit is configured, which is what makes it the
@@ -389,6 +419,9 @@ object Kernel {
                 dnsUpstreamFailed = raw[22],
                 dnsUpstreamRetries = raw[23],
                 dnsUpstreamOverflowed = raw[24],
+                flowsNamedWithoutMove = raw[25],
+                flowsNamedUnderEch = raw[26],
+                hellosWithoutName = raw[27],
             )
         }
 
@@ -562,7 +595,7 @@ object Kernel {
      * every field after the gap. So this is the one number to check when a counter
      * is added.
      */
-    private const val STATS_FIELDS = 25
+    private const val STATS_FIELDS = 28
 }
 
 class KernelException(message: String) : Exception(message)

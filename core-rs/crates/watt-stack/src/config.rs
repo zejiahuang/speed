@@ -481,6 +481,35 @@ pub struct Stats {
     /// The difference between the two counters is the traffic that is still
     /// relayed blind, and that is the number worth watching.
     pub flows_named_by_sni: u64,
+    /// Flows the handshake named but did not move.
+    ///
+    /// The other half of the pair above, and the reason a rate read off
+    /// `flows_named_by_sni` alone understates the handshake. A name that arrives
+    /// after the client's bytes have already gone out, or one that names the rule
+    /// the address already implied, is recovered and used for attribution but
+    /// cannot change the destination — real work that nothing recorded. Without
+    /// it the only reading of a small `flows_named_by_sni` is "the handshake
+    /// rarely works", which is not what was happening: measured on a device, 89
+    /// flows opened without a name and the counter that existed reported 1.
+    pub flows_named_without_move: u64,
+    /// The part of [`Stats::flows_named_by_sni`] whose name came from a hello that
+    /// also carried `encrypted_client_hello`.
+    ///
+    /// Under GREASE ECH the visible name is the client's real one; under real ECH
+    /// it is a cover name the server chose. RFC 9849 designs the two to be
+    /// indistinguishable from a passive observer, which the kernel is, so taking
+    /// the name either way is a bet rather than a deduction. This counter is what
+    /// makes the size of that bet a number — and if flows are ever seen steering
+    /// wrongly, this is the counter that says where to look.
+    pub flows_named_under_ech: u64,
+    /// Handshakes that were watched and ended with no name to take.
+    ///
+    /// A ClientHello carrying no server_name, a stream that is not TLS at all, or
+    /// a hello that outgrew the buffer: all three leave the flow as blind as it
+    /// started. Counted so "the handshake did not help" can be told apart from
+    /// "the handshake was never given a chance" — the second shows up as
+    /// `flows_without_name` growing while this one stays flat.
+    pub hellos_without_name: u64,
 
     /// Handshakes a configured upstream proxy accepted.
     ///

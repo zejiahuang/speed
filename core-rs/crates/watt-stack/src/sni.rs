@@ -33,19 +33,27 @@
 //! certificate pinning intact and is the whole reason the kernel can be used
 //! without installing a CA.
 //!
-//! # The ceiling
+//! # ECH
 //!
-//! **Encrypted Client Hello hides the name, and this module refuses rather than
-//! guesses.** With ECH the visible `server_name` is a *cover* name chosen by the
-//! client, so returning it would not be a degraded answer — it would be a
-//! confident wrong one, and steering a flow to whatever serves the cover name is
-//! worse than leaving it alone. [`Sni::Covered`] exists so the caller can tell
-//! "no name" from "a name that is deliberately not the real one".
+//! `encrypted_client_hello` is reported as [`Sni::Ech`], carrying whatever name
+//! was in the clear. It is not treated as a reason to withhold that name, and the
+//! reason is in the RFC rather than in a judgement call: RFC 9849 §10.10.4 states
+//! that real ECH is *designed* to be indistinguishable from GREASE ECH for a
+//! passive adversary that does not know the server's `ECHConfigList` — which is
+//! exactly what this module is. "The extension is present" is therefore not
+//! evidence that the visible name is a cover name, and a module that reads it as
+//! evidence loses the name on every client that greases.
 //!
-//! ECH needs the client to have fetched an HTTPS RR through DoH first, so it is
-//! rare today. It is the one direction in which this source can shrink, and that
-//! is why the caller treats an unnamed flow as a normal state rather than an
-//! error.
+//! That cost is not hypothetical. Measured against a current Android browser: the
+//! extension is present on **every** ClientHello (7 of 7 captures, 1729–1825
+//! bytes, 18 extensions), while the device's own curl never sends it (517 bytes,
+//! 11 extensions). The names in those hellos were the real ones — the client had
+//! been pointed at a name that does not exist and so cannot have an `ECHConfig`,
+//! which left it no `public_name` to substitute and nothing to send but what it
+//! actually wanted. RFC 9849 §6.2.1 describes exactly that shape: GREASE sets
+//! `config_id` to a random byte, and the two captures read `0xa5` and `0x00`.
+//!
+//! The caller decides what the flag is worth. This module only reports.
 //!
 //! # What this does not handle
 //!
@@ -72,15 +80,21 @@
 pub enum Sni {
     /// The name the client is asking for, lowercased, without a trailing dot.
     Found(String),
+    /// A ClientHello that carries `encrypted_client_hello`, with the name it left
+    /// in the clear.
+    ///
+    /// The name is *reported*, not vouched for: with real ECH it is a cover name
+    /// the server chose, and this module cannot tell that case from GREASE ECH —
+    /// see the module documentation. What it can say is that a client which had
+    /// no `ECHConfig` for the name it wanted had nothing else to put there, which
+    /// is the common case by a wide margin.
+    Ech(String),
     /// A complete TLS ClientHello that carries no server_name. A client may
     /// legitimately omit it when it will send one later, so this is not a fault.
     Absent,
     /// A TLS ClientHello that this buffer does not contain in full yet. The
     /// caller should feed more bytes before concluding anything.
     Incomplete,
-    /// A ClientHello whose real name is encrypted (ECH). The visible name is a
-    /// cover name and must not be used.
-    Covered,
     /// Not a TLS handshake, so there will never be a name here. The caller should
     /// stop asking.
     NotTls,
@@ -95,7 +109,8 @@ pub const MAX_HELLO: usize = 16 * 1024;
 
 /// The `server_name` extension.
 const EXT_SERVER_NAME: u16 = 0x0000;
-/// `encrypted_client_hello`. Present means the visible name is a cover name.
+/// `encrypted_client_hello`. Present means the visible name *may* be a cover
+/// name — it does not mean it is one, which is the whole point of GREASE ECH.
 const EXT_ENCRYPTED_CLIENT_HELLO: u16 = 0xfe0d;
 
 const RECORD_HANDSHAKE: u8 = 0x16;
@@ -200,14 +215,13 @@ fn parse_client_hello(hello: &[u8]) -> Sni {
         at += 4 + len;
     }
 
-    // ECH wins over the visible name, and it has to be checked before returning
-    // it: the whole point of ECH is that the visible name is not the real one.
-    if covered {
-        return Sni::Covered;
-    }
-    match found {
-        Some(name) => Sni::Found(name),
-        None => Sni::Absent,
+    // ECH is a flag on the answer, not a reason to withhold it: refusing here
+    // drops the name for every client that greases, and measurement says that is
+    // every current browser. See the module documentation.
+    match (found, covered) {
+        (Some(name), false) => Sni::Found(name),
+        (Some(name), true) => Sni::Ech(name),
+        (None, _) => Sni::Absent,
     }
 }
 
@@ -290,9 +304,24 @@ mod tests {
         }
 
         if ech {
+            // The real layout, RFC 9849 §5: type, cipher_suite, config_id, enc,
+            // payload. Nothing here reads inside the extension, so the contents
+            // cannot change a verdict today — but a fixture shaped like no client
+            // has ever sent one cannot catch a parser that later does look
+            // inside, and this module's whole claim is about what real clients
+            // send. The values are the ones two captured browser hellos used:
+            // outer, HKDF-SHA256/ChaCha20Poly1305, and a `config_id` that GREASE
+            // sets to a random byte (the captures read 0xa5 and 0x00).
+            let mut ech_ext: Vec<u8> = vec![0x00];
+            ech_ext.extend_from_slice(&[0x00, 0x01, 0x00, 0x03]);
+            ech_ext.push(0xa5);
+            ech_ext.extend_from_slice(&32u16.to_be_bytes());
+            ech_ext.extend_from_slice(&[0x5a; 32]);
+            ech_ext.extend_from_slice(&144u16.to_be_bytes());
+            ech_ext.extend_from_slice(&[0x3c; 144]);
             extensions.extend_from_slice(&EXT_ENCRYPTED_CLIENT_HELLO.to_be_bytes());
-            extensions.extend_from_slice(&3u16.to_be_bytes());
-            extensions.extend_from_slice(&[1, 2, 3]);
+            extensions.extend_from_slice(&(ech_ext.len() as u16).to_be_bytes());
+            extensions.extend_from_slice(&ech_ext);
         }
 
         let mut body: Vec<u8> = Vec::new();
@@ -364,14 +393,18 @@ mod tests {
     }
 
     #[test]
-    fn a_cover_name_is_refused_rather_than_returned() {
-        // The one case where the visible name is deliberately wrong. Returning it
-        // would steer the flow to whatever serves the cover name, which is worse
-        // than leaving the flow alone.
+    fn a_hello_with_ech_still_reports_the_name_it_left_in_the_clear() {
+        // The extension says "the real name may be encrypted"; it does not say
+        // "this name is a lie". RFC 9849 designs the two cases to be
+        // indistinguishable from where this parser stands, so withholding the
+        // name costs every client that greases — measurement says that is every
+        // browser — and buys nothing against the few that do not.
         assert_eq!(
             from_client_hello(&hello(Some("cover.example"), true)),
-            Sni::Covered
+            Sni::Ech("cover.example".to_string())
         );
+        // ECH with nothing in the clear is still no name.
+        assert_eq!(from_client_hello(&hello(None, true)), Sni::Absent);
     }
 
     #[test]

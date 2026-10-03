@@ -166,6 +166,22 @@ object ControlConsole {
             // is not, and the next thing to look at is why (no TLS, or a hello
             // split across segments).
             .put("flows_named_by_sni", stats.flowsNamedBySni)
+            // The rest of the handshake's work, and the reason `flows_named_by_sni`
+            // on its own reads far too low: a name that arrives too late to move
+            // the flow, or that names the rule the address already implied, is a
+            // recovery with nothing to do. Measured on a device, the pair was
+            // 1 and 1 against 89 flows that opened blind.
+            .put("flows_named_without_move", stats.flowsNamedWithoutMove)
+            // Of the names that did move a flow, the ones taken from a hello that
+            // also carried ECH. GREASE ECH leaves the real name in the clear and
+            // real ECH does not, and RFC 9849 makes the two indistinguishable from
+            // here — so this is the size of a deliberate bet, and the first place
+            // to look if a flow is ever seen steering to the wrong address.
+            .put("flows_named_under_ech", stats.flowsNamedUnderEch)
+            // Handshakes watched that ended with no name to take: not TLS, no
+            // server_name, or a hello that outgrew the buffer. Tells "the
+            // handshake could not help" apart from "it was never given a chance".
+            .put("hellos_without_name", stats.hellosWithoutName)
             // The upstream exit, when one is configured. `proxy_handshakes` is the
             // only proof that the exit is carrying anything: the settings document
             // and the switch both describe what was asked for, not what happened.

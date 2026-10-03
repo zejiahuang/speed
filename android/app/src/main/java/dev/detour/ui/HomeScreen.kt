@@ -380,14 +380,17 @@ fun HomeScreen() {
                 DetourDivider()
                 DetourKeyValueRow(stringResource(R.string.home_hits_live), stats.liveFlows.toString())
                 DetourDivider()
-                // The two rows below answer the question the three above raise when
-                // the ratio is low: a client that resolves over DoH arrives as a
-                // bare address, so the rule set cannot be consulted at all and the
-                // flow is counted as direct whatever the rules say. "无名流量" is
-                // how much of the traffic that was; "其中握手补名" is how much of it
-                // the client's own TLS handshake put back under the rules. Read
-                // together they say whether the tunnel is actually steering, which
-                // the ratio on its own cannot.
+                // The rows below answer the question the three above raise when the
+                // ratio is low: a client that resolves over DoH arrives as a bare
+                // address, so the rule set cannot be consulted at all and the flow
+                // is counted as direct whatever the rules say. "无名流量" is how much
+                // of the traffic that was, and the three rows under it break down
+                // what the client's own TLS handshake did about it. The first is the
+                // honest numerator — a name that arrived too late to move the flow
+                // still counts, and counting only the ones that changed a route is
+                // what made a working handshake read as a broken one. Read together
+                // they say whether the tunnel is actually steering, which the ratio
+                // on its own cannot.
                 DetourKeyValueRow(
                     stringResource(R.string.home_hits_unnamed),
                     stats.flowsWithoutName.toString(),
@@ -395,7 +398,26 @@ fun HomeScreen() {
                 DetourDivider()
                 DetourKeyValueRow(
                     stringResource(R.string.home_hits_named_by_sni),
-                    stats.flowsNamedBySni.toString(),
+                    (stats.flowsNamedBySni + stats.flowsNamedWithoutMove).toString(),
+                )
+                DetourDivider()
+                // Of the names that changed a route, the ones taken from a hello
+                // that also carried ECH. Only a re-route can send traffic somewhere
+                // wrong, so this is the size of the bet: ECH is present on every
+                // hello a current browser sends, and where it is GREASE the name
+                // beside it is the real one.
+                DetourKeyValueRow(
+                    stringResource(R.string.home_hits_named_under_ech),
+                    stats.flowsNamedUnderEch.toString(),
+                )
+                DetourDivider()
+                // The other end of the same question: hellos that were read and had
+                // no name to give. Without this the remainder of 无名流量 has no
+                // explanation, and "the handshake does not work" cannot be told from
+                // "the handshake was never given a chance".
+                DetourKeyValueRow(
+                    stringResource(R.string.home_hits_hellos_unnamed),
+                    stats.hellosWithoutName.toString(),
                 )
             }
         }

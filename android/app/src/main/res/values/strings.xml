@@ -289,6 +289,8 @@
     <string name="home_hits_live">存活流</string>
     <string name="home_hits_unnamed">无名流量</string>
     <string name="home_hits_named_by_sni">其中握手补名</string>
+    <string name="home_hits_named_under_ech">其中 ECH 改道</string>
+    <string name="home_hits_hellos_unnamed">握手未能补名</string>
     <string name="home_hits_ratio">命中率 %1$s</string>
     <string name="home_hits_none">还没有流量经过隧道</string>
 

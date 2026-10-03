@@ -94,6 +94,25 @@ pub struct WattStats {
     /// are the measurement: without this one, the only evidence the recovery works
     /// at all is a log line per flow.
     pub flows_named_by_sni: u64,
+    /// Flows the handshake named without moving.
+    ///
+    /// Together with `flows_named_by_sni` this is the honest numerator: the
+    /// counter that existed measured only the names that changed a route, so a
+    /// handshake that named 89 flows and moved 1 read as "1".
+    pub flows_named_without_move: u64,
+    /// Of `flows_named_by_sni`, the names that arrived alongside
+    /// `encrypted_client_hello`.
+    ///
+    /// Reported separately because the confidence differs: GREASE ECH carries the
+    /// real name, real ECH carries a cover name, and RFC 9849 makes the two
+    /// indistinguishable from the kernel. A non-zero value here is the size of a
+    /// deliberate bet, not an error.
+    pub flows_named_under_ech: u64,
+    /// Handshakes watched that ended with no name to take.
+    ///
+    /// Separates "the handshake could not help" from "the handshake was never
+    /// given a chance".
+    pub hellos_without_name: u64,
     /// Flows that the configured upstream exit agreed to carry.
     ///
     /// Zero whenever no exit is configured, so this is also the answer to "is the
@@ -742,6 +761,9 @@ pub(crate) fn collect_stats(engine: &WattEngine) -> Option<WattStats> {
         flows_direct: stats.flows_direct,
         flows_without_name: stats.flows_without_name,
         flows_named_by_sni: stats.flows_named_by_sni,
+        flows_named_without_move: stats.flows_named_without_move,
+        flows_named_under_ech: stats.flows_named_under_ech,
+        hellos_without_name: stats.hellos_without_name,
         proxy_handshakes: stats.proxy_handshakes,
         proxy_refusals: stats.proxy_refusals,
         dns_upstream_queries: stats.dns_upstream_queries,
