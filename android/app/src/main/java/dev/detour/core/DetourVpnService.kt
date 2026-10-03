@@ -214,18 +214,24 @@ class DetourVpnService : VpnService() {
     /**
      * Build and claim the tunnel.
      *
-     * **Everything is routed in, and the kernel decides.** The obvious alternative
-     * — installing one route per rule address — does not work: the merged rule set
-     * carries around 180,000 addresses, and each `addRoute` is a binder call to
-     * the system server. Measured on this emulator, the service never finished
-     * starting.
+     * **The public address space is routed in, and the kernel decides.** The
+     * obvious alternative — installing one route per rule address — does not work:
+     * the merged rule set carries around 180,000 addresses, and each `addRoute` is
+     * a binder call to the system server. Measured on this emulator, the service
+     * never finished starting.
      *
-     * So the tunnel claims `0.0.0.0/0` and the decision moves to where it belongs.
-     * The kernel already knows how to make it: `plan()` returns rule addresses for
-     * a listed domain and `direct` for anything else, and both end up as an
-     * ordinary socket. The cost is that unlisted traffic also crosses userspace —
-     * which is inherent to any userspace VPN, and is the price of not having to
-     * enumerate the ruleset into the routing table.
+     * So the tunnel claims the public prefixes (see [PUBLIC_ROUTES]) and the
+     * decision moves to where it belongs. The kernel already knows how to make it:
+     * `plan()` returns rule addresses for a listed domain and `direct` for anything
+     * else, and both end up as an ordinary socket. The cost is that unlisted
+     * traffic also crosses userspace — which is inherent to any userspace VPN, and
+     * is the price of not having to enumerate the ruleset into the routing table.
+     *
+     * Private destinations are **left out of the claim** rather than claimed and
+     * then refused. That distinction is not a refinement: `can_relay` refuses them,
+     * and a refused flow is reset at the SYN, so claiming them made every LAN
+     * destination unreachable while the tunnel was up. [PUBLIC_ROUTES] carries the
+     * measurement and the reason the list is what it is.
      *
      * The app itself is excluded, or the tunnel would capture the very
      * connections the kernel makes to reach the rule addresses.
@@ -257,16 +263,24 @@ class DetourVpnService : VpnService() {
             // The kernel answers DNS from the rule set, so the tunnel has to be
             // the resolver the system hands out.
             .addDnsServer(TUNNEL_DNS)
-            .addRoute("0.0.0.0", 0)
-            .addRoute("::", 0)
             .addDisallowedApplication(packageName)
+
+        // The public space, one prefix at a time. [PUBLIC_ROUTES] explains why the
+        // private ranges are left out of the claim rather than claimed and refused.
+        for ((address, prefix) in PUBLIC_ROUTES) {
+            builder.addRoute(address, prefix)
+        }
+        // Global unicast only, for the same reason `PUBLIC_ROUTES` exists: `::/0`
+        // also claims ULA (`fc00::/7`) and link-local (`fe80::/10`), which `is_lan`
+        // refuses — so the same reset would land on every IPv6 LAN destination.
+        builder.addRoute("2000::", 3)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             builder.setMetered(false)
         }
         KernelState.log(
             KernelState.LogEntry.Level.INFO, TAG,
-            "接管全部流量，由内核按规则分流",
+            "接管公网流量，由内核按规则分流",
         )
         return builder.establish()
     }
@@ -567,6 +581,95 @@ class DetourVpnService : VpnService() {
         private const val TUNNEL_ADDRESS = "198.18.0.1"
         private const val TUNNEL_PREFIX = 15
         private const val TUNNEL_DNS = "198.18.0.2"
+
+        /**
+         * The public address space, as the complement of what the kernel refuses.
+         *
+         * **Why not `0.0.0.0/0`.** Claiming everything also claims the private
+         * ranges, and the kernel then has to dispose of flows it will never relay:
+         * `Planner::can_relay` refuses loopback, link-local, the RFC 1918 blocks and
+         * multicast, and the SYN path answers a refused flow with a RST. So a
+         * third-party app talking to a NAS, a printer or a resolver on the same
+         * Wi-Fi got `ECONNREFUSED` in ~2 ms whenever the tunnel was up. Measured on
+         * the emulator: six LAN destinations across `172.16/12`, `192.168/16` and
+         * `10/8` each added exactly one to `tcp_flows_rejected` while `tcp_opened`
+         * stayed flat — the reset is sent from `feed()` before any flow object
+         * exists. UDP is refused the same way (`udp.rs`), answered with an ICMP port
+         * unreachable, so a LAN resolver and mDNS were unreachable too.
+         *
+         * **What the list is.** The complement of the kernel's refusal set —
+         * `0.0.0.0/8`, `10/8`, `127/8`, `169.254/16`, `172.16/12`, `192.168/16`,
+         * `224/4` — so both layers agree on which destinations are local. That
+         * leaves `can_relay` doing the job it was written for: refusing a *rule*
+         * that names a private address. The rule set is fetched over the network and
+         * is not signed, which is the boundary `is_blocked_target` exists to hold,
+         * and this change does not weaken it — the check is untouched.
+         *
+         * **Not copied from SteamTools' table.** Theirs omits `169.254/16`, so
+         * link-local would still have been captured and refused; `is_lan` refuses
+         * it, so the routing layer has to let it past.
+         *
+         * **Verified by computation, not by eye.** This list plus the seven refused
+         * blocks partition `0.0.0.0/0` exactly — no gap, no overlap — and
+         * `198.18.0.0/15`, the tunnel's own subnet where [TUNNEL_DNS] lives, falls
+         * inside `196.0.0.0/6`, so the resolver still has a route to it. A gap here
+         * would be a leak rather than a break: an unlisted public prefix would
+         * bypass the tunnel entirely.
+         *
+         * `excludeRoute` (API 33+) expresses this in one call and is the better
+         * API, but the floor here is API 26, so it could only ever be an additional
+         * path — and two paths would mean two behaviours to test for one question.
+         * One list, one behaviour.
+         */
+        private val PUBLIC_ROUTES = listOf(
+            "1.0.0.0" to 8,
+            "2.0.0.0" to 7,
+            "4.0.0.0" to 6,
+            "8.0.0.0" to 7,
+            "11.0.0.0" to 8,
+            "12.0.0.0" to 6,
+            "16.0.0.0" to 4,
+            "32.0.0.0" to 3,
+            "64.0.0.0" to 3,
+            "96.0.0.0" to 4,
+            "112.0.0.0" to 5,
+            "120.0.0.0" to 6,
+            "124.0.0.0" to 7,
+            "126.0.0.0" to 8,
+            "128.0.0.0" to 3,
+            "160.0.0.0" to 5,
+            "168.0.0.0" to 8,
+            "169.0.0.0" to 9,
+            "169.128.0.0" to 10,
+            "169.192.0.0" to 11,
+            "169.224.0.0" to 12,
+            "169.240.0.0" to 13,
+            "169.248.0.0" to 14,
+            "169.252.0.0" to 15,
+            "169.255.0.0" to 16,
+            "170.0.0.0" to 7,
+            "172.0.0.0" to 12,
+            "172.32.0.0" to 11,
+            "172.64.0.0" to 10,
+            "172.128.0.0" to 9,
+            "173.0.0.0" to 8,
+            "174.0.0.0" to 7,
+            "176.0.0.0" to 4,
+            "192.0.0.0" to 9,
+            "192.128.0.0" to 11,
+            "192.160.0.0" to 13,
+            "192.169.0.0" to 16,
+            "192.170.0.0" to 15,
+            "192.172.0.0" to 14,
+            "192.176.0.0" to 12,
+            "192.192.0.0" to 10,
+            "193.0.0.0" to 8,
+            "194.0.0.0" to 7,
+            "196.0.0.0" to 6,
+            "200.0.0.0" to 5,
+            "208.0.0.0" to 4,
+            "240.0.0.0" to 4,
+        )
 
         const val ACTION_START = "dev.detour.action.START"
         const val ACTION_STOP = "dev.detour.action.STOP"

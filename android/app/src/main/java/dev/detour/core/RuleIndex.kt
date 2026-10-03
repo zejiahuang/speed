@@ -145,10 +145,17 @@ class RuleIndex private constructor(
         /**
          * Every address the rule set claims, de-duplicated.
          *
-         * This is what the tunnel routes. Not `0.0.0.0/0`: the app relays a listed
-         * set of domains, and claiming the whole device's traffic would make every
-         * unlisted packet pay a round trip through userspace to be handed straight
-         * back.
+         * ⚠️ **Nothing calls this, and the comment that used to sit here was
+         * wrong.** It claimed "this is what the tunnel routes, not `0.0.0.0/0`" —
+         * but the tunnel has always claimed a fixed prefix list instead
+         * (`DetourVpnService.PUBLIC_ROUTES`), never the rule addresses. Installing
+         * one route per rule address is the design that was tried and abandoned:
+         * the merged set carries ~180,000 addresses and each `addRoute` is a binder
+         * call, so the service never finished starting.
+         *
+         * Kept because it is a candidate for a future routing design; delete it if
+         * that design is not coming, rather than leaving a function whose name and
+         * history suggest a job it does not do.
          *
          * Only literals. A `{Cloudflare}` placeholder is not an address, and the
          * domains that carry one are reached by the DNS the kernel observes rather
