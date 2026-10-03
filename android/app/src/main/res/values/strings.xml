@@ -522,4 +522,21 @@
     <!-- %1$d is the seconds left; see DISCLAIMER_LOCK_SECONDS. -->
     <string name="disclaimer_accept_locked">我已阅读并同意（%1$d）</string>
     <string name="disclaimer_decline">不同意并退出</string>
+
+    <!-- Battery-optimization reminder. Shown on every launch while the app is not
+         exempt, and deliberately not recorded anywhere: the exemption can be
+         revoked — by the user, by a ROM cleanup tool, or by the system after an
+         update — so a stored "already told them" would go on being true after the
+         condition it described had become false again. See `BatteryPolicy`.
+
+         The body names the symptom rather than the setting, because "省电策略" is
+         not a term the user has had to learn; what they can recognise is a
+         connection that reports itself up while nothing loads. The hint exists so
+         the window does not over-promise: only the exemption has an API, so the
+         OEM-only 自启动 / 后台运行 switches are handed to the user rather than
+         implied to have been checked. -->
+    <string name="battery_title">省电策略未设为无限制</string>
+    <string name="battery_body">系统可能在你不用时回收隧道，表现为连接显示正常、但流量走不动。请把 speed 的省电策略设为「无限制」，否则后台保活无法保证。</string>
+    <string name="battery_oem_hint">部分系统还需要单独打开「自启动」和「后台运行」。这两项没有统一入口，本应用也无法读取，需要你在系统设置里自行确认。</string>
+    <string name="battery_open_settings">去电池设置</string>
 </resources>

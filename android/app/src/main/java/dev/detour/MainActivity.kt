@@ -41,8 +41,10 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
+import dev.detour.core.BatteryPolicy
 import dev.detour.core.DetourVpnService
 import dev.detour.core.Disclaimer
 import dev.detour.core.KernelState
@@ -56,6 +58,7 @@ import dev.detour.ui.HomeScreen
 import dev.detour.ui.LogsScreen
 import dev.detour.ui.RulesScreen
 import dev.detour.ui.SettingsScreen
+import dev.detour.ui.components.BatteryPolicyDialog
 import dev.detour.ui.components.DisclaimerDialog
 import dev.detour.ui.components.FloatingGlassBar
 import dev.detour.ui.components.LocalBottomBarClearance
@@ -259,6 +262,52 @@ private fun DetourAppBody(onRequestNotifications: () -> Unit = {}) {
     // system Activity, which is a side effect and must not run during composition.
     LaunchedEffect(disclaimerAccepted) {
         if (disclaimerAccepted) onRequestNotifications()
+    }
+
+    // The battery-optimization reminder.
+    //
+    // **Re-checked on every resume, not only at composition.** The action this
+    // dialog offers leaves the app for the system's settings list, and coming back
+    // changes nothing in this composition — so a one-shot effect would leave the
+    // reminder on screen over an app the user has just fixed. Resume is the first
+    // moment the answer is knowable, which is why the check is bound to it.
+    //
+    // **Nothing is recorded.** There is no "asked" flag and no "ignored" flag in
+    // `Prefs`, and that is the requirement rather than a gap: the exemption can be
+    // revoked — by the user, by a ROM cleanup tool, or by the system after an
+    // update — so a stored "we already told them" would go on being true after the
+    // condition it described had become false again. Not storing it costs one
+    // binder read per resume. See `BatteryPolicy`.
+    //
+    // `dismissed` is `rememberSaveable` so that rotating the phone does not bring
+    // the reminder back, and is not persisted, so the next launch shows it again.
+    //
+    // `logged` is nullable rather than a `Boolean` so that "not yet logged" stays
+    // distinguishable from "logged as restricted"; the WARN then appears on the
+    // first resume and on every change, instead of on every resume.
+    var batteryUnrestricted by remember { mutableStateOf(BatteryPolicy.isUnrestricted(context)) }
+    var batteryDismissed by rememberSaveable { mutableStateOf(false) }
+    var batteryLogged by remember { mutableStateOf<Boolean?>(null) }
+    LifecycleResumeEffect(Unit) {
+        val unrestricted = BatteryPolicy.isUnrestricted(context)
+        batteryUnrestricted = unrestricted
+        if (batteryLogged != unrestricted) {
+            batteryLogged = unrestricted
+            KernelState.log(
+                if (unrestricted) {
+                    KernelState.LogEntry.Level.INFO
+                } else {
+                    KernelState.LogEntry.Level.WARN
+                },
+                "MainActivity",
+                if (unrestricted) {
+                    "省电策略：已设为无限制"
+                } else {
+                    "省电策略：未设为无限制，系统可能回收隧道"
+                },
+            )
+        }
+        onPauseOrDispose { }
     }
 
     // The wallpaper is decoded off the main thread and re-read whenever the pref's
@@ -465,6 +514,39 @@ private fun DetourAppBody(onRequestNotifications: () -> Unit = {}) {
                     openInBrowser(context, promptRelease.url)
                     UpdateState.markPromptShown()
                 },
+            )
+        }
+
+        // The battery-optimization reminder, beside the update prompt and under the
+        // consent gate.
+        //
+        // **Gated on the same things the update prompt is, plus one.** The consent
+        // gate wins outright — a reminder about the battery must not sit on top of a
+        // document the user has to read, which is the reason the update prompt waits
+        // as well (see above). It also waits for the update prompt, because two
+        // windows that both want to be up turn a reminder into a queue: the check
+        // runs on every launch, so being one launch late costs nothing, whereas
+        // stacking them means the second one gets answered without having been read.
+        if (disclaimerAccepted && promptRelease == null &&
+            !batteryUnrestricted && !batteryDismissed
+        ) {
+            BatteryPolicyDialog(
+                onOpenSettings = {
+                    // Dismissed before leaving rather than after returning. The
+                    // action hands the screen to the system, so there is no "after"
+                    // in this process to write to — and if the user comes back still
+                    // restricted, the reminder has already been read and should not
+                    // reappear until the next launch.
+                    batteryDismissed = true
+                    if (!BatteryPolicy.openSettings(context)) {
+                        KernelState.log(
+                            KernelState.LogEntry.Level.WARN,
+                            "MainActivity",
+                            "省电策略设置页打不开，无法引导用户",
+                        )
+                    }
+                },
+                onDismiss = { batteryDismissed = true },
             )
         }
 
