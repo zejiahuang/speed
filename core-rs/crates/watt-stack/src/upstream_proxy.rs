@@ -543,7 +543,7 @@ fn http_refusal(code: u16) -> &'static str {
         407 => "the proxy requires a username and password (407)",
         403 => "the proxy refused that destination (403)",
         404 => "the proxy did not recognise the connect target (404)",
-        502 | 503 | 504 => "the proxy could not reach the destination (5xx)",
+        502..=504 => "the proxy could not reach the destination (5xx)",
         c if (400..500).contains(&c) => "the proxy refused the request (4xx)",
         c if (500..600).contains(&c) => "the proxy failed to reach the destination (5xx)",
         _ => "the proxy answered with a status that is not success",
@@ -936,11 +936,13 @@ mod tests {
         let handle = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             let mut buf = [0u8; 64];
-            stream.read(&mut buf).unwrap();
+            let first = stream.read(&mut buf).unwrap();
+            assert!(first > 0, "the client's handshake should have arrived");
             stream.write_all(&[0x05]).unwrap();
             std::thread::sleep(Duration::from_millis(30));
             stream.write_all(&[0x00]).unwrap();
-            stream.read(&mut buf).unwrap();
+            let second = stream.read(&mut buf).unwrap();
+            assert!(second > 0, "the rest of the handshake should have arrived");
             stream.write_all(&[0x05, 0x00, 0x00]).unwrap();
             std::thread::sleep(Duration::from_millis(30));
             stream.write_all(&[0x01, 0, 0, 0, 0, 0, 0]).unwrap();
