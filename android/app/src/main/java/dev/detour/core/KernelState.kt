@@ -22,8 +22,9 @@ object KernelState {
     /** Which path the traffic takes. */
     enum class Mode {
         /**
-         * An HTTP CONNECT proxy on a local port. No root, no VPN permission, and
-         * no tunnel — but only apps that honour the system proxy benefit.
+         * An HTTP proxy on a local port: `CONNECT` tunnels and plain-HTTP
+         * forwarding, on the one port. No root, no VPN permission, and no tunnel —
+         * but only apps that can be pointed at a proxy benefit.
          */
         PROXY,
 

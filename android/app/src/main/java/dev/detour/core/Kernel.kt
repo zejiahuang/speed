@@ -495,12 +495,21 @@ object Kernel {
     }
 
     /**
-     * A running CONNECT proxy.
+     * A running local HTTP proxy.
      *
-     * This is the mode that needs **neither TUN nor root**, which on Android makes
-     * it the one that works today: point an app's HTTP proxy setting at [port] and
-     * the listed domains are relayed. The cost is that only apps honouring the
-     * system proxy benefit — it is not全流量.
+     * This is the mode that needs **neither TUN nor root**: point an app's HTTP
+     * proxy setting at [port] and its requests are relayed — `CONNECT` tunnels
+     * unchanged, plain-HTTP requests forwarded to their origin. Nothing is refused
+     * for being outside the rule set; an unlisted domain goes out directly, the
+     * same way the tunnel treats one. The cost is that only apps that can be
+     * pointed at a proxy benefit — it is not 全流量.
+     *
+     * It reads no kernel settings document, and that is a shape rather than an
+     * oversight: `watt_proxy_start` in the C ABI takes rules and nothing else, so
+     * every network parameter on the settings screen — timeouts, candidate counts,
+     * certificate pre-check, the upstream exit, the upstream resolver — is
+     * VPN-mode-only. The home screen's proxy card says so where the user is
+     * looking.
      */
     class Proxy internal constructor(handle: Long, val port: Int) : Closeable {
 
@@ -534,12 +543,12 @@ object Kernel {
     }
 
     /**
-     * Start the CONNECT proxy on [port].
+     * Start the local proxy on [port].
      *
      * Pass 0 to let the kernel choose a free port; the one it picked comes back
      * on the returned [Proxy].
      *
-     * @throws KernelException when the port is taken or the document is bad
+     * @throws KernelException when the port is taken or the rule document is bad
      */
     @Throws(KernelException::class)
     fun startProxy(port: Int, rules: ByteArray): Proxy {

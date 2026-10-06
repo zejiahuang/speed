@@ -226,14 +226,16 @@ fn run(options: &Options) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // --- HTTP CONNECT proxy -------------------------------------------------
+    // --- local HTTP proxy ---------------------------------------------------
     //
-    // This is the no-Root Android bootstrap path. It does not create a TUN,
-    // does not alter routes, and never terminates TLS; the proxy only sees the
-    // CONNECT authority and then copies opaque bytes.
+    // This is the no-Root Android bootstrap path. It does not create a TUN and
+    // does not alter routes. A `CONNECT` request is tunnelled once its authority
+    // has been read, and the bytes after it stay opaque; a plain-HTTP request is
+    // forwarded to its origin with the absolute URI rewritten into origin form.
+    // Neither path terminates TLS.
     if let Some(address) = &options.proxy_listen {
         let listener = TcpListener::bind(address)?;
-        log(started, "proxy", &format!("listen={} tls=opaque policy=listed-domains-only", listener.local_addr()?));
+        log(started, "proxy", &format!("listen={} tls=opaque policy=unlisted-direct", listener.local_addr()?));
         watt_proxy::serve(listener, watt_rules::Router::new(loaded.rules))?;
         return Ok(());
     }

@@ -359,8 +359,8 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
     val rows: List<SettingsRow> = buildList {
         // --- connection -------------------------------------------------------
 
-        // The proxy port only means anything in proxy mode, which is
-        // hidden under [BuildFlags.TUN_ONLY]. The row and the divider that
+        // The proxy port only means anything in proxy mode, which is the mode
+        // [BuildFlags.TUN_ONLY] would hide. The row and the divider that
         // separated it from the source selector go together, or the card
         // would open with a stray divider at the top.
         if (!BuildFlags.TUN_ONLY) {

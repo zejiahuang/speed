@@ -129,9 +129,15 @@ class DetourVpnService : VpnService() {
      * The mode that needs neither TUN nor root.
      *
      * No tunnel, no `VpnService` consent, no protector — the kernel simply listens
-     * on a local port and relays the listed domains it is asked for. What it
-     * cannot do is capture traffic the app did not send it, so the user has to
-     * point something at [proxy]'s port.
+     * on a local port and relays what it is asked for, whether that is a `CONNECT`
+     * tunnel or a plain-HTTP request. Domains outside the rule set are relayed
+     * too, going out directly rather than being refused. What this mode cannot do
+     * is capture traffic the app did not send it, so the user has to point
+     * something at the proxy's port.
+     *
+     * The kernel settings document is deliberately not read here: [Kernel.startProxy]
+     * takes rules and nothing else, so the network parameters on the settings
+     * screen apply to VPN mode only. The home screen's proxy card says so.
      */
     private suspend fun startProxy(document: ByteArray) {
         val started = Kernel.startProxy(Prefs.of(this).proxyPort, document)

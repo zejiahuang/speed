@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.PlayArrow
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.widget.Toast
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -154,11 +155,11 @@ fun HomeScreen() {
             // mode was displayed and never settable, which made the choice the user
             // was asked for at design time unreachable at run time.
             //
-            // Under [BuildFlags.TUN_ONLY] the mode is not a choice, so it is shown as
-            // a plain badge — no chevron, nothing to tap, and no picker sheet to
-            // open. It keeps the pill silhouette so the header reads the same in both
-            // builds; the whole affordance hangs off the one flag, so restoring the
-            // picker is flipping that flag and changing nothing else.
+            // The [BuildFlags.TUN_ONLY] branch shows the mode as a plain badge — no
+            // chevron, nothing to tap, no picker sheet. It is not taken today (the
+            // flag is false) and it stays so that hiding the mode again is a
+            // one-line change. It keeps the pill silhouette, so the header reads
+            // the same either way.
             if (BuildFlags.TUN_ONLY) {
                 Surface(
                     shape = RoundedCornerShape(percent = 50),
@@ -173,8 +174,26 @@ fun HomeScreen() {
                 }
             } else {
                 DetourAssistChip(
-                    onClick = { if (!status.isRunning) showModePicker = true },
-                    enabled = !status.isRunning,
+                    // Tappable while the tunnel is up, and the tap explains itself.
+                    // This used to be `enabled = !status.isRunning`, which was
+                    // silent: the chip is the only place the mode can be changed,
+                    // so "why can't I" has to be answerable from the chip. A
+                    // control that answers is better than one that does nothing.
+                    //
+                    // Switching modes needs the engine rebuilt, which is why the
+                    // picker is refused while one is running rather than the
+                    // choice being applied to a live engine.
+                    onClick = {
+                        if (status.isRunning) {
+                            Toast.makeText(
+                                context,
+                                context.getString(R.string.home_mode_locked),
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        } else {
+                            showModePicker = true
+                        }
+                    },
                     label = stringResource(
                         when (status.mode) {
                             KernelState.Mode.PROXY -> R.string.home_mode_proxy
@@ -277,8 +296,10 @@ fun HomeScreen() {
             }
         }
 
-        // Hidden entirely under TUN_ONLY: there is no proxy listener to point
-        // anything at, so the card would be an address that does not work.
+        // Shown only while the proxy is actually listening: `proxyPort` is 0 until
+        // the listener is up, and `127.0.0.1:0` is not an address anyone can use.
+        // Under TUN_ONLY there is no listener at all, which is why the flag is the
+        // first test.
         if (!BuildFlags.TUN_ONLY &&
             status.isRunning &&
             status.mode == KernelState.Mode.PROXY &&
@@ -602,6 +623,18 @@ private fun ProxyAddressCard(port: Int) {
                 Text(address, style = MaterialTheme.typography.titleMedium)
                 Text(
                     stringResource(R.string.home_proxy_how),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                // The one thing this mode's user cannot find out by looking at it.
+                // The settings screen carries rows for timeouts, the upstream exit
+                // and the upstream resolver, and the tunnel is the only reader of
+                // any of them — `Kernel.startProxy` takes rules and nothing else.
+                // An exit that is configured and silently not applied is a privacy
+                // surprise, not a missing feature, so it is said here rather than
+                // only in the README.
+                Text(
+                    stringResource(R.string.home_proxy_limits),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

@@ -29,15 +29,19 @@
     <string name="home_domains_saved">本次命中规则 %1$d 次</string>
     <string name="home_no_permission">VPN 模式需要系统授权</string>
     <string name="home_grant">去授权</string>
-    <string name="home_mode_hint_proxy">需要 App 自己走代理，只对支持代理的软件生效</string>
-    <string name="home_mode_hint_vpn">接管公网流量，需要系统 VPN 授权</string>
     <string name="home_switch_mode">切换模式</string>
     <string name="home_proxy_address">代理地址</string>
     <string name="home_copy">复制</string>
     <string name="home_copied">已复制</string>
     <string name="home_proxy_how">把这个地址填进需要走代理的软件</string>
+    <!-- The proxy mode reads no kernel settings document — `watt_proxy_start`
+         takes rules and nothing else — so the rows under 高级：内核参数 are
+         tunnel-only. Said on the card rather than only in the README: an
+         upstream exit that is configured and silently not applied is a privacy
+         surprise, and the card is where the user of this mode is looking. -->
+    <string name="home_proxy_limits">超时、上游出口、上游解析器等内核参数只对 VPN 模式生效</string>
     <string name="home_mode_pick">选择模式</string>
-    <string name="home_mode_proxy_desc">免 Root，不需要系统授权。只对设置了代理的软件生效。</string>
+    <string name="home_mode_proxy_desc">免 Root，不需要系统授权。只对能设置 HTTP 代理的软件生效。</string>
     <string name="home_mode_vpn_desc">接管公网流量，需要系统 VPN 授权。能力完整。</string>
     <string name="home_error_hint">连接失败。检查规则是否已下载，或换一个模式试试。</string>
     <string name="home_disconnect_confirm_title">断开连接？</string>

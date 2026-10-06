@@ -1335,9 +1335,15 @@ class Prefs private constructor(private val store: SharedPreferences) {
      *   banner tell the truth. Wiping it would make a real pending change silently
      *   invisible after a restore — the user would move a row, see no banner, and
      *   believe the change had already been applied.
-     * * `mode` is the tunnel kind, and under [BuildFlags.TUN_ONLY] the picker that
-     *   would change it is hidden. A restore that silently switched the mode would
-     *   be a surprise with no control left to undo it.
+     * * `mode` is the tunnel kind, and a restore deliberately does not move it.
+     *   Every other value here is a parameter of a running engine; `mode` is the
+     *   shape of the engine itself. The mode in force right now lives in
+     *   [KernelState.status] — [Prefs.mode] is only what the next cold start will
+     *   restore — so resetting the pref under a running engine would leave the two
+     *   disagreeing until the next launch: the home screen would keep showing the
+     *   mode the user is in while the stored choice had silently become the other
+     *   one. "Restore defaults" is for parameters, not for which kind of engine
+     *   the user gets.
      *
      * So each property is set through its own setter, which is already the
      * assign-and-persist pair, keeping the in-memory singleton and the store in

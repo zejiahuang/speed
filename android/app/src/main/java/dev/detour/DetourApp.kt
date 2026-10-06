@@ -51,11 +51,15 @@ class DetourApp : Application() {
 
         // Before anything can read the status: the mode the user last chose.
         //
-        // Under [BuildFlags.TUN_ONLY] that choice is forced to VPN regardless of
-        // what is stored. The mode picker is hidden while the flag is on, so a
-        // device that previously stored `proxy` would otherwise run the proxy
-        // forever with no control that could change it. The stored value is left
-        // untouched, so flipping the flag restores whatever the user had chosen.
+        // The [BuildFlags.TUN_ONLY] branch is the one that overrides that choice
+        // to VPN, and it is not taken while the flag is false — which is the
+        // point: the picker is on screen, so the stored value is honoured and
+        // there is a control that can change it. The branch stays because it is
+        // what makes hiding the mode again a one-line change.
+        //
+        // An unreadable value falls back to PROXY, which is what `Prefs.mode` and
+        // `KernelState.Status` default to as well — one fallback for the three, so
+        // a corrupt value cannot name a mode the other two disagree with.
         val stored = Prefs.of(this).mode
         val restored = if (BuildFlags.TUN_ONLY) {
             KernelState.Mode.VPN

@@ -1,27 +1,44 @@
-//! No-Root HTTP CONNECT proxy mode.
+//! No-Root proxy mode: a CONNECT tunnel and a plain-HTTP forwarder on one port.
 //!
 //! This is intentionally separate from the TUN engine. A TUN requires Android's
-//! `VpnService` to own the descriptor and route all app traffic; a CONNECT
-//! listener needs neither root nor a synthetic local TLS server. The client
-//! opens one TCP connection to us, sends `CONNECT host:port`, and we copy the
-//! encrypted bytes without inspecting them.
+//! `VpnService` to own the descriptor and route all app traffic; a listener on
+//! a loopback port needs neither root nor a synthetic local TLS server, and it
+//! never terminates TLS — a CONNECT has its encrypted bytes copied without
+//! inspection, and a forwarded request has its request line rewritten and the
+//! rest copied.
 //!
-//! Policy is strict about *which* domains are served: an unlisted domain gets
-//! 403. It is deliberately lenient about *how* a listed domain is reached. A
-//! rule's addresses are a ranking of preferences, not the only way out: if every
-//! rule address refuses or times out, the system resolver gets the last word.
+//! # Policy: a rule is a ranking of preferences, not a gate
 //!
-//! That asymmetry is the whole point. A rule is a hint that the operator
-//! believes address X is better for this domain — usually it is, sometimes the
-//! network disagrees, and sometimes the rule is simply stale. Treating the hint
-//! as the sole route turns a stale entry into an outage for a domain we already
-//! decided to serve. Falling back keeps the failure honest: we only report
-//! 502 when *nothing* reached the host.
+//! A domain the rule set mentions is dialled at the rule's addresses first,
+//! because those are addresses the rule author already verified. A domain no
+//! rule mentions is reached through the system resolver, exactly as the rest of
+//! the device reaches it.
+//!
+//! Nothing is refused for being unlisted. An earlier revision answered `403`
+//! there, on the reasoning that dialling an unlisted domain directly would
+//! expose the user's address — but the tunnel does not work that way either
+//! (an unlisted domain in VPN mode is `Plan::direct` and goes out untouched),
+//! and the effect of the stricter rule was that a browser pointed at the proxy
+//! stopped working on any site the rule set had not heard of. A proxy that
+//! serves only the domains a third-party list happens to name is not a proxy.
+//!
+//! The asymmetry runs the other way for *how* a listed domain is reached: if
+//! every rule address refuses or times out, the system resolver gets the last
+//! word. A rule is a hint that address X is better for this domain — usually it
+//! is, sometimes the network disagrees, and sometimes the rule is simply stale.
+//! Treating the hint as the sole route turns a stale entry into an outage for a
+//! domain we already decided to serve. Falling back keeps the failure honest:
+//! we only report 502 when *nothing* reached the host.
+//!
+//! # What this cannot do
+//!
+//! Only traffic the client *chooses* to send here is served, so it has to be
+//! told to use the proxy — and a client that ignores its proxy setting, or
+//! speaks QUIC over UDP/443 instead of TCP, bypasses this entirely. That is the
+//! price of needing no permission, and it is why the tunnel exists as well.
 
-
-
-use std::io::{self, BufRead, BufReader, Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
+use std::io::{self, Read, Write};
+use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -160,41 +177,183 @@ pub fn serve_until(
     Ok(())
 }
 
+/// The client's request head, and anything it sent past it.
+struct Head {
+    /// The head verbatim, including the blank line that ends it.
+    raw: Vec<u8>,
+    /// Bytes read past that blank line. On a forwarded request they are the
+    /// start of the body; on a CONNECT they are whatever the client pipelined
+    /// before waiting for the tunnel. Either way they belong to the upstream,
+    /// and dropping them is silent data loss.
+    leftover: Vec<u8>,
+}
+
+/// Read one request head.
+///
+/// Reads bytes and stops at the blank line rather than filling a buffer,
+/// because everything after the head has to survive. A `BufReader` reads ahead
+/// by design, and the bytes it swallowed go with it when it is dropped — which
+/// is invisible for a CONNECT, whose client waits for the `200`, and fatal for
+/// a `POST`, whose body arrives alongside the head.
+///
+/// `Ok(None)` means the client closed without sending a head: not an error, and
+/// not worth a log line. `Err` of kind [`io::ErrorKind::InvalidData`] means the
+/// head is over [`HEADER_LIMIT`], so the caller can answer 431 rather than drop
+/// the connection unexplained.
+fn read_head(client: &mut TcpStream) -> io::Result<Option<Head>> {
+    let mut pending: Vec<u8> = Vec::new();
+    let mut buffer = vec![0u8; 4096];
+    loop {
+        if let Some(end) = head_end(&pending) {
+            let leftover = pending.split_off(end);
+            return Ok(Some(Head {
+                raw: pending,
+                leftover,
+            }));
+        }
+        if pending.len() >= HEADER_LIMIT {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "the request head is larger than the limit",
+            ));
+        }
+        let read = client.read(&mut buffer)?;
+        if read == 0 {
+            return if pending.is_empty() {
+                Ok(None)
+            } else {
+                Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "the client closed in the middle of a request head",
+                ))
+            };
+        }
+        pending.extend_from_slice(&buffer[..read]);
+    }
+}
+
+/// Where a request head ends: the index just past its blank line.
+///
+/// `\r\n\r\n` is what every real client sends. Bare `\n\n` is accepted because
+/// a hand-written probe sends it, and refusing would be a mystery to whoever
+/// wrote the probe. The earlier of the two wins, so a head that contains both
+/// is not cut in the wrong place.
+fn head_end(bytes: &[u8]) -> Option<usize> {
+    let crlf = bytes
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|index| index + 4);
+    let lf = bytes
+        .windows(2)
+        .position(|window| window == b"\n\n")
+        .map(|index| index + 2);
+    match (crlf, lf) {
+        (Some(crlf), Some(lf)) => Some(crlf.min(lf)),
+        (found, None) | (None, found) => found,
+    }
+}
+
+/// The first line of a head, without its terminator, as text.
+///
+/// Lossy on purpose: a request line is ASCII by specification, and a client
+/// that sends something else is answered 400 by the caller rather than dropped
+/// with an encoding error it cannot see.
+fn first_line(raw: &[u8]) -> &str {
+    let end = raw.iter().position(|byte| *byte == b'\n').unwrap_or(raw.len());
+    let line = &raw[..end];
+    let line = match line.split_last() {
+        Some((&b'\r', rest)) => rest,
+        _ => line,
+    };
+    std::str::from_utf8(line).unwrap_or("")
+}
+
+/// The bytes a CONNECT client sends once the tunnel is open.
+///
+/// `None` means the client closed without sending any: a session that never
+/// started, which is not a failure and must not be reported as one.
+fn read_opening(host: &str, client: &mut TcpStream) -> io::Result<Option<Vec<u8>>> {
+    // One read is enough: a ClientHello arrives in a single segment, and
+    // anything beyond it stays queued in the socket for the relay to pick up.
+    client.set_read_timeout(Some(FIRST_BYTE_DEADLINE))?;
+    let mut opening = vec![0u8; COPY_BUFFER];
+    match client.read(&mut opening) {
+        Ok(0) => {
+            log::info!("proxy: {host} client closed before sending anything");
+            Ok(None)
+        }
+        Ok(len) => Ok(Some(opening[..len].to_vec())),
+        Err(err) => {
+            log::info!("proxy: {host} reading the client's opening bytes: {err}");
+            Err(err)
+        }
+    }
+}
+
 fn handle(mut client: TcpStream, router: &Mutex<Router>) -> io::Result<()> {
     client.set_read_timeout(Some(CONNECT_TIMEOUT))?;
     client.set_write_timeout(Some(CONNECT_TIMEOUT))?;
 
-    let mut first = String::new();
-    let mut reader = BufReader::new(client.try_clone()?);
-    let mut total = 0usize;
-    loop {
-        let before = first.len();
-        let n = reader.read_line(&mut first)?;
-        total += n;
-        if total > HEADER_LIMIT {
+    let head = match read_head(&mut client) {
+        Ok(Some(head)) => head,
+        // A connection that opens and says nothing. Port scanners, health
+        // checks and a browser's speculative preconnect all look like this, so
+        // it is not worth a log line.
+        Ok(None) => return Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::InvalidData => {
             return response(&mut client, "431 Request Header Fields Too Large\r\n\r\n");
         }
-        if n == 0 || first.ends_with("\r\n\r\n") || first.ends_with("\n\n") {
-            break;
-        }
-        if first.len() == before {
-            break;
-        }
-    }
+        Err(err) => return Err(err),
+    };
 
-    let mut parts = first.split_whitespace();
+    let request_line = first_line(&head.raw);
+    let mut parts = request_line.split_whitespace();
     let method = parts.next().unwrap_or("");
-    let authority = parts.next().unwrap_or("");
-    if !method.eq_ignore_ascii_case("CONNECT") {
-        return response(
-            &mut client,
-            "405 Method Not Allowed\r\nAllow: CONNECT\r\n\r\n",
-        );
+    let target = parts.next().unwrap_or("");
+    let version = parts.next().unwrap_or("");
+    if method.is_empty() || target.is_empty() || version.is_empty() {
+        return response(&mut client, "400 Bad Request\r\n\r\n");
     }
 
-    let (host, port) = parse_authority(authority).ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidInput, "CONNECT authority must be host:port")
-    })?;
+    // Two protocols share this port and the first line is all they agree on. A
+    // CONNECT names an authority and asks for a tunnel; a request carrying an
+    // absolute URI is addressed to us *as a proxy*, and is forwarded with the
+    // URI rewritten into the origin-form the server expects.
+    let (host, port, opening, tunnelled) = if method.eq_ignore_ascii_case("CONNECT") {
+        let Some((host, port)) = parse_authority(target) else {
+            return response(&mut client, "400 Bad Request\r\n\r\n");
+        };
+        (host, port, head.leftover, true)
+    } else if let Some(after_scheme) = target.strip_prefix("http://") {
+        let Some((host, port, path)) = parse_absolute(after_scheme) else {
+            return response(&mut client, "400 Bad Request\r\n\r\n");
+        };
+        let mut opening = rewrite_head(&head.raw, method, &path, version);
+        // Anything the client sent past the head is the start of the body, and
+        // it belongs to the upstream. Reading the head line-by-line into a
+        // `BufReader` used to swallow these bytes and drop them with the reader
+        // — invisible for a CONNECT, whose client waits for the `200` before
+        // sending anything, and fatal for a `POST`, whose body arrives with the
+        // head.
+        opening.extend_from_slice(&head.leftover);
+        (host, port, opening, false)
+    } else if target.starts_with("https://") {
+        // An absolute `https://` URI can only be served by terminating TLS: the
+        // client sent its request line in the clear and expects a plaintext
+        // reply. This proxy never terminates TLS, and a browser sends CONNECT
+        // for HTTPS anyway, so this shape means a client that is not a browser
+        // asking for something we do not do.
+        log::warn!("proxy: refusing an absolute https:// request for {target}");
+        return response(&mut client, "501 Not Implemented\r\n\r\n");
+    } else {
+        // Origin-form: the client is talking to us as though we were the
+        // server. There is no way to know what it wants, and guessing from the
+        // `Host` header would make a client with a misconfigured proxy look
+        // like a working one.
+        log::warn!("proxy: {method} {target} is not addressed to a proxy");
+        return response(&mut client, "400 Bad Request\r\n\r\n");
+    };
+
     let now = Instant::now();
     let plan = {
         let router = router.lock().expect("the router lock is never poisoned");
@@ -212,8 +371,7 @@ fn handle(mut client: TcpStream, router: &Mutex<Router>) -> io::Result<()> {
         plan.port
     );
     if matches!(plan.strategy, Strategy::Direct) {
-        log::warn!("proxy: {host} is not in the rule set; refusing rather than dialling it directly");
-        return response(&mut client, "403 Forbidden\r\n\r\n");
+        log::info!("proxy: {host} is not in the rule set; going out directly");
     }
 
     // Three stages, tried in this order, each one strictly weaker than the last:
@@ -250,13 +408,17 @@ fn handle(mut client: TcpStream, router: &Mutex<Router>) -> io::Result<()> {
     // left is the order of the stages themselves. The cooled address is still
     // tried, just last, so a transient failure costs a reordering rather than a
     // blacklist.
-    let literal_cooled = !literal.is_empty()
-        && literal
-            .iter()
-            .all(|target| router.lock().map(|r| r.is_cooled(target.ip(), now)).unwrap_or(false));
-
     let mut order = vec![Stage::Literal, Stage::System];
-    if literal_cooled {
+    if literal.is_empty() {
+        // Nothing to rank. Either no rule matched — the ordinary case for a
+        // domain the list has never heard of — or a rule matched without a
+        // usable address. Both leave the system resolver as the only stage, and
+        // the domain is reached the way the rest of the device reaches it.
+        order.retain(|stage| !matches!(stage, Stage::Literal));
+    } else if literal
+        .iter()
+        .all(|target| router.lock().map(|r| r.is_cooled(target.ip(), now)).unwrap_or(false))
+    {
         order.retain(|stage| !matches!(stage, Stage::Literal));
         order.push(Stage::Literal);
         log::info!(
@@ -270,7 +432,14 @@ fn handle(mut client: TcpStream, router: &Mutex<Router>) -> io::Result<()> {
     // would be a lookup per request for nothing.
     let mut tried: Vec<SocketAddr> = Vec::new();
     let mut upstream = None;
-    let mut used = "rule-addresses";
+    // The stage that actually carried the request. A separate variable from the
+    // one naming the stage *being* tried, because a single one cannot do both:
+    // it is only known to be correct after the dial succeeds, so every line
+    // printed before that would carry the previous stage's name. Measured
+    // 2026-10-06 on `www.baidu.com` (unlisted, so `order` is `[System]` alone):
+    // the dial line read `from rule-addresses` while the very next line read
+    // `served via system-resolution`.
+    let mut served_by: Option<&'static str> = None;
     let mut stage_candidates: Vec<SocketAddr> = Vec::new();
     for stage in order {
         if upstream.is_some() {
@@ -300,9 +469,15 @@ fn handle(mut client: TcpStream, router: &Mutex<Router>) -> io::Result<()> {
         // and the belief is sometimes out of date — or, measured here, the
         // fastest of them is sometimes serving someone else's certificate.
         let mut verified = 0usize;
-        let fresh: Vec<SocketAddr> = if stage.label() == "rule-addresses" {
+        // Only the rule's own addresses carry an author's ordering, so only they
+        // get a certificate probe and the head start that protects that ordering.
+        // A system-resolver answer has no author and is made of addresses the
+        // network already vouched for; there the head start is pure latency.
+        let mut head_start = Duration::ZERO;
+        let fresh: Vec<SocketAddr> = if matches!(stage, Stage::Literal) {
             let (ordered, count) = prefer_covered(fresh, &host);
             verified = count;
+            head_start = VERIFIED_HEAD_START;
             ordered
         } else {
             fresh
@@ -317,15 +492,16 @@ fn handle(mut client: TcpStream, router: &Mutex<Router>) -> io::Result<()> {
         // refused, every one connected and stayed silent, or the winning address
         // served the wrong certificate.
         log::info!(
-            "proxy: {host} dialling {} candidate(s) from {used} ({verified} verified): {:?}",
+            "proxy: {host} dialling {} candidate(s) from {} ({verified} verified): {:?}",
             fresh.len().min(MAX_CANDIDATES),
+            stage.label(),
             fresh
                 .iter()
                 .take(4)
                 .map(|target| target.ip())
                 .collect::<Vec<_>>()
         );
-        if let Some(stream) = connect_first(&fresh, router, now, verified) {
+        if let Some(stream) = connect_first(&fresh, router, now, verified, head_start) {
             log::info!(
                 "proxy: {host} connected upstream via {}",
                 stream
@@ -334,9 +510,9 @@ fn handle(mut client: TcpStream, router: &Mutex<Router>) -> io::Result<()> {
                     .unwrap_or_else(|_| "?".to_string())
             );
             upstream = Some(stream);
-            used = stage.label();
+            served_by = Some(stage.label());
         } else {
-            log::warn!("proxy: {host} no candidate in {used} connected");
+            log::warn!("proxy: {host} no candidate in {} connected", stage.label());
         }
     }
 
@@ -344,18 +520,50 @@ fn handle(mut client: TcpStream, router: &Mutex<Router>) -> io::Result<()> {
         Some(stream) => stream,
         None => return response(&mut client, "502 Bad Gateway\r\n\r\n"),
     };
-    if used != "rule-addresses" {
+    match served_by {
         // Worth a line: the rule for this domain is not describing a reachable
         // address any more, which is a signal the ruleset needs refreshing.
-        log::info!("proxy: {host} served via {used}");
+        Some(served_by) if served_by != Stage::Literal.label() => {
+            log::info!("proxy: {host} served via {served_by}");
+        }
+        _ => {}
     }
 
     // Captured before the copy: after it, the socket may already be gone.
     let upstream_addr = upstream.peer_addr().ok().map(|addr| addr.ip());
-    client.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")?;
+
+    // A CONNECT client waits for this line before it sends anything, so its
+    // opening bytes can only be read here. A forwarded request has already sent
+    // everything it is going to send, and answering it with a tunnel response
+    // would put `200 Connection Established` in front of the server's own reply.
+    let opening = if tunnelled {
+        client.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")?;
+        match read_opening(&host, &mut client)? {
+            Some(opening) => opening,
+            None => return Ok(()),
+        }
+    } else {
+        opening
+    };
+
     // Timeouts are the relay's business: it needs a deadline on the upstream
     // until the first byte arrives, and none afterwards.
-    let copied = relay(&host, &mut client, upstream, &stage_candidates, router, now);
+    let copied = relay(Session {
+        host: &host,
+        client: &mut client,
+        upstream,
+        candidates: &stage_candidates,
+        router,
+        now,
+        opening,
+        // A forwarded request is one exchange: the client has sent its request
+        // and is waiting, so a client that closes has given up and the upstream
+        // should be told rather than left answering into a socket nobody reads.
+        // A CONNECT may be half-closed by a client that has finished uploading
+        // and is still waiting for the reply — the normal shape of an upload —
+        // and ending the session there would cut the response off.
+        client_ends_session: !tunnelled,
+    });
 
     // The connection is over, so now there is something worth saying about it.
     // A session that opened and moved no bytes downstream is the one failure the
@@ -642,11 +850,22 @@ fn probe_all(targets: &[SocketAddr], host: &str) -> Vec<(SocketAddr, Option<bool
 /// Unverified candidates are still dialled if the verified ones do not answer —
 /// a verdict can be stale, and refusing outright would turn a rule whose one
 /// covered address has gone dark into a total failure.
+///
+/// # `head_start`
+///
+/// How long the first unverified candidate is given alone. It exists to keep the
+/// rule author's ordering meaningful, so it belongs to the rule-addresses stage
+/// and to nothing else: a system-resolver answer is a set of addresses the
+/// network already vouched for, with no author's preference in it, and there the
+/// head start is a flat second and a bit added to every request for no gain.
+/// The failover pass passes zero for the same reason its own comment gives —
+/// the confirmed addresses already had their turn on the initial dial.
 fn connect_first(
     targets: &[SocketAddr],
     router: &Mutex<Router>,
     now: Instant,
     verified_count: usize,
+    head_start: Duration,
 ) -> Option<TcpStream> {
     let (sender, receiver) = mpsc::channel();
     let mut in_flight = 0usize;
@@ -659,7 +878,7 @@ fn connect_first(
         let delay = if index < verified_count {
             Duration::ZERO
         } else {
-            VERIFIED_HEAD_START + CONNECT_STAGGER * (index - verified_count) as u32
+            head_start + CONNECT_STAGGER * (index - verified_count) as u32
         };
         let spawned = thread::Builder::new()
             .name("watt-connect".to_string())
@@ -734,20 +953,134 @@ fn response(client: &mut TcpStream, value: &str) -> io::Result<()> {
     client.write_all(format!("HTTP/1.1 {value}").as_bytes())
 }
 
-fn parse_authority(raw: &str) -> Option<(String, u16)> {
+/// Where a plain `http://` request goes when the URI names no port.
+const DEFAULT_HTTP_PORT: u16 = 80;
+
+/// Split `host[:port]` into its parts. The port is optional here.
+///
+/// Shared by both request shapes. A CONNECT authority always carries a port and
+/// an absolute URI usually does not, but the bracketing and case rules for the
+/// host are the same for both — and two copies of them is how `[::1]` ends up
+/// working on one path and not the other.
+fn parse_host_port(raw: &str) -> Option<(String, Option<u16>)> {
     if raw.is_empty() || raw.contains('/') || raw.contains('@') {
+        // `@` is userinfo, which has nowhere to go once the authority is
+        // stripped off the request line. Refused rather than dropped: a
+        // credential silently discarded turns a 401 into a mystery.
         return None;
     }
     if let Some(rest) = raw.strip_prefix('[') {
         let (host, rest) = rest.split_once(']')?;
-        let port = rest.strip_prefix(':')?.parse().ok()?;
+        if host.is_empty() {
+            return None;
+        }
+        let port = match rest {
+            "" => None,
+            rest => Some(rest.strip_prefix(':')?.parse().ok()?),
+        };
         return Some((host.to_ascii_lowercase(), port));
     }
-    let (host, port) = raw.rsplit_once(':')?;
-    if host.is_empty() {
-        return None;
+    match raw.rsplit_once(':') {
+        Some((host, port)) => {
+            if host.is_empty() {
+                return None;
+            }
+            Some((host.to_ascii_lowercase(), Some(port.parse().ok()?)))
+        }
+        None => Some((raw.to_ascii_lowercase(), None)),
     }
-    Some((host.to_ascii_lowercase(), port.parse().ok()?))
+}
+
+/// A CONNECT authority. Unlike an absolute URI, the port is not optional.
+fn parse_authority(raw: &str) -> Option<(String, u16)> {
+    let (host, port) = parse_host_port(raw)?;
+    Some((host, port?))
+}
+
+/// Split the part of an absolute URI after `http://` into `(host, port, path)`.
+///
+/// The path comes back in origin-form — with a leading slash — because that is
+/// what the request line has to carry once the authority is gone. A URI whose
+/// query has no path (`http://host?q`) still needs one, and `/` is what the
+/// origin server would have assumed.
+fn parse_absolute(rest: &str) -> Option<(String, u16, String)> {
+    let (authority, tail) = match rest.find(|c| c == '/' || c == '?' || c == '#') {
+        Some(index) => rest.split_at(index),
+        None => (rest, ""),
+    };
+    let path = if tail.is_empty() {
+        "/".to_string()
+    } else if tail.starts_with('/') {
+        tail.to_string()
+    } else {
+        format!("/{tail}")
+    };
+    let (host, port) = parse_host_port(authority)?;
+    Some((host, port.unwrap_or(DEFAULT_HTTP_PORT), path))
+}
+
+/// Rewrite a forwarded request head into the origin-form the server expects.
+///
+/// Three edits, and each one is load-bearing:
+///
+/// * the request line loses the scheme and the authority. A server reading
+///   `GET http://example.com/ HTTP/1.1` answers 400, because absolute-form is
+///   addressed to a proxy and it is not one.
+/// * `Proxy-Connection` and `Proxy-Authorization` are dropped. They are
+///   addressed to us; forwarding them tells the server a proxy is in the path,
+///   and the second hands it a credential it never asked for.
+/// * `Connection` is replaced with `close`. This relay copies bytes and does
+///   not parse responses, so a second request on the same client connection
+///   would arrive in absolute-form and be forwarded verbatim to a server that
+///   cannot read it. One request per connection is the only shape this relay
+///   can keep correct — and saying so in the request is what makes the upstream
+///   close at the right moment instead of leaving the client waiting.
+///
+/// Not done, and worth knowing: `Connection` may itself name further hop-by-hop
+/// headers to strip, and this does not follow that list. The two that matter in
+/// practice are the `Proxy-` headers above.
+fn rewrite_head(raw: &[u8], method: &str, path: &str, version: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(raw.len());
+    out.extend_from_slice(method.as_bytes());
+    out.push(b' ');
+    out.extend_from_slice(path.as_bytes());
+    out.push(b' ');
+    out.extend_from_slice(version.as_bytes());
+    out.extend_from_slice(b"\r\n");
+
+    for line in raw.split(|byte| *byte == b'\n').skip(1) {
+        let line = match line.split_last() {
+            Some((&b'\r', rest)) => rest,
+            _ => line,
+        };
+        // The blank line that ended the head, and any stray blank line before
+        // it. Neither is a header, so neither is forwarded.
+        if line.is_empty() {
+            continue;
+        }
+        let Some(colon) = line.iter().position(|byte| *byte == b':') else {
+            // Not a header at all. Dropped rather than passed through: a server
+            // reading a malformed line either rejects the whole request or
+            // misreads it, and neither is better than losing a line that was
+            // already invalid.
+            continue;
+        };
+        if is_hop_by_hop(&line[..colon]) {
+            continue;
+        }
+        out.extend_from_slice(line);
+        out.extend_from_slice(b"\r\n");
+    }
+    out.extend_from_slice(b"Connection: close\r\n\r\n");
+    out
+}
+
+/// Headers that describe this hop, which must not be forwarded to the next one.
+fn is_hop_by_hop(name: &[u8]) -> bool {
+    const DROPPED: [&[u8]; 3] = [b"proxy-connection", b"proxy-authorization", b"connection"];
+    DROPPED
+        .iter()
+        .any(|dropped| name.eq_ignore_ascii_case(*dropped))
 }
 
 /// Where a candidate address came from. Tried in order, weakest last.
@@ -779,50 +1112,62 @@ struct SessionBytes {
     downstream: u64,
 }
 
+/// One relayed session: the client, the upstream already chosen for it, and
+/// everything the relay needs in order to change its mind about that upstream.
+///
+/// A struct rather than a longer parameter list because the pieces only mean
+/// anything together, and because the last two fields are the ones that tell
+/// the two request shapes apart — which is the part that is easy to get wrong.
+struct Session<'a> {
+    host: &'a str,
+    client: &'a mut TcpStream,
+    upstream: TcpStream,
+    candidates: &'a [SocketAddr],
+    router: &'a Mutex<Router>,
+    now: Instant,
+    /// Bytes the client has already sent that belong to this session: the
+    /// rewritten head of a forwarded request plus whatever followed it, or the
+    /// bytes a CONNECT client sent once its tunnel was open.
+    opening: Vec<u8>,
+    /// Whether a client that stops sending ends the session.
+    ///
+    /// True for a forwarded request — the client sent one request and is waiting
+    /// for one reply, so a client that closes has given up. False for a CONNECT,
+    /// where a half-closed client is one that has finished uploading and is
+    /// still waiting for the answer.
+    client_ends_session: bool,
+}
+
 /// Relay, changing upstream if the chosen one never answers.
 ///
-/// A CONNECT proxy has to answer the client before it can know whether the
-/// upstream works: the client's opening bytes only arrive after the 200. So the
-/// choice cannot be verified in advance, and an address that accepts the
+/// The choice of upstream cannot be verified in advance: nothing is known about
+/// it until the session's first bytes reach it. An address that accepts the
 /// connection and then says nothing — the normal shape of SNI blocking, and the
-/// reason `Outcome::Silent` exists — would leave the client waiting until its own
-/// timeout. Measured against the merged rule set, that is an eighty-second hang
-/// on `github.com`, which is not a product.
+/// reason `Outcome::Silent` exists — would otherwise leave the client waiting
+/// until its own timeout. Measured against the merged rule set, that is an
+/// eighty-second hang on `github.com`, which is not a product.
 ///
 /// The way out is that **no upstream byte has reached the client yet**. Until the
 /// first byte comes back the session is still ours to change: the silent upstream
-/// can be dropped and the client's opening bytes replayed against the next
+/// can be dropped and the session's opening bytes replayed against the next
 /// candidate, and the client sees a slow start rather than a failure. Once a byte
-/// has been forwarded the client's TLS session is bound to that stream and the
+/// has been forwarded the client's protocol is bound to that stream and the
 /// choice is final, so the handover to the ordinary relay happens there.
 ///
 /// A silent attempt is reported as [`Outcome::Silent`], so the address sinks in
 /// the ranking and the next request does not repeat the discovery.
-fn relay(
-    host: &str,
-    client: &mut TcpStream,
-    mut upstream: TcpStream,
-    candidates: &[SocketAddr],
-    router: &Mutex<Router>,
-    now: Instant,
-) -> io::Result<SessionBytes> {
-    // The client's opening bytes. One read is enough: a ClientHello arrives in a
-    // single segment, and anything beyond it stays queued in the socket for the
-    // ordinary relay to pick up.
-    client.set_read_timeout(Some(FIRST_BYTE_DEADLINE))?;
-    let mut opening = vec![0u8; COPY_BUFFER];
-    let opening_len = match client.read(&mut opening) {
-        Ok(0) => {
-            log::info!("proxy: {host} client closed before sending anything");
-            return Ok(SessionBytes::default());
-        }
-        Ok(len) => len,
-        Err(err) => {
-            log::info!("proxy: {host} reading the client's opening bytes: {err}");
-            return Err(err);
-        }
-    };
-    let opening = opening[..opening_len].to_vec();
+fn relay(session: Session<'_>) -> io::Result<SessionBytes> {
+    let Session {
+        host,
+        client,
+        mut upstream,
+        candidates,
+        router,
+        now,
+        opening,
+        client_ends_session,
+    } = session;
+    let opening_len = opening.len();
 
     // Every candidate except the one already in hand, in preference order, and
     // capped like the initial attempt: a domain can carry hundreds of addresses,
@@ -858,7 +1203,7 @@ fn relay(
             upstream.set_read_timeout(None)?;
             client.set_read_timeout(None)?;
             client.write_all(&reply)?;
-            let mut bytes = copy_bidirectional(client, &mut upstream)?;
+            let mut bytes = copy_bidirectional(client, &mut upstream, client_ends_session)?;
             bytes.upstream += opening_len as u64;
             bytes.downstream += reply.len() as u64;
             return Ok(bytes);
@@ -871,7 +1216,7 @@ fn relay(
             if let Ok(mut router) = router.lock() {
                 router.report_outcome(addr.ip(), Outcome::Silent, now);
             }
-            log::warn!("proxy: {} connected but never replied; trying another", addr.ip());
+            log::warn!("proxy: {host} {} connected but never replied; trying another", addr.ip());
         }
 
         // The next attempt is staggered like the first, not walked one at a time.
@@ -885,10 +1230,11 @@ fn relay(
                 "every candidate connected without replying",
             ));
         }
-        // Zero verified: the confirmed addresses were already given their
-        // exclusive turn by the initial dial, and the ones reached here are the
-        // remainder. Re-applying the head start would only slow the failover.
-        let Some(next) = connect_first(remaining, router, now, 0) else {
+        // Zero verified and no head start: the confirmed addresses were already
+        // given their exclusive turn by the initial dial, and the ones reached
+        // here are the remainder. Re-applying either would only slow the
+        // failover.
+        let Some(next) = connect_first(remaining, router, now, 0, Duration::ZERO) else {
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 "every candidate connected without replying",
@@ -901,25 +1247,48 @@ fn relay(
     }
 }
 
+/// Copy in both directions for the rest of the session.
+///
+/// The upstream is watched on this thread rather than the client, because the
+/// upstream closing is the end of the reply while a quiet client is just a
+/// client with nothing to say.
+///
+/// # `client_ends_session`
+///
+/// When the client stops sending, the upstream is told so, and what "told so"
+/// means depends on the shape of the session. A forwarded request is one
+/// exchange: a client that closes has given up, so the upstream's read side is
+/// closed too and a server still waiting for a body stops waiting instead of
+/// answering into a socket nobody will read. A tunnel is not one exchange — an
+/// upload over a CONNECT ends with exactly that half-close, and the client is
+/// still waiting for the reply — so there the upstream is left alone.
+///
+/// The client's write side is closed in both cases. The upstream has already
+/// stopped sending, which is what ended the loop, so there is nothing left for
+/// the client to read; a FIN is how it learns that instead of waiting for a
+/// close that never comes. That FIN is also what lets the forward thread
+/// finish: without it the client sits there, the copy thread sits in `join`, and
+/// the session outlives the connection it was relaying.
 fn copy_bidirectional(
-    left: &mut TcpStream,
-    right: &mut TcpStream,
+    client: &mut TcpStream,
+    upstream: &mut TcpStream,
+    client_ends_session: bool,
 ) -> io::Result<SessionBytes> {
-    let mut left_reader = left.try_clone()?;
-    let mut right_writer = right.try_clone()?;
+    let mut client_reader = client.try_clone()?;
+    let mut upstream_writer = upstream.try_clone()?;
     // The forward direction runs in its own thread because a half-open
     // connection must still be pumped; `io::copy` already counts the bytes.
-    let forward = thread::spawn(move || io::copy(&mut left_reader, &mut right_writer));
+    let forward = thread::spawn(move || io::copy(&mut client_reader, &mut upstream_writer));
 
     let mut buffer = vec![0u8; COPY_BUFFER];
     let mut downstream = 0u64;
     let mut failure = None;
     loop {
-        match right.read(&mut buffer) {
+        match upstream.read(&mut buffer) {
             Ok(0) => break,
             Ok(n) => {
                 downstream += n as u64;
-                if let Err(err) = left.write_all(&buffer[..n]) {
+                if let Err(err) = client.write_all(&buffer[..n]) {
                     failure = Some(err);
                     break;
                 }
@@ -931,15 +1300,20 @@ fn copy_bidirectional(
             }
         }
     }
+
+    let _ = client.shutdown(Shutdown::Write);
+    if client_ends_session {
+        let _ = upstream.shutdown(Shutdown::Read);
+    }
     // The forward thread is allowed to fail on its own; a client that hangs up
     // mid-upload is routine and must not turn into an error for the caller. Its
     // byte count is still worth keeping.
-    let upstream = forward.join().ok().and_then(Result::ok).unwrap_or(0);
+    let upstream_bytes = forward.join().ok().and_then(Result::ok).unwrap_or(0);
 
     match failure {
         Some(err) => Err(err),
         None => Ok(SessionBytes {
-            upstream,
+            upstream: upstream_bytes,
             downstream,
         }),
     }
@@ -1037,19 +1411,291 @@ mod tests {
         );
     }
 
-    #[test]
-    fn connecting_to_nothing_fails_rather_than_hanging() {
-        // A ruleset must own at least one entry to be valid, so the fixture
-        // carries one unrelated rule; the point is the empty *candidate list*.
-        let rules = watt_rules::RuleSet::from_str(
+    /// The smallest rule document the compiler accepts, naming a host none of
+    /// these tests touch. A ruleset must own at least one entry to be valid, so
+    /// every fixture here carries this one.
+    fn one_unrelated_rule() -> watt_rules::RuleSet {
+        watt_rules::RuleSet::from_str(
             r#"{"version":"test","groups":[{"group":"g","entries":[
                 {"id":"1","name":"unrelated","domains":["unrelated.example"],
                  "ips":["203.0.113.10"],"port":"443","isPlaceholder":false}
             ]}]}"#,
             watt_rules::RuleSource::Provided,
         )
-        .unwrap();
-        let router = Mutex::new(Router::new(rules));
-        assert!(connect_first(&[], &router, Instant::now(), 0).is_none());
+        .unwrap()
+    }
+
+    /// A listener on a free loopback port, plus the address it landed on.
+    fn loopback() -> (TcpListener, SocketAddr) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        (listener, address)
+    }
+
+    /// Start a proxy on a free loopback port, and hand back its address plus the
+    /// stop flag the test uses to shut it down.
+    fn start_proxy() -> (SocketAddr, Arc<AtomicBool>, thread::JoinHandle<io::Result<()>>) {
+        let (listener, address) = loopback();
+        let router = Arc::new(Mutex::new(Router::new(one_unrelated_rule())));
+        let stop = Arc::new(AtomicBool::new(false));
+        let serving = {
+            let stop = Arc::clone(&stop);
+            thread::spawn(move || serve_until(listener, router, stop))
+        };
+        (address, stop, serving)
+    }
+
+    /// Read a head off a socket, one byte at a time, stopping at its blank line.
+    ///
+    /// Byte at a time on purpose. A buffered read would swallow the first bytes
+    /// of whatever follows the head, which is precisely the bug the forwarding
+    /// path has to avoid — and a test that reads ahead cannot see it.
+    fn read_head_from(stream: &mut TcpStream) -> Vec<u8> {
+        let mut head = Vec::new();
+        let mut byte = [0u8; 1];
+        while !head.ends_with(b"\r\n\r\n") {
+            match stream.read(&mut byte) {
+                Ok(0) => break,
+                Ok(_) => head.push(byte[0]),
+                Err(err) => panic!("reading a head: {err}"),
+            }
+        }
+        head
+    }
+
+    #[test]
+    fn a_head_stops_at_its_blank_line_and_keeps_what_follows() {
+        // The bug this guards is invisible without a socket: reading a head with
+        // a `BufReader` reads ahead by design, and the bytes it read ahead are
+        // the start of the body. The CONNECT path never noticed, because a
+        // CONNECT client waits for the `200` before sending anything — a `POST`
+        // sends its body with its head.
+        let (listener, address) = loopback();
+        let writer = thread::spawn(move || {
+            let mut stream = TcpStream::connect(address).unwrap();
+            stream
+                .write_all(b"POST /x HTTP/1.1\r\nHost: h\r\n\r\nBODY")
+                .unwrap();
+            // Held open until the assertions have run, so a close cannot be
+            // mistaken for a short head.
+            stream
+        });
+
+        let (mut stream, _) = listener.accept().unwrap();
+        let head = read_head(&mut stream).unwrap().unwrap();
+        assert_eq!(head.raw, b"POST /x HTTP/1.1\r\nHost: h\r\n\r\n");
+        assert_eq!(head.leftover, b"BODY");
+
+        drop(writer.join().unwrap());
+    }
+
+    #[test]
+    fn a_forwarded_request_reaches_the_origin_server_in_origin_form() {
+        // The whole forward path, end to end, and the reason it exists: the
+        // client speaks absolute-form because it was told to use a proxy, and
+        // the origin server must receive origin-form because it was told
+        // nothing. The two are not interchangeable — a server answers 400 to
+        // `GET http://…`.
+        //
+        // The host is `127.0.0.1` and no rule mentions it, so this also pins the
+        // policy change: an unlisted domain is served, not refused. It used to
+        // be a 403, and the assertion on the reply is what would fail.
+        let (origin, origin_address) = loopback();
+        let seen = thread::spawn(move || {
+            let (mut stream, _) = origin.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            let head = read_head_from(&mut stream);
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+                .unwrap();
+            head
+        });
+
+        let (proxy_address, stop, serving) = start_proxy();
+        let mut client = TcpStream::connect(proxy_address).unwrap();
+        client.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+
+        let port = origin_address.port();
+        let request = format!(
+            "GET http://127.0.0.1:{port}/x?y=1 HTTP/1.1\r\n\
+             Host: 127.0.0.1:{port}\r\n\
+             Proxy-Connection: keep-alive\r\n\r\n"
+        );
+        client.write_all(request.as_bytes()).unwrap();
+
+        let mut reply = Vec::new();
+        client.read_to_end(&mut reply).unwrap();
+        let reply = String::from_utf8_lossy(&reply).to_string();
+        assert!(reply.starts_with("HTTP/1.1 200 OK\r\n"), "{reply}");
+        assert!(reply.ends_with("ok"), "{reply}");
+
+        let head = String::from_utf8_lossy(&seen.join().unwrap()).to_string();
+        assert!(head.starts_with("GET /x?y=1 HTTP/1.1\r\n"), "{head}");
+        assert!(head.contains("Host: 127.0.0.1:"), "{head}");
+        assert!(head.contains("Connection: close\r\n"), "{head}");
+        assert!(
+            !head.to_ascii_lowercase().contains("proxy-"),
+            "a header addressed to the proxy must not reach the origin: {head}"
+        );
+
+        stop.store(true, Ordering::SeqCst);
+        serving.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn a_connect_tunnel_still_carries_bytes_it_never_inspects() {
+        // The path this rewrite must not have broken. The client asks for a
+        // tunnel, gets the `200`, and from then on both sides are opaque — which
+        // is why nothing here resembles HTTP after the first line.
+        let (origin, origin_address) = loopback();
+        let echoed = thread::spawn(move || {
+            let (mut stream, _) = origin.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            let mut buffer = [0u8; 32];
+            let read = stream.read(&mut buffer).unwrap();
+            stream.write_all(&buffer[..read]).unwrap();
+            buffer[..read].to_vec()
+        });
+
+        let (proxy_address, stop, serving) = start_proxy();
+        let mut client = TcpStream::connect(proxy_address).unwrap();
+        client.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+
+        let port = origin_address.port();
+        client
+            .write_all(format!("CONNECT 127.0.0.1:{port} HTTP/1.1\r\n\r\n").as_bytes())
+            .unwrap();
+
+        let mut established = [0u8; 39];
+        client.read_exact(&mut established).unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&established),
+            "HTTP/1.1 200 Connection Established\r\n\r\n"
+        );
+
+        client.write_all(b"opaque-bytes").unwrap();
+        let mut echo = [0u8; 12];
+        client.read_exact(&mut echo).unwrap();
+        assert_eq!(&echo, b"opaque-bytes");
+        assert_eq!(echoed.join().unwrap(), b"opaque-bytes");
+
+        stop.store(true, Ordering::SeqCst);
+        serving.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn connecting_to_nothing_fails_rather_than_hanging() {
+        // The point is the empty *candidate list*, not the rules.
+        let router = Mutex::new(Router::new(one_unrelated_rule()));
+        assert!(connect_first(&[], &router, Instant::now(), 0, VERIFIED_HEAD_START).is_none());
+    }
+
+    #[test]
+    fn an_absolute_uri_splits_into_host_port_and_origin_form() {
+        assert_eq!(
+            parse_absolute("example.com/a/b?c=d"),
+            Some(("example.com".into(), 80, "/a/b?c=d".into()))
+        );
+        assert_eq!(
+            parse_absolute("example.com:8080/"),
+            Some(("example.com".into(), 8080, "/".into()))
+        );
+    }
+
+    #[test]
+    fn an_absolute_uri_with_no_path_still_gets_one() {
+        // A URI whose only trailing part is a query has no path, and origin-form
+        // has nowhere to put a query that is not behind a slash. `/` is what the
+        // origin server would have assumed.
+        assert_eq!(
+            parse_absolute("example.com"),
+            Some(("example.com".into(), 80, "/".into()))
+        );
+        assert_eq!(
+            parse_absolute("example.com?q=1"),
+            Some(("example.com".into(), 80, "/?q=1".into()))
+        );
+    }
+
+    #[test]
+    fn a_bracketed_ipv6_absolute_uri_keeps_its_colons_off_the_port() {
+        assert_eq!(
+            parse_absolute("[2001:db8::1]:8080/x"),
+            Some(("2001:db8::1".into(), 8080, "/x".into()))
+        );
+        // Without a port, the colons inside the brackets must not be read as one.
+        assert_eq!(
+            parse_absolute("[2001:db8::1]/x"),
+            Some(("2001:db8::1".into(), 80, "/x".into()))
+        );
+    }
+
+    #[test]
+    fn userinfo_is_refused_rather_than_silently_dropped() {
+        // `user:pass@host` has nowhere to go once the authority is stripped off
+        // the request line, and a credential silently discarded turns a 401 into
+        // a mystery.
+        assert!(parse_absolute("user:pass@example.com/").is_none());
+    }
+
+    #[test]
+    fn a_connect_authority_still_requires_a_port() {
+        assert_eq!(
+            parse_authority("example.com:443"),
+            Some(("example.com".into(), 443))
+        );
+        assert!(parse_authority("example.com").is_none());
+    }
+
+    #[test]
+    fn a_forwarded_head_loses_the_absolute_uri_and_the_proxy_headers() {
+        let raw = b"GET http://example.com/a HTTP/1.1\r\n\
+                    Host: example.com\r\n\
+                    Proxy-Connection: keep-alive\r\n\
+                    Proxy-Authorization: Basic Zm9v\r\n\
+                    User-Agent: probe\r\n\r\n";
+        let text = String::from_utf8(rewrite_head(raw, "GET", "/a", "HTTP/1.1")).unwrap();
+        assert!(text.starts_with("GET /a HTTP/1.1\r\n"), "{text}");
+        assert!(text.contains("Host: example.com\r\n"), "{text}");
+        assert!(text.contains("User-Agent: probe\r\n"), "{text}");
+        assert!(!text.to_ascii_lowercase().contains("proxy-"), "{text}");
+        assert!(text.ends_with("Connection: close\r\n\r\n"), "{text}");
+    }
+
+    #[test]
+    fn a_forwarded_head_replaces_the_clients_own_connection_header() {
+        // The client's `Connection: keep-alive` would leave the upstream holding
+        // the socket open after one reply, which this relay cannot use: a second
+        // request on the same client connection would arrive in absolute-form and
+        // be forwarded verbatim to a server that cannot read it.
+        let raw = b"GET http://example.com/ HTTP/1.1\r\nConnection: keep-alive\r\n\r\n";
+        let text = String::from_utf8(rewrite_head(raw, "GET", "/", "HTTP/1.1")).unwrap();
+        assert_eq!(text.matches("Connection:").count(), 1, "{text}");
+        assert!(text.contains("Connection: close\r\n"), "{text}");
+        assert!(!text.contains("keep-alive"), "{text}");
+    }
+
+    #[test]
+    fn hop_by_hop_headers_are_recognised_whatever_their_case() {
+        assert!(is_hop_by_hop(b"Proxy-Connection"));
+        assert!(is_hop_by_hop(b"proxy-authorization"));
+        assert!(is_hop_by_hop(b"CONNECTION"));
+        assert!(!is_hop_by_hop(b"Content-Length"));
+    }
+
+    #[test]
+    fn a_head_ends_at_the_earlier_of_the_two_terminators() {
+        assert_eq!(head_end(b"GET / HTTP/1.1\r\n\r\n"), Some(18));
+        assert_eq!(head_end(b"GET / HTTP/1.1\n\n"), Some(16));
+        assert_eq!(head_end(b"GET / HTTP/1.1\r\n"), None);
+    }
+
+    #[test]
+    fn the_request_line_is_read_without_its_terminator() {
+        assert_eq!(first_line(b"GET /x HTTP/1.1\r\nHost: h\r\n\r\n"), "GET /x HTTP/1.1");
+        assert_eq!(first_line(b"GET /x HTTP/1.1\n\n"), "GET /x HTTP/1.1");
+        // A head that is not text at all yields an empty line rather than an
+        // error, so the caller can answer 400 instead of dropping the client.
+        assert_eq!(first_line(b"\xff\xfe\r\n\r\n"), "");
     }
 }

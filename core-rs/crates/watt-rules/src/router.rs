@@ -99,7 +99,7 @@ pub struct Plan {
     /// These are *not* resolved here. Resolving is I/O, and this layer is pure so
     /// that policy can be tested without a network. The caller resolves them,
     /// because only the caller knows what a blocking lookup costs in its context:
-    /// the CONNECT proxy already spends a thread per connection and can afford to
+    /// the local proxy already spends a thread per connection and can afford to
     /// resolve per request, whereas the TUN data path must not block and will
     /// want to resolve on a refresh tick instead.
     ///

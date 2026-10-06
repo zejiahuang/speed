@@ -475,7 +475,7 @@ pub extern "system" fn Java_dev_detour_core_Kernel_nativeMerge(
     }
 }
 
-/// Start a CONNECT proxy. Returns the handle, or 0 on failure.
+/// Start the local proxy. Returns the handle, or 0 on failure.
 ///
 /// The port is returned by [`Java_dev_detour_core_Kernel_nativeProxyPort`] rather
 /// than by this call: passing 0 asks the kernel to choose, and the caller has no

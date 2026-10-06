@@ -33,10 +33,12 @@ import org.json.JSONObject
  *   / 应用并重连" banner, and importing someone else's copy would make a real pending
  *   change invisible or announce one that does not exist. [Prefs]' own KDoc says
  *   so; this file only obeys it.
- * * `mode` is the tunnel kind. Under `BuildFlags.TUN_ONLY` the picker that would
- *   change it is hidden, so a document that carried a mode could set a build to a
- *   mode its UI cannot show or undo — a state the user has no control left to
- *   leave. The app's own restore refuses it for that reason.
+ * * `mode` is the tunnel kind, and [Prefs.restoreDefaults] deliberately does not
+ *   reset it — that method's KDoc says why a restore leaves the shape of the
+ *   engine alone. The membership rule above is what excludes it here too:
+ *   importing a file must not change a property the app's own restore refuses to
+ *   touch, or "import" and "restore defaults" would disagree about what this
+ *   document is allowed to decide.
  *
  * `disclaimer_accepted_digest` is excluded for a third reason, and it is the only
  * key here that is excluded without [Prefs.restoreDefaults] touching it at all:

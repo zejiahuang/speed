@@ -1370,7 +1370,7 @@ pub unsafe extern "C" fn watt_free_buffer(buffer: *mut u8, len: usize) {
     drop(Vec::from_raw_parts(buffer, len, len));
 }
 
-/// A running CONNECT proxy.
+/// A running local proxy.
 ///
 /// Separate from [`WattEngine`] because the two modes share nothing but the rule
 /// set: the proxy has no tunnel, no protector and no data plane of its own, and
@@ -1392,15 +1392,20 @@ pub struct WattProxy {
     router: Arc<Mutex<watt_rules::Router>>,
 }
 
-/// Start a CONNECT proxy on `port`, serving `rules`.
+/// Start a local HTTP proxy on `port`, serving `rules`.
 ///
 /// Returns NULL on failure; read [`watt_last_error`]. Release the handle with
 /// [`watt_proxy_stop`].
 ///
-/// This is the path that needs **neither TUN nor root**, which on Android makes
-/// it the one that works today: an app points its HTTP proxy setting at this port
-/// and the listed domains are relayed. The cost is that only apps honouring the
-/// system proxy benefit.
+/// This is the path that needs **neither TUN nor root**: an app points its HTTP
+/// proxy setting at this port and its requests are relayed — `CONNECT` tunnels
+/// unchanged, plain-HTTP requests forwarded to their origin. Domains outside the
+/// rule set are not refused; they go out directly, which is what the tunnel does
+/// with one. The cost is that only apps that can be pointed at a proxy benefit.
+///
+/// It takes `rules` and nothing else: the settings document the tunnel reads —
+/// timeouts, candidate counts, certificate pre-check, the upstream exit, the
+/// upstream resolver — has no effect here. See `watt-proxy`'s module docs.
 ///
 /// # Safety
 ///
