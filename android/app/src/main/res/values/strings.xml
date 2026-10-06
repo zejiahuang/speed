@@ -122,6 +122,17 @@
     <string name="settings_section_logs">日志与诊断</string>
     <string name="settings_section_appearance">外观</string>
     <string name="settings_section_advanced">高级：内核参数</string>
+    <!-- The settings screen's entry rows, one per section, since the five cards
+         became five second-level pages. A summary rather than an inventory of
+         the rows inside: an inventory would have to be kept in step with them
+         and would be wrong the first time one moved. What these have to do is
+         let a reader tell the five apart and know which one to open. -->
+    <string name="settings_page_connection">代理端口、规则源、上游出口与解析器</string>
+    <string name="settings_page_logs">统计刷新间隔与日志归档</string>
+    <string name="settings_page_appearance">主题、玻璃效果、壁纸与字体</string>
+    <string name="settings_page_advanced">拨号、超时、流量上限与命令行</string>
+    <string name="settings_page_data">导出、导入与版本信息</string>
+    <string name="settings_back">返回</string>
     <string name="settings_proxy_port">代理监听端口</string>
     <string name="settings_proxy_port_hint">App 需要把 HTTP 代理指向 127.0.0.1:%1$d</string>
     <string name="settings_rules_url">规则源地址</string>
@@ -330,9 +341,13 @@
     <string name="settings_auto_connect">启动时自动连接</string>
     <string name="settings_auto_connect_hint">打开 App 时若已有 VPN 授权，就自动建立隧道</string>
     <string name="settings_restore_defaults">恢复默认设置</string>
+    <string name="settings_restore_defaults_hint">已添加的规则源会一起清掉</string>
     <string name="settings_restore_confirm_title">恢复默认设置？</string>
     <string name="settings_restore_confirm_text">所有设置会回到初始状态，包括已添加的规则源和自定义开关。当前连接不会被断开，但需要重新连接才能用上新参数。</string>
-    <string name="settings_restore_confirm_ok">恢复</string>
+    <!-- One string for one action rather than two copies of 恢复: this is the
+         label on the row's button and on the dialog's confirm button, and a
+         reader comparing the two should not be able to find a difference. -->
+    <string name="settings_restore_action">恢复</string>
     <string name="settings_restore_done">已恢复默认设置</string>
     <string name="settings_dynamic_color_unsupported">此设备不支持（需要 Android 12 及以上）</string>
 
@@ -486,7 +501,6 @@
     <string name="settings_import_action">导入</string>
     <string name="settings_about">关于</string>
     <string name="settings_about_hint">版本、运行环境与更新</string>
-    <string name="settings_about_action">查看</string>
 
     <string name="settings_export_done">已导出设置</string>
     <string name="settings_export_failed">导出失败：%1$s</string>

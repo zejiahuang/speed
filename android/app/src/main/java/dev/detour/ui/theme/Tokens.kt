@@ -11,6 +11,7 @@ import androidx.compose.material3.ColorScheme
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import dev.detour.core.Prefs
@@ -78,6 +79,24 @@ data class DetourMotion(
         dampingRatio = 0.8f,
         stiffness = Spring.StiffnessMediumLow,
         visibilityThreshold = IntSize.VisibilityThreshold,
+    ),
+    /**
+     * The spec for a *slide* — a page arriving or leaving.
+     *
+     * A third type, for the same reason [sizeSpatial] is a second one: the slide
+     * transitions animate an `IntOffset`, and a `FiniteAnimationSpec<Float>` does
+     * not unify with that. The spring is [spatial]'s, to the figure, so a page
+     * that slides and a card that folds are the same motion at two scales rather
+     * than two motions that happen to be near each other.
+     *
+     * The visibility threshold is what tells the spring that an offset within a
+     * pixel of its target is there; without it a page settles with a column of
+     * pixels still showing along the edge it came from.
+     */
+    val offsetSpatial: FiniteAnimationSpec<IntOffset> = spring(
+        dampingRatio = 0.8f,
+        stiffness = Spring.StiffnessMediumLow,
+        visibilityThreshold = IntOffset.VisibilityThreshold,
     ),
     /**
      * The spec for a thing that should read as *elastic* rather than merely

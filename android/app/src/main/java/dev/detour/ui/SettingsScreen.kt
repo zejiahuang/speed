@@ -1,10 +1,14 @@
 package dev.detour.ui
 
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.StringRes
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -13,11 +17,16 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Clear
@@ -28,6 +37,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -62,17 +72,22 @@ import dev.detour.ui.components.DetourActionRow
 import dev.detour.ui.components.DetourAlertDialog
 import dev.detour.ui.components.DetourButton
 import dev.detour.ui.components.DetourButtonVariant
+import dev.detour.ui.components.DetourCard
+import dev.detour.ui.components.DetourCardStyle
 import dev.detour.ui.components.ConsoleEntry
 import dev.detour.ui.components.DetourChoiceRow
 import dev.detour.ui.components.DetourConsoleRow
 import dev.detour.ui.components.DetourDivider
 import dev.detour.ui.components.DetourKeyValueRow
+import dev.detour.ui.components.DetourNavRow
+import dev.detour.ui.components.DetourPageHeader
 import dev.detour.ui.components.LocalBottomBarClearance
 import dev.detour.ui.components.DetourSectionCard
 import dev.detour.ui.components.DetourSegmentedRow
 import dev.detour.ui.components.DetourSliderRow
 import dev.detour.ui.components.DetourStepperRow
 import dev.detour.ui.components.DetourToggleRow
+import dev.detour.ui.theme.LocalDetourMotion
 import dev.detour.ui.theme.supportsDynamicColor
 import java.io.IOException
 import java.time.LocalDateTime
@@ -83,24 +98,36 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 /**
- * The five groups, in the order they are shown.
+ * The five groups, in the order they are shown — and, since the settings screen
+ * was split, the five second-level pages.
  *
  * An enum rather than five hand-written cards because the search has to walk the
  * groups in a fixed order and ask each one for its visible rows; with the groups
  * as data the renderer is a loop instead of five near-identical blocks, and
  * adding a group cannot forget to update the renderer.
  *
+ * The groups were not re-cut for the split. They were already the answer to
+ * "what is this setting about", which is the question a page split has to
+ * answer, and re-cutting them would have moved rows for no reason. [titleRes] is
+ * therefore both the card heading and the page title, and [summaryRes] is the
+ * entry row's second line on the settings screen — a summary rather than an
+ * inventory of the rows inside, because an inventory would have to be kept in
+ * step with them and would be wrong the first time one moved.
+ *
  * [DATA] is declared last on purpose. Every group before it changes a setting
  * this app owns; the data group's rows either hand a file to, or take one from,
  * another app, or leave for another screen. Putting it last keeps the settings
  * proper together and reads the group as what it is — the exit.
  */
-private enum class SettingsSection(@StringRes val titleRes: Int) {
-    CONNECTION(R.string.settings_section_connection),
-    LOGS(R.string.settings_section_logs),
-    APPEARANCE(R.string.settings_section_appearance),
-    ADVANCED(R.string.settings_section_advanced),
-    DATA(R.string.settings_section_data),
+enum class SettingsPage(
+    @StringRes val titleRes: Int,
+    @StringRes val summaryRes: Int,
+) {
+    CONNECTION(R.string.settings_section_connection, R.string.settings_page_connection),
+    LOGS(R.string.settings_section_logs, R.string.settings_page_logs),
+    APPEARANCE(R.string.settings_section_appearance, R.string.settings_page_appearance),
+    ADVANCED(R.string.settings_section_advanced, R.string.settings_page_advanced),
+    DATA(R.string.settings_section_data, R.string.settings_page_data),
 }
 
 /**
@@ -110,10 +137,32 @@ private enum class SettingsSection(@StringRes val titleRes: Int) {
  * its hint where it has one. Resolving those strings here — rather than having
  * the filter reach back into resources — is what lets "no match" be knowable
  * without keeping a second copy of every label in step with the first.
+ *
+ * [visible] is for a row that exists only while another control is on: the glass
+ * sliders exist while 玻璃效果 is on, the wallpaper scrim while a wallpaper is
+ * set, the console while 开发者视图 is on. Those rows used to be left out of the
+ * list entirely, which made them *appear* — a switch flipped and five rows were
+ * simply there on the next frame, with no way for the eye to follow what the
+ * switch had done. A row that is always in the list and merely collapsed can be
+ * animated open and shut, and the switch reads as the cause of the movement.
+ *
+ * It defaults to true so that the ~40 rows that are unconditional say nothing
+ * about it. It is not a general-purpose "hide this row": a row that is never
+ * shown is a row that should not be in the list, and one that is always hidden
+ * would be a collapsed row taking part in the search model for no reason.
+ *
+ * **`visible` is declared before `content`, and that ordering is required rather
+ * than stylistic.** Kotlin binds a trailing lambda to the *last* parameter, not
+ * to the last function-typed one, so a defaulted `visible` sitting last would
+ * take every call's trailing lambda and leave `content` unset — all forty-odd
+ * rows fail to compile with "actual type is '() -> Unit', but 'Boolean' was
+ * expected". Keeping the lambda last is what lets the gated rows read
+ * `SettingsRow(PAGE, keys, visible = on) { ... }` exactly like the plain ones.
  */
 private class SettingsRow(
-    val section: SettingsSection,
+    val page: SettingsPage,
     val searchText: List<String>,
+    val visible: Boolean = true,
     val content: @Composable () -> Unit,
 )
 
@@ -129,11 +178,30 @@ private class SettingsRow(
 private const val CONSOLE_MAX_ENTRIES = 20
 
 /**
- * Settings, in five groups that match the five kinds of decision.
+ * Settings: the entries into the five groups, or one group when [page] names it.
  *
  * Grouped by *what the setting is about* rather than by how often it is used. A
  * flat list sorted by frequency would put the proxy port next to the dark mode
  * switch, and neither belongs near the other.
+ *
+ * **The five cards became five second-level pages (2026-10-06).** The list had
+ * reached 46 rows across five cards — several screens of scroll with no way to
+ * take in what was on it — and the owner asked for it to be tidied up with
+ * second-level pages. The groups were not re-cut: they were already the answer
+ * to "what is this setting about", which is the question a split has to answer,
+ * and re-cutting them would have moved rows for no reason. What the split costs
+ * is one tap on the way to every setting, and that is paid deliberately; the
+ * alternative was a page nobody could survey.
+ *
+ * **Nothing is hidden, and that is a constraint rather than a claim.** Hiding
+ * settings makes them unfindable — this file has already been burned by that
+ * once, in the fold removed below. Two things hold the line. The search still
+ * walks every row in every group, and answers with the matching rows themselves,
+ * rendered in place: a setting inside a page is therefore one search away and
+ * needs no navigating at all. And a query matching a group's own title returns
+ * that group whole, so typing 外观 lists what is in 外观 instead of one row
+ * pointing at it. A group is also always one tap away, and says what it holds on
+ * its entry row.
  *
  * The advanced group is last and always expanded, with no fold on its heading.
  * It used to be a collapsible card that opened collapsed, and that made the
@@ -151,7 +219,8 @@ private const val CONSOLE_MAX_ENTRIES = 20
  * With the fold gone the console row existed, but the 开发者视图 switch that reveals
  * it was still two and a half screens away, in 日志与诊断 — so tapping it still
  * changed nothing on screen. The switch was moved to sit directly above 内核版本,
- * next to what it reveals. The general rule is recorded there.
+ * next to what it reveals. The general rule is recorded there, and the page split
+ * keeps it: both rows are inside the same page, so the distance is unchanged.
  *
  * The body is built as data ([SettingsRow]) and filtered once rather than a
  * hand-written card per section: a search has to be able to answer "nothing
@@ -162,14 +231,22 @@ private const val CONSOLE_MAX_ENTRIES = 20
  * live at the bottom of this file were the app's duplication problem in
  * miniature, and they are gone.
  *
- * [onOpenAbout] is a callback rather than a navigation call made here, because
- * this screen is not the one that owns the destination stack. The parameter has
- * no default: a default would let a call site forget to pass it and silently lose
- * the 关于 row's only effect, which is the "control that does nothing" defect this
- * file has already been burned by.
+ * [page] is null for the list of entries and names a group for that group's own
+ * page. [onNavigate] takes the group to open, or null to close: one callback for
+ * both directions rather than two, because the list and the page are the same
+ * component in two states and a split pair would let a call site handle one
+ * direction and silently drop the other. [onOpenAbout] is a callback rather than
+ * a navigation call made here, because this screen is not the one that owns the
+ * destination stack. None of the three has a default: a default would let a call
+ * site forget to pass it and silently lose its only effect, which is the
+ * "control that does nothing" defect this file has already been burned by.
  */
 @Composable
-fun SettingsScreen(onOpenAbout: () -> Unit) {
+fun SettingsScreen(
+    page: SettingsPage?,
+    onNavigate: (SettingsPage?) -> Unit,
+    onOpenAbout: () -> Unit,
+) {
     val context = LocalContext.current
     val prefs = Prefs.of(context)
     val status by KernelState.status.collectAsState()
@@ -367,7 +444,7 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
             val proxyLabel = stringResource(R.string.settings_proxy_port)
             val proxyHint = stringResource(R.string.settings_proxy_port_hint, prefs.proxyPort)
             add(
-                SettingsRow(SettingsSection.CONNECTION, listOf(proxyLabel, proxyHint)) {
+                SettingsRow(SettingsPage.CONNECTION, listOf(proxyLabel, proxyHint)) {
                     DetourStepperRow(
                         label = proxyLabel,
                         value = prefs.proxyPort.toString(),
@@ -397,7 +474,7 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
         val localSourceLabel = stringResource(R.string.rules_source_local)
         add(
             SettingsRow(
-                section = SettingsSection.CONNECTION,
+                page = SettingsPage.CONNECTION,
                 searchText = buildList {
                     add(sourceHeading)
                     add(addSourceLabel)
@@ -482,7 +559,7 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
 
         val refreshLabel = stringResource(R.string.settings_refresh_interval)
         add(
-            SettingsRow(SettingsSection.CONNECTION, listOf(refreshLabel)) {
+            SettingsRow(SettingsPage.CONNECTION, listOf(refreshLabel)) {
                 DetourStepperRow(
                     label = refreshLabel,
                     value = "${prefs.refreshHours} h",
@@ -495,7 +572,7 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
         val offlineLabel = stringResource(R.string.settings_offline)
         val offlineHint = stringResource(R.string.settings_offline_hint)
         add(
-            SettingsRow(SettingsSection.CONNECTION, listOf(offlineLabel, offlineHint)) {
+            SettingsRow(SettingsPage.CONNECTION, listOf(offlineLabel, offlineHint)) {
                 DetourToggleRow(
                     label = offlineLabel,
                     hint = offlineHint,
@@ -508,12 +585,32 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
         val autoConnectLabel = stringResource(R.string.settings_auto_connect)
         val autoConnectHint = stringResource(R.string.settings_auto_connect_hint)
         add(
-            SettingsRow(SettingsSection.CONNECTION, listOf(autoConnectLabel, autoConnectHint)) {
+            SettingsRow(SettingsPage.CONNECTION, listOf(autoConnectLabel, autoConnectHint)) {
                 DetourToggleRow(
                     label = autoConnectLabel,
                     hint = autoConnectHint,
                     checked = prefs.autoConnect,
                     onChange = { prefs.updateAutoConnect(it) },
+                )
+            },
+        )
+
+        // 断开前二次确认 sits here rather than in 外观, where it was until the page
+        // split. The row is about what the disconnect button does, not about how
+        // the app looks — its own hint says so, 避免误触把正在跑的下载掐掉 — and it
+        // stayed misfiled only because a 46-row list put the right card a scroll
+        // away and nobody was reading the headings. With the pages split, "which
+        // page would I look on" is the only way to find a row, so a row filed
+        // under the wrong page is a row that cannot be found.
+        val confirmLabel = stringResource(R.string.settings_confirm_disconnect)
+        val confirmHint = stringResource(R.string.settings_confirm_disconnect_hint)
+        add(
+            SettingsRow(SettingsPage.CONNECTION, listOf(confirmLabel, confirmHint)) {
+                DetourToggleRow(
+                    label = confirmLabel,
+                    hint = confirmHint,
+                    checked = prefs.confirmDisconnect,
+                    onChange = { prefs.updateConfirmDisconnect(it) },
                 )
             },
         )
@@ -555,7 +652,7 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
         }
         add(
             SettingsRow(
-                section = SettingsSection.CONNECTION,
+                page = SettingsPage.CONNECTION,
                 searchText = listOf(
                     exitLabel, exitHint, exitAddressLabel, exitKindLabel,
                     exitUserLabel, exitPassLabel, exitEnableLabel, exitEnableHint,
@@ -682,7 +779,7 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
         }
         add(
             SettingsRow(
-                section = SettingsSection.CONNECTION,
+                page = SettingsPage.CONNECTION,
                 searchText = buildList {
                     add(resolverLabel)
                     add(resolverHint)
@@ -752,7 +849,7 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
 
         val statsLabel = stringResource(R.string.settings_stats_interval)
         add(
-            SettingsRow(SettingsSection.LOGS, listOf(statsLabel)) {
+            SettingsRow(SettingsPage.LOGS, listOf(statsLabel)) {
                 DetourStepperRow(
                     label = statsLabel,
                     value = "${prefs.statsIntervalSeconds} s",
@@ -765,7 +862,7 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
         val logArchiveLabel = stringResource(R.string.settings_log_archive)
         val logArchiveHint = stringResource(R.string.settings_log_archive_hint)
         add(
-            SettingsRow(SettingsSection.LOGS, listOf(logArchiveLabel, logArchiveHint)) {
+            SettingsRow(SettingsPage.LOGS, listOf(logArchiveLabel, logArchiveHint)) {
                 DetourToggleRow(
                     label = logArchiveLabel,
                     hint = logArchiveHint,
@@ -791,7 +888,7 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
             stringResource(R.string.settings_dynamic_color_unsupported)
         }
         add(
-            SettingsRow(SettingsSection.APPEARANCE, listOf(dynColorLabel, dynColorHint)) {
+            SettingsRow(SettingsPage.APPEARANCE, listOf(dynColorLabel, dynColorHint)) {
                 DetourToggleRow(
                     label = dynColorLabel,
                     hint = dynColorHint,
@@ -804,7 +901,7 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
 
         val darkModeLabel = stringResource(R.string.settings_dark_mode)
         add(
-            SettingsRow(SettingsSection.APPEARANCE, listOf(darkModeLabel)) {
+            SettingsRow(SettingsPage.APPEARANCE, listOf(darkModeLabel)) {
                 DetourSegmentedRow(
                     label = darkModeLabel,
                     options = listOf(
@@ -824,7 +921,7 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
         // to find.
         val themeColorLabel = stringResource(R.string.settings_theme_color)
         add(
-            SettingsRow(SettingsSection.APPEARANCE, listOf(themeColorLabel)) {
+            SettingsRow(SettingsPage.APPEARANCE, listOf(themeColorLabel)) {
                 DetourChoiceRow(
                     label = themeColorLabel,
                     options = listOf(
@@ -842,7 +939,7 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
 
         val cornerLabel = stringResource(R.string.settings_corner_style)
         add(
-            SettingsRow(SettingsSection.APPEARANCE, listOf(cornerLabel)) {
+            SettingsRow(SettingsPage.APPEARANCE, listOf(cornerLabel)) {
                 DetourSegmentedRow(
                     label = cornerLabel,
                     options = listOf(
@@ -871,7 +968,7 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
         val glassLabel = stringResource(R.string.settings_glass)
         val glassHint = stringResource(R.string.settings_glass_hint)
         add(
-            SettingsRow(SettingsSection.APPEARANCE, listOf(glassLabel, glassHint)) {
+            SettingsRow(SettingsPage.APPEARANCE, listOf(glassLabel, glassHint)) {
                 DetourToggleRow(
                     label = glassLabel,
                     hint = glassHint,
@@ -900,68 +997,96 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
         // Their defaults are the previous preset's numbers, so the moment a
         // slider appears the picture is already the one the switch turned on —
         // see `Prefs` for why that matters.
-        if (prefs.glassEnabled) {
-            val glassBlurLabel = stringResource(R.string.settings_glass_blur)
-            add(
-                SettingsRow(SettingsSection.APPEARANCE, listOf(glassBlurLabel)) {
-                    DetourSliderRow(
-                        label = glassBlurLabel,
-                        value = prefs.glassBlur.toFloat(),
-                        range = 0f..100f,
-                        display = "${prefs.glassBlur}dp",
-                        onChange = { prefs.updateGlassBlur(it.toInt()) },
-                    )
-                },
-            )
-            val glassTintLabel = stringResource(R.string.settings_glass_tint)
-            add(
-                SettingsRow(SettingsSection.APPEARANCE, listOf(glassTintLabel)) {
-                    DetourSliderRow(
-                        label = glassTintLabel,
-                        value = prefs.glassTint.toFloat(),
-                        range = 0f..100f,
-                        display = "${prefs.glassTint}%",
-                        onChange = { prefs.updateGlassTint(it.toInt()) },
-                    )
-                },
-            )
-            val glassLensLabel = stringResource(R.string.settings_glass_lens)
-            add(
-                SettingsRow(SettingsSection.APPEARANCE, listOf(glassLensLabel)) {
-                    DetourSliderRow(
-                        label = glassLensLabel,
-                        value = prefs.glassLens.toFloat(),
-                        range = 0f..150f,
-                        display = "${prefs.glassLens}dp",
-                        onChange = { prefs.updateGlassLens(it.toInt()) },
-                    )
-                },
-            )
-            val glassHighlightLabel = stringResource(R.string.settings_glass_highlight)
-            add(
-                SettingsRow(SettingsSection.APPEARANCE, listOf(glassHighlightLabel)) {
-                    DetourSliderRow(
-                        label = glassHighlightLabel,
-                        value = prefs.glassHighlight.toFloat(),
-                        range = 0f..100f,
-                        display = "${prefs.glassHighlight}%",
-                        onChange = { prefs.updateGlassHighlight(it.toInt()) },
-                    )
-                },
-            )
-            val glassBorderLabel = stringResource(R.string.settings_glass_border)
-            add(
-                SettingsRow(SettingsSection.APPEARANCE, listOf(glassBorderLabel)) {
-                    DetourSliderRow(
-                        label = glassBorderLabel,
-                        value = prefs.glassBorder.toFloat(),
-                        range = 0f..100f,
-                        display = "${prefs.glassBorder}%",
-                        onChange = { prefs.updateGlassBorder(it.toInt()) },
-                    )
-                },
-            )
-        }
+        //
+        // **The gate is the row's own `visible`, not an `if` around the `add`s.**
+        // Both keep the sliders off screen; only `visible` lets them be animated.
+        // A row left out of the list has nothing to grow from, so the switch used
+        // to put five rows on screen between one frame and the next with nothing
+        // connecting the movement to the control that caused it. The promise
+        // above survives the change rather than being traded away for it:
+        // `AnimatedVisibility` drops its content from composition once it has
+        // collapsed, so a hidden slider is not merely invisible, it is not there.
+        val glassVisible = prefs.glassEnabled
+        val glassBlurLabel = stringResource(R.string.settings_glass_blur)
+        add(
+            SettingsRow(
+                SettingsPage.APPEARANCE,
+                listOf(glassBlurLabel),
+                visible = glassVisible,
+            ) {
+                DetourSliderRow(
+                    label = glassBlurLabel,
+                    value = prefs.glassBlur.toFloat(),
+                    range = 0f..100f,
+                    display = "${prefs.glassBlur}dp",
+                    onChange = { prefs.updateGlassBlur(it.toInt()) },
+                )
+            },
+        )
+        val glassTintLabel = stringResource(R.string.settings_glass_tint)
+        add(
+            SettingsRow(
+                SettingsPage.APPEARANCE,
+                listOf(glassTintLabel),
+                visible = glassVisible,
+            ) {
+                DetourSliderRow(
+                    label = glassTintLabel,
+                    value = prefs.glassTint.toFloat(),
+                    range = 0f..100f,
+                    display = "${prefs.glassTint}%",
+                    onChange = { prefs.updateGlassTint(it.toInt()) },
+                )
+            },
+        )
+        val glassLensLabel = stringResource(R.string.settings_glass_lens)
+        add(
+            SettingsRow(
+                SettingsPage.APPEARANCE,
+                listOf(glassLensLabel),
+                visible = glassVisible,
+            ) {
+                DetourSliderRow(
+                    label = glassLensLabel,
+                    value = prefs.glassLens.toFloat(),
+                    range = 0f..150f,
+                    display = "${prefs.glassLens}dp",
+                    onChange = { prefs.updateGlassLens(it.toInt()) },
+                )
+            },
+        )
+        val glassHighlightLabel = stringResource(R.string.settings_glass_highlight)
+        add(
+            SettingsRow(
+                SettingsPage.APPEARANCE,
+                listOf(glassHighlightLabel),
+                visible = glassVisible,
+            ) {
+                DetourSliderRow(
+                    label = glassHighlightLabel,
+                    value = prefs.glassHighlight.toFloat(),
+                    range = 0f..100f,
+                    display = "${prefs.glassHighlight}%",
+                    onChange = { prefs.updateGlassHighlight(it.toInt()) },
+                )
+            },
+        )
+        val glassBorderLabel = stringResource(R.string.settings_glass_border)
+        add(
+            SettingsRow(
+                SettingsPage.APPEARANCE,
+                listOf(glassBorderLabel),
+                visible = glassVisible,
+            ) {
+                DetourSliderRow(
+                    label = glassBorderLabel,
+                    value = prefs.glassBorder.toFloat(),
+                    range = 0f..100f,
+                    display = "${prefs.glassBorder}%",
+                    onChange = { prefs.updateGlassBorder(it.toInt()) },
+                )
+            },
+        )
 
         val wallpaperLabel = stringResource(R.string.settings_wallpaper)
         val wallpaperHint = stringResource(R.string.settings_wallpaper_hint)
@@ -969,7 +1094,7 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
         // cannot flicker between "选择图片" and "更换" mid-recomposition.
         val hasWallpaper = prefs.wallpaper.isNotBlank()
         add(
-            SettingsRow(SettingsSection.APPEARANCE, listOf(wallpaperLabel, wallpaperHint)) {
+            SettingsRow(SettingsPage.APPEARANCE, listOf(wallpaperLabel, wallpaperHint)) {
                 DetourActionRow(
                     label = wallpaperLabel,
                     // The error replaces the hint *on screen* but not in `keys` above:
@@ -1005,24 +1130,31 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
         // screen, which is precisely the "the control does nothing" defect this project
         // has already been burned by twice. A control that cannot have an effect must
         // not be shown.
-        if (hasWallpaper) {
-            val scrimLabel = stringResource(R.string.settings_wallpaper_scrim)
-            add(
-                SettingsRow(SettingsSection.APPEARANCE, listOf(scrimLabel)) {
-                    DetourSliderRow(
-                        label = scrimLabel,
-                        value = prefs.wallpaperScrim.toFloat(),
-                        range = 0f..100f,
-                        display = "${prefs.wallpaperScrim}%",
-                        onChange = { prefs.updateWallpaperScrim(it.toInt()) },
-                    )
-                },
-            )
-        }
+        //
+        // `visible` rather than an `if`, so that setting a wallpaper makes the row
+        // grow in under the 选择图片 row that caused it — see the note on the glass
+        // sliders above. Collapsed means out of composition, so "not shown" still
+        // means not shown.
+        val scrimLabel = stringResource(R.string.settings_wallpaper_scrim)
+        add(
+            SettingsRow(
+                SettingsPage.APPEARANCE,
+                listOf(scrimLabel),
+                visible = hasWallpaper,
+            ) {
+                DetourSliderRow(
+                    label = scrimLabel,
+                    value = prefs.wallpaperScrim.toFloat(),
+                    range = 0f..100f,
+                    display = "${prefs.wallpaperScrim}%",
+                    onChange = { prefs.updateWallpaperScrim(it.toInt()) },
+                )
+            },
+        )
 
         val fontLabel = stringResource(R.string.settings_font_scale)
         add(
-            SettingsRow(SettingsSection.APPEARANCE, listOf(fontLabel)) {
+            SettingsRow(SettingsPage.APPEARANCE, listOf(fontLabel)) {
                 DetourSliderRow(
                     label = fontLabel,
                     value = prefs.fontScale,
@@ -1036,7 +1168,7 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
         val homeRateLabel = stringResource(R.string.settings_home_show_rate)
         val homeRateHint = stringResource(R.string.settings_home_show_rate_hint)
         add(
-            SettingsRow(SettingsSection.APPEARANCE, listOf(homeRateLabel, homeRateHint)) {
+            SettingsRow(SettingsPage.APPEARANCE, listOf(homeRateLabel, homeRateHint)) {
                 DetourToggleRow(
                     label = homeRateLabel,
                     hint = homeRateHint,
@@ -1046,24 +1178,11 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
             },
         )
 
-        val confirmLabel = stringResource(R.string.settings_confirm_disconnect)
-        val confirmHint = stringResource(R.string.settings_confirm_disconnect_hint)
-        add(
-            SettingsRow(SettingsSection.APPEARANCE, listOf(confirmLabel, confirmHint)) {
-                DetourToggleRow(
-                    label = confirmLabel,
-                    hint = confirmHint,
-                    checked = prefs.confirmDisconnect,
-                    onChange = { prefs.updateConfirmDisconnect(it) },
-                )
-            },
-        )
-
         // --- advanced ---------------------------------------------------------
 
         val maxCandLabel = stringResource(R.string.settings_max_candidates)
         add(
-            SettingsRow(SettingsSection.ADVANCED, listOf(maxCandLabel)) {
+            SettingsRow(SettingsPage.ADVANCED, listOf(maxCandLabel)) {
                 DetourStepperRow(
                     label = maxCandLabel,
                     value = prefs.maxCandidates.toString(),
@@ -1075,7 +1194,7 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
 
         val staggerLabel = stringResource(R.string.settings_connect_stagger)
         add(
-            SettingsRow(SettingsSection.ADVANCED, listOf(staggerLabel)) {
+            SettingsRow(SettingsPage.ADVANCED, listOf(staggerLabel)) {
                 DetourStepperRow(
                     label = staggerLabel,
                     value = "${prefs.connectStaggerMillis} ms",
@@ -1088,7 +1207,7 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
         val raceWidthLabel = stringResource(R.string.settings_race_width)
         val raceWidthHint = stringResource(R.string.settings_race_width_hint)
         add(
-            SettingsRow(SettingsSection.ADVANCED, listOf(raceWidthLabel, raceWidthHint)) {
+            SettingsRow(SettingsPage.ADVANCED, listOf(raceWidthLabel, raceWidthHint)) {
                 DetourStepperRow(
                     label = raceWidthLabel,
                     value = prefs.raceWidth.toString(),
@@ -1101,7 +1220,7 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
 
         val raceLaunchLabel = stringResource(R.string.settings_race_launch)
         add(
-            SettingsRow(SettingsSection.ADVANCED, listOf(raceLaunchLabel)) {
+            SettingsRow(SettingsPage.ADVANCED, listOf(raceLaunchLabel)) {
                 DetourStepperRow(
                     label = raceLaunchLabel,
                     value = "${prefs.raceLaunchMillis} ms",
@@ -1114,7 +1233,7 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
         val maxDialingLabel = stringResource(R.string.settings_max_dialing)
         val maxDialingHint = stringResource(R.string.settings_max_dialing_hint)
         add(
-            SettingsRow(SettingsSection.ADVANCED, listOf(maxDialingLabel, maxDialingHint)) {
+            SettingsRow(SettingsPage.ADVANCED, listOf(maxDialingLabel, maxDialingHint)) {
                 DetourStepperRow(
                     label = maxDialingLabel,
                     value = prefs.maxDialing.toString(),
@@ -1127,7 +1246,7 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
 
         val cooldownLabel = stringResource(R.string.settings_failure_cooldown)
         add(
-            SettingsRow(SettingsSection.ADVANCED, listOf(cooldownLabel)) {
+            SettingsRow(SettingsPage.ADVANCED, listOf(cooldownLabel)) {
                 DetourSliderRow(
                     label = cooldownLabel,
                     value = prefs.failureCooldownSeconds.toFloat(),
@@ -1141,7 +1260,7 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
         val dialNamesLabel = stringResource(R.string.settings_dial_names)
         val dialNamesHint = stringResource(R.string.settings_dial_names_hint)
         add(
-            SettingsRow(SettingsSection.ADVANCED, listOf(dialNamesLabel, dialNamesHint)) {
+            SettingsRow(SettingsPage.ADVANCED, listOf(dialNamesLabel, dialNamesHint)) {
                 DetourToggleRow(
                     label = dialNamesLabel,
                     hint = dialNamesHint,
@@ -1166,7 +1285,7 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
         val mtuLabel = stringResource(R.string.settings_mtu)
         val mtuHint = stringResource(R.string.settings_mtu_hint)
         add(
-            SettingsRow(SettingsSection.ADVANCED, listOf(mtuLabel, mtuHint)) {
+            SettingsRow(SettingsPage.ADVANCED, listOf(mtuLabel, mtuHint)) {
                 DetourStepperRow(
                     label = mtuLabel,
                     value = prefs.mtu.toString(),
@@ -1179,7 +1298,7 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
 
         val timeoutLabel = stringResource(R.string.settings_connect_timeout)
         add(
-            SettingsRow(SettingsSection.ADVANCED, listOf(timeoutLabel)) {
+            SettingsRow(SettingsPage.ADVANCED, listOf(timeoutLabel)) {
                 DetourSliderRow(
                     label = timeoutLabel,
                     value = prefs.connectTimeoutSeconds.toFloat(),
@@ -1192,7 +1311,7 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
 
         val tcpIdleLabel = stringResource(R.string.settings_tcp_idle)
         add(
-            SettingsRow(SettingsSection.ADVANCED, listOf(tcpIdleLabel)) {
+            SettingsRow(SettingsPage.ADVANCED, listOf(tcpIdleLabel)) {
                 DetourSliderRow(
                     label = tcpIdleLabel,
                     value = prefs.tcpIdleSeconds.toFloat(),
@@ -1205,7 +1324,7 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
 
         val udpIdleLabel = stringResource(R.string.settings_udp_idle)
         add(
-            SettingsRow(SettingsSection.ADVANCED, listOf(udpIdleLabel)) {
+            SettingsRow(SettingsPage.ADVANCED, listOf(udpIdleLabel)) {
                 DetourSliderRow(
                     label = udpIdleLabel,
                     value = prefs.udpIdleSeconds.toFloat(),
@@ -1218,7 +1337,7 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
 
         val maxTcpLabel = stringResource(R.string.settings_max_tcp_flows)
         add(
-            SettingsRow(SettingsSection.ADVANCED, listOf(maxTcpLabel)) {
+            SettingsRow(SettingsPage.ADVANCED, listOf(maxTcpLabel)) {
                 DetourStepperRow(
                     label = maxTcpLabel,
                     value = prefs.maxTcpFlows.toString(),
@@ -1230,7 +1349,7 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
 
         val maxUdpLabel = stringResource(R.string.settings_max_udp_flows)
         add(
-            SettingsRow(SettingsSection.ADVANCED, listOf(maxUdpLabel)) {
+            SettingsRow(SettingsPage.ADVANCED, listOf(maxUdpLabel)) {
                 DetourStepperRow(
                     label = maxUdpLabel,
                     value = prefs.maxUdpFlows.toString(),
@@ -1243,7 +1362,7 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
         val answerDnsLabel = stringResource(R.string.settings_answer_dns)
         val answerDnsHint = stringResource(R.string.settings_answer_dns_hint)
         add(
-            SettingsRow(SettingsSection.ADVANCED, listOf(answerDnsLabel, answerDnsHint)) {
+            SettingsRow(SettingsPage.ADVANCED, listOf(answerDnsLabel, answerDnsHint)) {
                 DetourToggleRow(
                     label = answerDnsLabel,
                     hint = answerDnsHint,
@@ -1259,7 +1378,7 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
         val certLabel = stringResource(R.string.settings_certificate_check)
         val certHint = stringResource(R.string.settings_certificate_check_hint)
         add(
-            SettingsRow(SettingsSection.ADVANCED, listOf(certLabel, certHint)) {
+            SettingsRow(SettingsPage.ADVANCED, listOf(certLabel, certHint)) {
                 DetourToggleRow(
                     label = certLabel,
                     hint = certHint,
@@ -1272,7 +1391,7 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
         val observeDnsLabel = stringResource(R.string.settings_observe_dns)
         val observeDnsHint = stringResource(R.string.settings_observe_dns_hint)
         add(
-            SettingsRow(SettingsSection.ADVANCED, listOf(observeDnsLabel, observeDnsHint)) {
+            SettingsRow(SettingsPage.ADVANCED, listOf(observeDnsLabel, observeDnsHint)) {
                 DetourToggleRow(
                     label = observeDnsLabel,
                     hint = observeDnsHint,
@@ -1309,7 +1428,7 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
         val devViewLabel = stringResource(R.string.settings_developer_view)
         val devViewHint = stringResource(R.string.settings_developer_view_hint)
         add(
-            SettingsRow(SettingsSection.ADVANCED, listOf(devViewLabel, devViewHint)) {
+            SettingsRow(SettingsPage.ADVANCED, listOf(devViewLabel, devViewHint)) {
                 DetourToggleRow(
                     label = devViewLabel,
                     hint = devViewHint,
@@ -1321,7 +1440,7 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
 
         val kernelVersionLabel = stringResource(R.string.settings_kernel_version)
         add(
-            SettingsRow(SettingsSection.ADVANCED, listOf(kernelVersionLabel)) {
+            SettingsRow(SettingsPage.ADVANCED, listOf(kernelVersionLabel)) {
                 DetourKeyValueRow(
                     label = kernelVersionLabel,
                     // Read from the build rather than typed in. A hard-coded
@@ -1346,66 +1465,77 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
         // above 内核版本. See the note on it.
         //
         // It joins the search model like any other row — searching 命令行 finds it,
-        // which is intended.
+        // which is intended — with one consequence that falls out of `visible`
+        // rather than being chosen: while 开发者视图 is off the row is collapsed,
+        // and a collapsed row is not in the search model, so 命令行 finds nothing
+        // until the switch is on. That is the honest answer. The console is not
+        // merely unlisted while it is off, it is not composed at all, so a search
+        // result pointing at it would be pointing at a row that does not exist.
         val consoleLabel = stringResource(R.string.settings_console)
         val consoleHint = stringResource(R.string.settings_console_hint)
-        if (prefs.developerView) {
-            add(
-                SettingsRow(SettingsSection.ADVANCED, listOf(consoleLabel, consoleHint)) {
-                    DetourConsoleRow(
-                        label = consoleLabel,
-                        hint = consoleHint,
-                        input = consoleInput,
-                        onInputChange = { consoleInput = it },
-                        onSubmit = {
-                            // A blank line or a `#` comment parses to null and is
-                            // ignored — the console is not the place to scold a
-                            // user for pressing enter on an empty field.
-                            ControlConsole.parse(consoleInput)?.let { parsed ->
-                                val line = consoleInput.trim()
-                                // Clear the field and mark the run before the work
-                                // starts, so the UI answers the tap immediately.
-                                consoleInput = ""
-                                consoleRunning = true
-                                consoleScope.launch {
-                                    // Off the main thread: `run` may fetch a
-                                    // megabyte of rules or read files. A failure is
-                                    // turned into the same `error` shape a command
-                                    // returns, so the transcript renders it the
-                                    // same way rather than crashing.
-                                    val result = withContext(Dispatchers.IO) {
-                                        runCatching {
-                                            ControlConsole.run(
-                                                context.applicationContext,
-                                                parsed.command,
-                                                parsed.value,
-                                                parsed.key,
-                                            )
-                                        }.getOrElse {
-                                            JSONObject().put("error", it.message ?: it.javaClass.simpleName)
-                                        }
-                                    }
-                                    consoleEntries = (
-                                        consoleEntries + ConsoleEntry(
-                                            line,
-                                            // Pretty-printed: this is a console meant
-                                            // to be read, and `dump`'s compact
-                                            // one-line form is unusable.
-                                            result.toString(2),
-                                            result.has("error"),
+        // The gate is the row's own `visible` rather than an `if`, so that
+        // flipping 开发者视图 grows the console in underneath the switch that
+        // turned it on instead of dropping a row onto the page between two
+        // frames. See the note on the glass sliders for the same change.
+        add(
+            SettingsRow(
+                SettingsPage.ADVANCED,
+                listOf(consoleLabel, consoleHint),
+                visible = prefs.developerView,
+            ) {
+                DetourConsoleRow(
+                    label = consoleLabel,
+                    hint = consoleHint,
+                    input = consoleInput,
+                    onInputChange = { consoleInput = it },
+                    onSubmit = {
+                        // A blank line or a `#` comment parses to null and is
+                        // ignored — the console is not the place to scold a
+                        // user for pressing enter on an empty field.
+                        ControlConsole.parse(consoleInput)?.let { parsed ->
+                            val line = consoleInput.trim()
+                            // Clear the field and mark the run before the work
+                            // starts, so the UI answers the tap immediately.
+                            consoleInput = ""
+                            consoleRunning = true
+                            consoleScope.launch {
+                                // Off the main thread: `run` may fetch a
+                                // megabyte of rules or read files. A failure is
+                                // turned into the same `error` shape a command
+                                // returns, so the transcript renders it the
+                                // same way rather than crashing.
+                                val result = withContext(Dispatchers.IO) {
+                                    runCatching {
+                                        ControlConsole.run(
+                                            context.applicationContext,
+                                            parsed.command,
+                                            parsed.value,
+                                            parsed.key,
                                         )
-                                        ).takeLast(CONSOLE_MAX_ENTRIES)
-                                    consoleRunning = false
+                                    }.getOrElse {
+                                        JSONObject().put("error", it.message ?: it.javaClass.simpleName)
+                                    }
                                 }
+                                consoleEntries = (
+                                    consoleEntries + ConsoleEntry(
+                                        line,
+                                        // Pretty-printed: this is a console meant
+                                        // to be read, and `dump`'s compact
+                                        // one-line form is unusable.
+                                        result.toString(2),
+                                        result.has("error"),
+                                    )
+                                    ).takeLast(CONSOLE_MAX_ENTRIES)
+                                consoleRunning = false
                             }
-                        },
-                        onClear = { consoleEntries = emptyList() },
-                        entries = consoleEntries,
-                        running = consoleRunning,
-                    )
-                },
-            )
-        }
+                        }
+                    },
+                    onClear = { consoleEntries = emptyList() },
+                    entries = consoleEntries,
+                    running = consoleRunning,
+                )
+            },
+        )
 
         // --- data -------------------------------------------------------------
 
@@ -1414,7 +1544,7 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
         val exportLabel = stringResource(R.string.settings_export)
         val exportHint = stringResource(R.string.settings_export_hint)
         add(
-            SettingsRow(SettingsSection.DATA, listOf(exportLabel, exportHint)) {
+            SettingsRow(SettingsPage.DATA, listOf(exportLabel, exportHint)) {
                 DetourActionRow(
                     label = exportLabel,
                     hint = exportHint,
@@ -1440,7 +1570,7 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
         val importLabel = stringResource(R.string.settings_import)
         val importHint = stringResource(R.string.settings_import_hint)
         add(
-            SettingsRow(SettingsSection.DATA, listOf(importLabel, importHint)) {
+            SettingsRow(SettingsPage.DATA, listOf(importLabel, importHint)) {
                 DetourActionRow(
                     label = importLabel,
                     hint = importHint,
@@ -1454,163 +1584,100 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
             },
         )
 
+        // 恢复默认设置 lives here rather than under the five entries on the
+        // settings list, where it was until now. It is a data operation — it
+        // throws away exactly what 导出数据 writes and 导入数据 restores — so it
+        // belongs with them, and the page split is what made that answerable:
+        // "which page would I look on" is now the only way to find a row.
+        //
+        // It is part of the search model like any other row. It used to be kept
+        // out of it, on the argument that a query must not be able to hide the
+        // one row that is always reachable. That argument does not survive the
+        // move: a page is no more reachable under an active query than a row is,
+        // so keeping it unsearchable would only have meant that 恢复 found
+        // nothing anywhere. Searching 恢复 now finds it, which is the thing the
+        // old arrangement was protecting.
+        val restoreLabel = stringResource(R.string.settings_restore_defaults)
+        val restoreHint = stringResource(R.string.settings_restore_defaults_hint)
+        add(
+            SettingsRow(SettingsPage.DATA, listOf(restoreLabel, restoreHint)) {
+                DetourActionRow(
+                    label = restoreLabel,
+                    hint = restoreHint,
+                    actionLabel = stringResource(R.string.settings_restore_action),
+                    onAction = { showRestoreConfirm = true },
+                )
+            },
+        )
+
         val aboutLabel = stringResource(R.string.settings_about)
         val aboutHint = stringResource(R.string.settings_about_hint)
         add(
-            SettingsRow(SettingsSection.DATA, listOf(aboutLabel, aboutHint)) {
-                DetourActionRow(
+            SettingsRow(SettingsPage.DATA, listOf(aboutLabel, aboutHint)) {
+                // A nav row, not an action row: 关于 is another full page, so it
+                // gets the same chevron and the same whole-row tap target as the
+                // five entries that lead to this page. Its action used to read
+                // 查看, which is the label this change removed everywhere it
+                // meant "go somewhere".
+                DetourNavRow(
                     label = aboutLabel,
                     hint = aboutHint,
-                    actionLabel = stringResource(R.string.settings_about_action),
-                    onAction = onOpenAbout,
+                    onClick = onOpenAbout,
                 )
             },
         )
     }
 
     val needle = query.trim()
-    val visible = if (needle.isEmpty()) {
-        rows
+    // Global, and that is the constraint the page split had to satisfy: hiding
+    // settings makes them unfindable, so a query is answered with the matching
+    // rows themselves, rendered where the search was typed, and it reaches the
+    // rows inside a page without navigating to one. A group's own title matches
+    // too, so 外观 returns what is in 外观 rather than one entry row pointing at it.
+    val pageTitles = SettingsPage.entries.associateWith { stringResource(it.titleRes) }
+    val matches = if (needle.isEmpty()) {
+        emptyList()
     } else {
-        rows.filter { row -> row.searchText.any { it.contains(needle, ignoreCase = true) } }
+        rows.filter { row ->
+            // A collapsed row is not on screen, so it is not a result. The
+            // console while 开发者视图 is off is not hidden-but-findable, it is
+            // absent from the composition, and a hit that pointed at it would
+            // point at nothing.
+            row.visible && (
+                row.searchText.any { it.contains(needle, ignoreCase = true) } ||
+                    pageTitles.getValue(row.page).contains(needle, ignoreCase = true)
+                )
+        }
     }
 
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        // The bar now floats *over* the content rather than sitting below it in a
-        // `Scaffold` slot, so `Scaffold` no longer hands this screen a bottom
-        // inset that clears it. The clearance has to be added here, on the scroll
-        // container that owns the padding, or the last row ends up underneath the
-        // bar. `LocalBottomBarClearance` is the measured bar height plus the
-        // navigation-bar inset; it is zero outside the app body, so a preview is
-        // unaffected.
-        contentPadding = PaddingValues(
-            start = 20.dp,
-            end = 20.dp,
-            top = 12.dp,
-            bottom = 32.dp + LocalBottomBarClearance.current,
-        ),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        item {
-            Text(
-                stringResource(R.string.settings_title),
-                style = MaterialTheme.typography.headlineSmall,
-            )
-        }
+    // The reconnect the pending banner offers, as one lambda rather than two
+    // copies: both the list and the pages show the banner, and a second copy is a
+    // second place to forget that the mode has to come from the running engine.
+    val onRestart: () -> Unit = {
+        ContextCompat.startForegroundService(
+            context,
+            DetourVpnService.restartIntent(context, status.mode),
+        )
+    }
 
-        // The field's horizontal inset is the list's own `contentPadding`, not a
-        // second `padding` here — doubling it would make the field narrower than
-        // every card below it.
-        item {
-            // The type is spelled out on the local so the lambda is inferred as
-            // composable; inside an `if` the slot's expected type alone is not
-            // always enough for that.
-            val clearAction: (@Composable () -> Unit)? = if (query.isNotEmpty()) {
-                {
-                    IconButton(onClick = { query = "" }) {
-                        Icon(Icons.Filled.Clear, contentDescription = null)
-                    }
-                }
-            } else {
-                null
-            }
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                placeholder = { Text(stringResource(R.string.settings_search_hint)) },
-                leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
-                trailingIcon = clearAction,
-            )
-        }
-
-        // Why this exists: every kernel setting is read exactly once, when the engine
-        // is built, and this screen had no way to say so. A user who moved a row and
-        // saw no effect had nothing on screen to tell them a reconnect was the
-        // missing step — and "it silently did nothing" is indistinguishable from "it
-        // is broken".
-        //
-        // Conditional, with a stable key and `animateItem()`: the item fades and
-        // slides both in and out like every other list change in the app, and when
-        // nothing is pending there is no item at all — so the list's `spacedBy`
-        // contributes nothing and the gap is exactly what it was before the banner
-        // existed. An always-present item would have kept the exit animation but
-        // paid for it with a permanent extra 12 dp. It is deliberately outside the
-        // search model — it is a statement about the running engine, not a setting.
-        if (pending) {
-            item(key = "settings-pending") {
-                Box(Modifier.animateItem()) {
-                    DetourSectionCard(stringResource(R.string.settings_kernel_pending_title)) {
-                        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-                            Text(
-                                stringResource(R.string.settings_kernel_pending_body),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.End,
-                            ) {
-                                DetourButton(
-                                    onClick = {
-                                        ContextCompat.startForegroundService(
-                                            context,
-                                            DetourVpnService.restartIntent(context, status.mode),
-                                        )
-                                    },
-                                    variant = DetourButtonVariant.Text,
-                                ) {
-                                    Text(stringResource(R.string.settings_kernel_pending_action))
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // One card per section, in declaration order, holding only the rows the
-        // query left visible. A section whose rows all filtered out is skipped
-        // entirely rather than shown empty.
-        SettingsSection.values().forEach { section ->
-            val sectionRows = visible.filter { it.section == section }
-            if (sectionRows.isEmpty()) return@forEach
-            item(key = section.name) {
-                val title = stringResource(section.titleRes)
-                DetourSectionCard(title) {
-                    SettingsRows(sectionRows)
-                }
-            }
-        }
-
-        if (needle.isNotEmpty() && visible.isEmpty()) {
-            item {
-                Text(
-                    stringResource(R.string.settings_search_empty),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 24.dp),
-                    textAlign = TextAlign.Center,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-
-        // Not part of the search model: "restore defaults" is an action, not a
-        // setting, and matching it against a query would let a search hide it —
-        // which is the one row that has to stay reachable when everything else is
-        // filtered away.
-        item {
-            DetourButton(
-                onClick = { showRestoreConfirm = true },
-                variant = DetourButtonVariant.Outlined,
-            ) {
-                Text(stringResource(R.string.settings_restore_defaults))
-            }
-        }
+    if (page == null) {
+        SettingsList(
+            query = query,
+            onQueryChange = { query = it },
+            needle = needle,
+            matches = matches,
+            pending = pending,
+            onRestart = onRestart,
+            onOpenPage = onNavigate,
+        )
+    } else {
+        SettingsGroupPage(
+            page = page,
+            rows = rows.filter { it.page == page },
+            pending = pending,
+            onRestart = onRestart,
+            onClose = { onNavigate(null) },
+        )
     }
 
     if (showAddSource) {
@@ -1650,7 +1717,7 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
                         showRestoreConfirm = false
                     },
                 ) {
-                    Text(stringResource(R.string.settings_restore_confirm_ok))
+                    Text(stringResource(R.string.settings_restore_action))
                 }
             },
             dismissButton = {
@@ -1696,6 +1763,285 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
 }
 
 /**
+ * The settings list: the search, the five entries, and 恢复默认.
+ *
+ * [matches] is the search result, and it is empty when nothing is being searched
+ * for. The body switches on [needle] rather than on `matches.isEmpty()`, because
+ * "nothing matched" and "nothing was typed" are two different screens — one shows
+ * the entries, the other says the query found nothing — and a single test cannot
+ * tell them apart.
+ *
+ * The rows are not drawn here at all when nothing is being searched for: the
+ * entries are five fixed rows naming the five pages, and the settings themselves
+ * live behind them. What keeps that from hiding anything is the search above
+ * them; see the note on [SettingsScreen].
+ */
+@Composable
+private fun SettingsList(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    needle: String,
+    matches: List<SettingsRow>,
+    pending: Boolean,
+    onRestart: () -> Unit,
+    onOpenPage: (SettingsPage) -> Unit,
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        // The bar floats *over* the content rather than sitting below it in a
+        // `Scaffold` slot, so `Scaffold` no longer hands this screen a bottom
+        // inset that clears it. The clearance has to be added here, on the scroll
+        // container that owns the padding, or the last row ends up underneath the
+        // bar. `LocalBottomBarClearance` is the measured bar height plus the
+        // navigation-bar inset; it is zero outside the app body, so a preview is
+        // unaffected.
+        contentPadding = PaddingValues(
+            start = 20.dp,
+            end = 20.dp,
+            top = 12.dp,
+            bottom = 32.dp + LocalBottomBarClearance.current,
+        ),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item {
+            Text(
+                stringResource(R.string.settings_title),
+                style = MaterialTheme.typography.headlineSmall,
+            )
+        }
+
+        // The field's horizontal inset is the list's own `contentPadding`, not a
+        // second `padding` here — doubling it would make the field narrower than
+        // every card below it.
+        item {
+            // The type is spelled out on the local so the lambda is inferred as
+            // composable; inside an `if` the slot's expected type alone is not
+            // always enough for that.
+            val clearAction: (@Composable () -> Unit)? = if (query.isNotEmpty()) {
+                {
+                    IconButton(onClick = { onQueryChange("") }) {
+                        Icon(Icons.Filled.Clear, contentDescription = null)
+                    }
+                }
+            } else {
+                null
+            }
+            OutlinedTextField(
+                value = query,
+                onValueChange = onQueryChange,
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                placeholder = { Text(stringResource(R.string.settings_search_hint)) },
+                leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                trailingIcon = clearAction,
+            )
+        }
+
+        // Why the banner exists: every kernel setting is read exactly once, when
+        // the engine is built, and this screen had no way to say so. A user who
+        // moved a row and saw no effect had nothing on screen to tell them a
+        // reconnect was the missing step — and "it silently did nothing" is
+        // indistinguishable from "it is broken".
+        //
+        // Conditional, with a stable key and `animateItem()`: the item fades and
+        // slides both in and out like every other list change in the app, and when
+        // nothing is pending there is no item at all — so the list's `spacedBy`
+        // contributes nothing and the gap is exactly what it was before the banner
+        // existed. An always-present item would have kept the exit animation but
+        // paid for it with a permanent extra 12 dp. It is deliberately outside the
+        // search model — it is a statement about the running engine, not a setting.
+        if (pending) {
+            item(key = "settings-pending") {
+                Box(Modifier.animateItem()) {
+                    PendingCard(onRestart)
+                }
+            }
+        }
+
+        if (needle.isEmpty()) {
+            // The five entries, as one untitled card. No heading: the page's own
+            // title is 设置 and every row already carries a group's name, so a
+            // heading here would be the third copy of words already on screen
+            // twice.
+            item(key = "settings-entries") {
+                UntitledSectionCard {
+                    SettingsPage.entries.forEachIndexed { index, target ->
+                        if (index > 0) DetourDivider()
+                        DetourNavRow(
+                            label = stringResource(target.titleRes),
+                            hint = stringResource(target.summaryRes),
+                            onClick = { onOpenPage(target) },
+                        )
+                    }
+                }
+            }
+        } else {
+            // One card per group that has matches, in declaration order. A group
+            // whose rows all filtered out is skipped rather than shown empty — and
+            // the card keeps its group's title, because after the split that title
+            // is also the name of the page the row lives on, which is what tells
+            // the reader where to go to find the row's neighbours.
+            SettingsPage.entries.forEach { target ->
+                val hits = matches.filter { it.page == target }
+                if (hits.isEmpty()) return@forEach
+                item(key = target.name) {
+                    DetourSectionCard(stringResource(target.titleRes)) {
+                        SettingsRows(hits)
+                    }
+                }
+            }
+
+            if (matches.isEmpty()) {
+                item {
+                    Text(
+                        stringResource(R.string.settings_search_empty),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 24.dp),
+                        textAlign = TextAlign.Center,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * One group, as a page of its own.
+ *
+ * **It is opaque, and that is a consequence of where it sits rather than a style
+ * choice.** The app body draws this page as a sibling of the floating bar, over
+ * it, and therefore outside the node marked with `layerBackdrop` — so there is no
+ * backdrop within reach here, and a glass card would take `drawGlass`'s fallback
+ * branch and read as "the glass is broken" rather than "this page has no glass".
+ * The page paints `colorScheme.surface` instead; the cards inside it come from
+ * the shared vocabulary and degrade to a flat tint on an opaque page, which reads
+ * as an ordinary card. `AboutScreen` is drawn the same way for the same reason.
+ *
+ * The safe-area insets are taken here rather than from the app body's `Scaffold`,
+ * for that same reason: this page covers that `Scaffold` rather than sitting
+ * inside it, and there is no floating bar left to clear, so the bottom inset has
+ * to be its own or the last row sits under the gesture bar.
+ *
+ * `BackHandler` rather than a close button only: the page covers the bar and
+ * reads as an overlay, so the system back gesture has to close it; without this
+ * it would fall through to the activity and quit the app from a page that looks
+ * like a dialog.
+ *
+ * **Why the card under the header has no heading of its own.** [DetourPageHeader]
+ * prints the group's name, and a card heading with the same words one line below
+ * it is the duplication the 玻璃效果 heading was deleted for. The rows are the
+ * page's whole content, so they are the card's whole content.
+ */
+@Composable
+private fun SettingsGroupPage(
+    page: SettingsPage,
+    rows: List<SettingsRow>,
+    pending: Boolean,
+    onRestart: () -> Unit,
+    onClose: () -> Unit,
+) {
+    // Enabled unconditionally: while this page is shown it is the topmost thing
+    // on screen, so there is nothing else for back to mean.
+    BackHandler(enabled = true) { onClose() }
+
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = MaterialTheme.colorScheme.surface,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .windowInsetsPadding(WindowInsets.safeDrawing)
+                .verticalScroll(rememberScrollState())
+                .padding(bottom = 32.dp),
+            // The settings list's own rhythm — 12 dp between cards — so the two
+            // read as the same surface. The gutter is applied per card rather than
+            // here, because `DetourPageHeader` carries its own 20 dp start padding
+            // and a second one would double it.
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            DetourPageHeader(
+                title = stringResource(page.titleRes),
+                actions = {
+                    DetourButton(onClick = onClose, variant = DetourButtonVariant.Text) {
+                        Text(stringResource(R.string.settings_back))
+                    }
+                },
+            )
+
+            if (pending) {
+                PendingCard(
+                    onRestart = onRestart,
+                    modifier = Modifier.padding(horizontal = 20.dp),
+                )
+            }
+
+            UntitledSectionCard(Modifier.padding(horizontal = 20.dp)) {
+                SettingsRows(rows)
+            }
+        }
+    }
+}
+
+/**
+ * The "the running engine is on old settings" banner.
+ *
+ * Shared by the list and the pages rather than written once per page: a change
+ * made on a page has to be able to say so on that page, or the person who made it
+ * has to navigate back to find out why nothing happened.
+ */
+@Composable
+private fun PendingCard(onRestart: () -> Unit, modifier: Modifier = Modifier) {
+    DetourSectionCard(
+        title = stringResource(R.string.settings_kernel_pending_title),
+        modifier = modifier,
+    ) {
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+            Text(
+                stringResource(R.string.settings_kernel_pending_body),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                DetourButton(onClick = onRestart, variant = DetourButtonVariant.Text) {
+                    Text(stringResource(R.string.settings_kernel_pending_action))
+                }
+            }
+        }
+    }
+}
+
+/**
+ * A group card without its heading.
+ *
+ * The same shape as [DetourSectionCard] minus the title, for the two places that
+ * have no use for one: the list's entry card, whose page is already titled 设置
+ * and whose rows each name their own group, and a group page, whose header
+ * already names the group. Repeating the shape rather than making
+ * [DetourSectionCard]'s title nullable is deliberate: a nullable title would let
+ * a caller drop a heading by accident, and every existing call site would have to
+ * be read to find out which ones meant it.
+ */
+@Composable
+private fun UntitledSectionCard(
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    DetourCard(
+        modifier = modifier,
+        style = DetourCardStyle.Glass,
+    ) {
+        Column(Modifier.padding(vertical = 4.dp), content = content)
+    }
+}
+
+/**
  * A section's rows, with the hairline between them.
  *
  * The divider is placed *between* rows and never at either end, which is what
@@ -1705,9 +2051,27 @@ fun SettingsScreen(onOpenAbout: () -> Unit) {
  */
 @Composable
 private fun ColumnScope.SettingsRows(rows: List<SettingsRow>) {
+    val motion = LocalDetourMotion.current
     rows.forEachIndexed { index, row ->
-        if (index > 0) DetourDivider()
-        row.content()
+        // The divider travels with the row *below* it rather than sitting
+        // between two rows. A divider left behind while its row collapses is a
+        // hairline hanging in space for the length of the animation — and at the
+        // end of it, a card that opens on a divider.
+        //
+        // The `Column` is a shape, not a layout: it stacks the divider and the
+        // row exactly as the enclosing card already stacked them, so a row that
+        // is always visible is byte-for-byte the layout it was before this
+        // wrapper existed.
+        AnimatedVisibility(
+            visible = row.visible,
+            enter = expandVertically(motion.sizeSpatial),
+            exit = shrinkVertically(motion.sizeSpatial),
+        ) {
+            Column {
+                if (index > 0) DetourDivider()
+                row.content()
+            }
+        }
     }
 }
 

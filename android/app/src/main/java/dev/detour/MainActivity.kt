@@ -9,6 +9,12 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -57,6 +63,7 @@ import dev.detour.ui.Destination
 import dev.detour.ui.HomeScreen
 import dev.detour.ui.LogsScreen
 import dev.detour.ui.RulesScreen
+import dev.detour.ui.SettingsPage
 import dev.detour.ui.SettingsScreen
 import dev.detour.ui.components.BatteryPolicyDialog
 import dev.detour.ui.components.DisclaimerDialog
@@ -66,6 +73,7 @@ import dev.detour.ui.components.LocalLayerBackdrop
 import dev.detour.ui.components.UpdateAvailableDialog
 import dev.detour.ui.openInBrowser
 import dev.detour.ui.theme.DetourTheme
+import dev.detour.ui.theme.LocalDetourMotion
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -223,6 +231,14 @@ private fun DetourAppBody(onRequestNotifications: () -> Unit = {}) {
     // it: the page survives a rotation instead of snapping back to the settings
     // list. Why it is not a destination is explained where the overlay is drawn.
     var showAbout by rememberSaveable { mutableStateOf(false) }
+    // Which settings group is on top, or null for the settings list itself.
+    //
+    // A nullable page rather than five booleans, and the same shape as 关于 above
+    // rather than a `Destination`: these pages are reached from 设置 and return
+    // there, which is a different kind of thing from a tab — see the note where
+    // they are drawn. `rememberSaveable` so a rotation does not throw the reader
+    // back to the list with the page they were reading lost.
+    var settingsPage by rememberSaveable { mutableStateOf<SettingsPage?>(null) }
     val destinations = Destination.entries
     val scheme = MaterialTheme.colorScheme
     val context = LocalContext.current
@@ -412,11 +428,61 @@ private fun DetourAppBody(onRequestNotifications: () -> Unit = {}) {
                         color = Color.Transparent,
                         contentColor = MaterialTheme.colorScheme.onSurface,
                     ) {
-                        when (destinations[selected]) {
-                            Destination.HOME -> HomeScreen()
-                            Destination.RULES -> RulesScreen()
-                            Destination.LOGS -> LogsScreen()
-                            Destination.SETTINGS -> SettingsScreen(onOpenAbout = { showAbout = true })
+                        // The four tabs are peers, so switching between them is
+                        // not a push — nothing is being opened. It is still
+                        // directional, though: the bar puts them in a row and
+                        // slides its indicator along it, so the content moves the
+                        // way the indicator just moved. A plain fade would leave
+                        // the indicator pointing at a direction the content did
+                        // not come from.
+                        //
+                        // Shared-axis X: the outgoing screen leaves towards the
+                        // side the incoming one arrives from, so the pair reads as
+                        // one object travelling rather than two swapping places. A
+                        // third of the width and not the whole of it — at full
+                        // width the two are never on screen together and it reads
+                        // as a carousel, which is a claim about the tabs being
+                        // pages of one document that is not true here.
+                        //
+                        // **Composing the outgoing screen for the length of the
+                        // transition is safe, and that is a fact about these four
+                        // rather than a hope.** Every background job they start —
+                        // the rule-index parse, the ip-stats fetch, the two 30 s
+                        // clocks, the home screen's rate tick — lives in a
+                        // `LaunchedEffect` keyed on that screen's own entry or on
+                        // the tunnel's state, so the screen that is leaving does
+                        // not run any of them a second time. It keeps drawing, and
+                        // then it is gone.
+                        val motion = LocalDetourMotion.current
+                        AnimatedContent(
+                            targetState = selected,
+                            transitionSpec = {
+                                val forward = targetState > initialState
+                                val sign = if (forward) 1 else -1
+                                (
+                                    slideInHorizontally(motion.offsetSpatial) { sign * it / 3 } +
+                                        fadeIn(motion.effects)
+                                    ) togetherWith
+                                    (
+                                        slideOutHorizontally(motion.offsetSpatial) { -sign * it / 3 } +
+                                            fadeOut(motion.effects)
+                                        )
+                            },
+                            label = "destination",
+                        ) { index ->
+                            when (destinations[index]) {
+                                Destination.HOME -> HomeScreen()
+                                Destination.RULES -> RulesScreen()
+                                Destination.LOGS -> LogsScreen()
+                                Destination.SETTINGS -> SettingsScreen(
+                                    // Null: this slot is the settings list. The
+                                    // group pages are drawn over the whole app, as a
+                                    // sibling of the bar — see where they are.
+                                    page = null,
+                                    onNavigate = { settingsPage = it },
+                                    onOpenAbout = { showAbout = true },
+                                )
+                            }
                         }
                     }
                 }
@@ -472,8 +538,123 @@ private fun DetourAppBody(onRequestNotifications: () -> Unit = {}) {
         // that is not a peer of 连接/规则/日志/设置. 关于 is a second-level page
         // reached from 设置, and it returns there; that is a different kind of
         // thing from a tab, so it gets a different kind of state.
-        if (showAbout) {
-            AboutScreen(onClose = { showAbout = false })
+        // A settings group's own page. Drawn here, beside 关于, for every reason
+        // spelled out above: it covers the content *and* the bar, so it has to be
+        // a sibling of both, and it is not a `Destination` because it is reached
+        // from 设置 and returns there.
+        //
+        // **It is drawn before 关于 on purpose.** 关于 is opened *from* one of these
+        // pages — the 数据与关于 group holds the row — so 关于 has to paint over the
+        // page that opened it. Drawn the other way round, the group page would
+        // cover the page it had just opened. Being a sibling rather than a child
+        // also means closing 关于 lands back on the group page, which is where the
+        // reader was, instead of on the settings list.
+        // **Both are `AnimatedContent` over a nullable state, and that is the
+        // shape the push needs.** The content lambda is called with the *old*
+        // state for as long as the outgoing frame is being drawn, so a page that
+        // is closing still has its own value to render instead of reading a null
+        // and blanking out halfway through sliding away. Hoisting the last
+        // non-null page into a second piece of state would have been the other
+        // way to get that, and it is worse: it is a write during composition, and
+        // it keeps a page alive in memory that nothing is looking at.
+        //
+        // **Each content is wrapped in a full-size `Box`, and that is load
+        // bearing rather than tidiness.** `AnimatedContent` sizes itself to what
+        // it is showing and animates that size between states; with `null` on one
+        // side and a full-screen page on the other, the container would grow from
+        // nothing and the page would appear to unroll out of a corner. A
+        // constant full-size child means there is never a size to animate.
+        //
+        // **From the right, and the direction is the point.** These pages are
+        // reached *from* the settings list and return to it, so opening is going
+        // deeper: the page arrives from the right and closing takes it back out
+        // the same way, which is what makes 返回 undo the opening rather than
+        // doing something else.
+        //
+        // **The list behind does not move, and that is deliberate rather than an
+        // oversight.** The list is the settings *tab's* content, drawn by the
+        // `AnimatedContent` above; it is not this one's outgoing child. Putting a
+        // second copy here to be the outgoing half would give the settings screen
+        // two instances — two search fields, two scroll positions — and the one
+        // that survived a page opening would not be the one the reader left. So
+        // the outgoing slot holds an empty full-size `Box`, and the page simply
+        // arrives over a list that holds still. (An earlier draft of this comment
+        // claimed the list drifted a third of the way left. It does not: that
+        // `slideOutHorizontally` below applies to the empty box.)
+        //
+        // The spec still describes a full push on both halves, which is what a
+        // page-to-page transition would need — a group page opening another. No
+        // page does that today, so half of each pair is never seen; it is kept
+        // because the alternative is a crossfade the moment one does.
+        val motion = LocalDetourMotion.current
+        AnimatedContent(
+            targetState = settingsPage,
+            modifier = Modifier.fillMaxSize(),
+            transitionSpec = {
+                if (targetState != null) {
+                    (
+                        slideInHorizontally(motion.offsetSpatial) { it } +
+                            fadeIn(motion.effects)
+                        ) togetherWith
+                        (
+                            slideOutHorizontally(motion.offsetSpatial) { -it / 3 } +
+                                fadeOut(motion.effects)
+                            )
+                } else {
+                    (
+                        slideInHorizontally(motion.offsetSpatial) { -it / 3 } +
+                            fadeIn(motion.effects)
+                        ) togetherWith
+                        (
+                            slideOutHorizontally(motion.offsetSpatial) { it } +
+                                fadeOut(motion.effects)
+                            )
+                }
+            },
+            label = "settings-group-page",
+        ) { page ->
+            Box(Modifier.fillMaxSize()) {
+                if (page != null) {
+                    SettingsScreen(
+                        page = page,
+                        onNavigate = { settingsPage = it },
+                        onOpenAbout = { showAbout = true },
+                    )
+                }
+            }
+        }
+
+        AnimatedContent(
+            targetState = showAbout,
+            modifier = Modifier.fillMaxSize(),
+            transitionSpec = {
+                if (targetState) {
+                    (
+                        slideInHorizontally(motion.offsetSpatial) { it } +
+                            fadeIn(motion.effects)
+                        ) togetherWith
+                        (
+                            slideOutHorizontally(motion.offsetSpatial) { -it / 3 } +
+                                fadeOut(motion.effects)
+                            )
+                } else {
+                    (
+                        slideInHorizontally(motion.offsetSpatial) { -it / 3 } +
+                            fadeIn(motion.effects)
+                        ) togetherWith
+                        (
+                            slideOutHorizontally(motion.offsetSpatial) { it } +
+                                fadeOut(motion.effects)
+                            )
+                }
+            },
+            label = "about",
+        ) { open ->
+            Box(Modifier.fillMaxSize()) {
+                if (open) {
+                    AboutScreen(onClose = { showAbout = false })
+                }
+            }
         }
 
         // The "a new version is available" dialog, drawn near the end and beside 关于.

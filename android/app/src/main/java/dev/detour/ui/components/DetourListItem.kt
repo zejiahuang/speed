@@ -12,7 +12,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -403,6 +406,53 @@ fun DetourActionRow(
     }
 }
 
+/**
+ * A row that opens another page.
+ *
+ * **The whole row is the tap target, and the trailing edge carries a chevron
+ * instead of a labelled button.** It was a [DetourActionRow] whose action read
+ * 查看, which said the wrong thing twice: a text button at the right of a row
+ * that navigates splits the row into "a label you read" and "a button you
+ * press", and it invites the reader to aim at the button when the thing being
+ * chosen is the row. A chevron is the convention for "this goes somewhere", and
+ * it is not a button, so the row is what answers the tap.
+ *
+ * `KeyboardArrowRight` is the only chevron in `material-icons-core`, which is
+ * the only icon artifact this app ships — see the note on the second 添加自定义源
+ * row in `SettingsScreen`, and the build file. `AutoMirrored` because a chevron
+ * is a direction: in a right-to-left layout the row still opens forwards, so the
+ * glyph has to point the other way.
+ *
+ * The icon is decorative and carries no `contentDescription`: the label already
+ * names the destination, and describing the chevron as well would have a screen
+ * reader announce it twice.
+ *
+ * [hint] is the second line of the row — the same one-sentence answer to "what
+ * is behind this" that every other row's hint gives.
+ */
+@Composable
+fun DetourNavRow(
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    hint: String? = null,
+) {
+    DetourRow(
+        label = label,
+        hint = hint,
+        // Applied before `DetourRow`'s own padding, so the ripple covers the
+        // whole row rather than stopping at the label's edge — the tap target
+        // and the visible row are the same rectangle.
+        modifier = modifier.clickable(onClick = onClick),
+    ) {
+        Icon(
+            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
 @Preview
 @Composable
 private fun DetourListItemPreview() {
@@ -430,6 +480,8 @@ private fun DetourListItemPreview() {
                 secondaryLabel = "清除",
                 onSecondary = {},
             )
+            DetourDivider()
+            DetourNavRow(label = "数据与关于", hint = "导出、导入与版本信息", onClick = {})
         }
     }
 }
