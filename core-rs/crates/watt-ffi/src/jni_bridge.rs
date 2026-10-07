@@ -580,6 +580,42 @@ pub extern "system" fn Java_dev_detour_core_Kernel_nativeProxyReplaceRules(
     }
 }
 
+/// Fill `out` with the no-root proxy's counters, in the order
+/// `Kernel.ProxyStats` reads them.
+///
+/// Seven fields, fixed by `Kernel.PROXY_STATS_FIELDS`. The hazard is the same one
+/// `nativeMitmStats` carries: a mismatch does not fail, it silently shifts every
+/// field after the gap.
+#[no_mangle]
+pub extern "system" fn Java_dev_detour_core_Kernel_nativeProxyStats(
+    mut env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    out: JLongArray,
+) -> jint {
+    if handle == 0 {
+        set_error(&mut env, "the proxy is not running");
+        return -1;
+    }
+    let stats =
+        crate::collect_proxy_stats(unsafe { &(*(handle as *mut crate::WattProxy)).stats });
+    let values = [
+        stats.connections,
+        stats.matched,
+        stats.direct,
+        stats.served,
+        stats.dial_failures,
+        stats.bytes_to_upstream,
+        stats.bytes_to_client,
+    ];
+    let widened: Vec<jlong> = values.iter().map(|v| *v as jlong).collect();
+    if env.set_long_array_region(&out, 0, &widened).is_err() {
+        set_error(&mut env, "could not write the counters");
+        return -1;
+    }
+    0
+}
+
 /// Start the root-mode reverse proxy. Returns the handle, or 0 on failure.
 ///
 /// `ca_dir` is the app-private directory the CA certificate and key live in. It

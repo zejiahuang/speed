@@ -167,8 +167,8 @@ class DetourVpnService : VpnService() {
         )
         updateNotification(getString(R.string.home_state_on))
         // Nothing to step: the proxy owns its own accept loop and per-connection
-        // threads. Only the counters need sampling, and this mode does not
-        // expose any yet.
+        // threads. Only the counters need sampling, which is what this loop is.
+        runProxyLoop()
     }
 
     private suspend fun startVpn(document: ByteArray) {
@@ -437,7 +437,7 @@ class DetourVpnService : VpnService() {
      *
      * Root mode has no tunnel, so there is no `step()` to pace this — the proxy
      * runs on its own threads inside this process and there is nothing to drive.
-     * The loop therefore sleeps rather than blocks, and [MITM_POLL_INTERVAL_MS] is
+     * The loop therefore sleeps rather than blocks, and [PROXY_POLL_INTERVAL_MS] is
      * what keeps it off a core.
      *
      * Same two cadences as [runLoop], for the same reasons: the rate is a
@@ -470,13 +470,13 @@ class DetourVpnService : VpnService() {
                 val rateDue = now - lastRateSample >= RATE_SAMPLE_INTERVAL_MS
                 val reportDue = now - lastReport >= reportIntervalMs
                 if (!rateDue && !reportDue) {
-                    delay(MITM_POLL_INTERVAL_MS)
+                    delay(PROXY_POLL_INTERVAL_MS)
                     continue
                 }
 
                 val stats = current.stats()
                 if (stats == null) {
-                    delay(MITM_POLL_INTERVAL_MS)
+                    delay(PROXY_POLL_INTERVAL_MS)
                     continue
                 }
 
@@ -500,7 +500,76 @@ class DetourVpnService : VpnService() {
                         ),
                     )
                 }
-                delay(MITM_POLL_INTERVAL_MS)
+                delay(PROXY_POLL_INTERVAL_MS)
+            }
+        }
+    }
+
+    /**
+     * The counters loop for the no-root proxy.
+     *
+     * The same shape as [runRootLoop] and for the same reasons: there is no
+     * `step()` to pace it, so it sleeps; and it runs the two cadences the home
+     * screen needs — a fine one for the rate, the user's interval for the
+     * counters.
+     *
+     * The tunnel's own counters are published beside the proxy's, carrying only
+     * the two byte fields the home screen reads. Every other field there
+     * describes the tunnel, which this mode does not have, so zero is the honest
+     * answer rather than a placeholder.
+     */
+    private suspend fun runProxyLoop() {
+        loop?.cancel()
+        loop = scope.launch {
+            var lastRateSample = 0L
+            var lastReport = 0L
+            var previous = Kernel.ProxyStats()
+            var previousAt = System.currentTimeMillis()
+
+            while (isActive) {
+                val current = proxy ?: break
+
+                // Re-read every tick so moving the "统计输出间隔" stepper changes a
+                // running proxy rather than only the next one, exactly as the
+                // tunnel's and root mode's loops do.
+                val reportIntervalMs =
+                    Prefs.of(this@DetourVpnService).statsIntervalSeconds.coerceIn(1, 60) * 1000L
+
+                val now = System.currentTimeMillis()
+                val rateDue = now - lastRateSample >= RATE_SAMPLE_INTERVAL_MS
+                val reportDue = now - lastReport >= reportIntervalMs
+                if (!rateDue && !reportDue) {
+                    delay(PROXY_POLL_INTERVAL_MS)
+                    continue
+                }
+
+                val stats = current.stats()
+                if (stats == null) {
+                    delay(PROXY_POLL_INTERVAL_MS)
+                    continue
+                }
+
+                if (rateDue) {
+                    lastRateSample = now
+                    val elapsed = (now - previousAt).coerceAtLeast(1)
+                    Rate.update(
+                        down = (stats.bytesToClient - previous.bytesToClient) * 1000 / elapsed,
+                        up = (stats.bytesToUpstream - previous.bytesToUpstream) * 1000 / elapsed,
+                    )
+                    previous = stats
+                    previousAt = now
+                }
+                if (reportDue) {
+                    lastReport = now
+                    KernelState.setProxyStats(stats)
+                    KernelState.setStats(
+                        Kernel.Stats(
+                            bytesToUpstream = stats.bytesToUpstream,
+                            bytesToClient = stats.bytesToClient,
+                        ),
+                    )
+                }
+                delay(PROXY_POLL_INTERVAL_MS)
             }
         }
     }
@@ -671,6 +740,7 @@ class DetourVpnService : VpnService() {
         engine = null
         KernelState.ipStats = null
         KernelState.setMitmStats(null)
+        KernelState.setProxyStats(null)
         // The same restore the stop path runs, and for the same reason: a failure
         // after `apply` returned is still a failure with the system already
         // changed, and the only acceptable end state is "as it was found".
@@ -751,13 +821,13 @@ class DetourVpnService : VpnService() {
         private const val RATE_SAMPLE_INTERVAL_MS = 500L
 
         /**
-         * How long the root-mode counters loop sleeps between reads.
+         * How long the counters loop of a proxy mode sleeps between reads.
          *
-         * `runLoop` has no equivalent because `step()` blocks and paces it. This
-         * loop only reads atomics, so without a sleep it would spin a core for no
-         * information.
+         * `runLoop` has no equivalent because `step()` blocks and paces it. The
+         * root-mode and no-root proxy loops only read atomics, so without a sleep
+         * they would spin a core for no information.
          */
-        private const val MITM_POLL_INTERVAL_MS = 200L
+        private const val PROXY_POLL_INTERVAL_MS = 200L
 
         /**
          * How long the teardown waits for the step loop to leave `step()`.

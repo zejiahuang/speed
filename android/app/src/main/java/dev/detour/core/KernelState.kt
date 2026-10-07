@@ -85,6 +85,16 @@ object KernelState {
     private val _mitmStats = MutableStateFlow<Kernel.MitmStats?>(null)
     val mitmStats: StateFlow<Kernel.MitmStats?> = _mitmStats.asStateFlow()
 
+    /**
+     * The no-root proxy's counters, or null when that mode is not running.
+     *
+     * Separate from both [stats] and [mitmStats]: all three describe different
+     * subsystems, and a mode that is not running has to read as "nothing" rather
+     * than as a row of zeros that looks like a stalled proxy.
+     */
+    private val _proxyStats = MutableStateFlow<Kernel.ProxyStats?>(null)
+    val proxyStats: StateFlow<Kernel.ProxyStats?> = _proxyStats.asStateFlow()
+
     private val _logs = MutableStateFlow<List<LogEntry>>(emptyList())
     val logs: StateFlow<List<LogEntry>> = _logs.asStateFlow()
 
@@ -107,6 +117,10 @@ object KernelState {
 
     fun setMitmStats(stats: Kernel.MitmStats?) {
         _mitmStats.value = stats
+    }
+
+    fun setProxyStats(stats: Kernel.ProxyStats?) {
+        _proxyStats.value = stats
     }
 
     /**
@@ -143,6 +157,7 @@ object KernelState {
         _status.value = Status(phase = Phase.OFF, mode = mode)
         _stats.value = Kernel.Stats()
         _mitmStats.value = null
+        _proxyStats.value = null
     }
 
     /**

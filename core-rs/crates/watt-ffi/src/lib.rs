@@ -171,6 +171,27 @@ pub struct WattMitmStats {
     pub bytes_to_client: u64,
 }
 
+/// Counters for the no-root proxy, filled in by [`watt_proxy_stats`].
+///
+/// A struct of its own rather than a reuse of [`WattMitmStats`]: the two proxies
+/// count different things. The root-mode proxy terminates TLS and so has a
+/// handshake to count and a name it can refuse; this one never terminates TLS
+/// and refuses nothing, but it is the one that has to tell a rule-matched
+/// connection from an unlisted one, because it relays both. Same
+/// `#[repr(C)]`-of-plain-integers shape, so JNI can read it without matching
+/// Rust's field ordering.
+#[repr(C)]
+#[derive(Debug, Default, Clone, Copy)]
+pub struct WattProxyStats {
+    pub connections: u64,
+    pub matched: u64,
+    pub direct: u64,
+    pub served: u64,
+    pub dial_failures: u64,
+    pub bytes_to_upstream: u64,
+    pub bytes_to_client: u64,
+}
+
 /// A protector supplied from outside Rust.
 ///
 /// The C ABI supplies a function pointer and a context; the JNI bridge supplies
@@ -807,6 +828,20 @@ pub(crate) fn collect_mitm_stats(proxy: &watt_mitm::Proxy) -> WattMitmStats {
     }
 }
 
+/// Copy the no-root proxy's counters out of the proxy.
+pub(crate) fn collect_proxy_stats(stats: &watt_proxy::Stats) -> WattProxyStats {
+    let stats = stats.snapshot();
+    WattProxyStats {
+        connections: stats.connections,
+        matched: stats.matched,
+        direct: stats.direct,
+        served: stats.served,
+        dial_failures: stats.dial_failures,
+        bytes_to_upstream: stats.bytes_to_upstream,
+        bytes_to_client: stats.bytes_to_client,
+    }
+}
+
 pub(crate) fn uptime_seconds(engine: &WattEngine) -> f64 {
     engine.started.elapsed().as_secs_f64()
 }
@@ -1423,6 +1458,11 @@ pub struct WattProxy {
     /// and a rule switch in proxy mode would appear to do nothing until the user
     /// reconnected.
     router: Arc<Mutex<watt_rules::Router>>,
+    /// The counters the serve loop writes, kept here for the same reason as
+    /// `router`: one `Arc` with two owners, so [`watt_proxy_stats`] reads the
+    /// numbers from the handle the shell already holds rather than needing a
+    /// second one.
+    stats: Arc<watt_proxy::Stats>,
 }
 
 /// Start a local HTTP proxy on `port`, serving `rules`.
@@ -1478,10 +1518,16 @@ pub unsafe extern "C" fn watt_proxy_start(
         // `serve_until` wants the `Arc`, and the handle keeps a clone so it can
         // reach in later. Cloned before the move, not reconstructed after.
         let handle_router = Arc::clone(&router);
+        // Same arrangement for the counters: the serve loop writes them, the
+        // handle reads them.
+        let stats = Arc::new(watt_proxy::Stats::default());
+        let worker_stats = Arc::clone(&stats);
         let worker = thread::Builder::new()
             .name("watt-proxy".to_string())
             .spawn(move || {
-                if let Err(err) = watt_proxy::serve_until(listener, router, worker_stop) {
+                if let Err(err) =
+                    watt_proxy::serve_until(listener, router, worker_stop, worker_stats)
+                {
                     set_last_error(format!("the proxy stopped: {err}"));
                 }
             })
@@ -1493,6 +1539,7 @@ pub unsafe extern "C" fn watt_proxy_start(
             port: bound,
             free_id: next_free_id(),
             router: handle_router,
+            stats,
         })))
     }));
 
@@ -1573,6 +1620,25 @@ pub unsafe extern "C" fn watt_proxy_port(proxy: *mut WattProxy) -> c_int {
         return 0;
     }
     (*proxy).port as c_int
+}
+
+/// Copy the no-root proxy's counters out. Returns 0 on success, -1 on failure.
+///
+/// # Safety
+///
+/// `proxy` must be a live handle from [`watt_proxy_start`], and `out` must point
+/// at a writable [`WattProxyStats`].
+#[no_mangle]
+pub unsafe extern "C" fn watt_proxy_stats(
+    proxy: *mut WattProxy,
+    out: *mut WattProxyStats,
+) -> c_int {
+    if proxy.is_null() || out.is_null() {
+        set_last_error("watt_proxy_stats needs both a proxy and an output");
+        return -1;
+    }
+    *out = collect_proxy_stats(&(*proxy).stats);
+    0
 }
 
 /// Stop the proxy and release the handle.

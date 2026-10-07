@@ -240,6 +240,56 @@ object Kernel {
     }
 
     /**
+     * Counters for the no-root proxy.
+     *
+     * A type of its own rather than more fields on [Stats], for the same reason
+     * [MitmStats] is: that one describes the tunnel, which this mode does not
+     * have. It is also not [MitmStats] with different names — the two proxies
+     * count different things. This one never terminates TLS, so it has no
+     * handshake to count and refuses nothing, but it *does* have to tell a
+     * rule-matched connection from an unlisted one, because it relays both.
+     */
+    data class ProxyStats(
+        /** Client TCP connections accepted. */
+        val connections: Long = 0,
+        /**
+         * Connections whose domain the rule set claimed.
+         *
+         * "Claimed" rather than "routed by": a rule that matches but supplies no
+         * address usable by this client still counts — the question is whether a
+         * rule had an opinion about the name, not whether it could be acted on.
+         *
+         * The honest "rules hit" number for this mode. [served] is not it: a
+         * domain no rule mentions is relayed through the system resolver rather
+         * than refused, so `served` counts everything the client chose to send
+         * here, listed or not.
+         */
+        val matched: Long = 0,
+        /** Connections with no rule at all, relayed through the system resolver. */
+        val direct: Long = 0,
+        /**
+         * Connections that were relayed: an upstream was dialled and the session
+         * handed to the relay. Counted when the relay starts rather than when it
+         * ends, so a connection cut short still counts.
+         */
+        val served: Long = 0,
+        /**
+         * Connections closed with `502` because no candidate reached the host.
+         *
+         * The complement of [served] among connections that got as far as a
+         * plan: a non-zero value means the rule's addresses and the system
+         * resolver both failed, which is a network fact, not a rule-table one.
+         */
+        val dialFailures: Long = 0,
+        /** Bytes carried from the client towards the origin. */
+        val bytesToUpstream: Long = 0,
+        /** Bytes carried from the origin back to the client. */
+        val bytesToClient: Long = 0,
+    ) {
+        val bytesTotal: Long get() = bytesToUpstream + bytesToClient
+    }
+
+    /**
      * One address's dial history, as the selector remembers it.
      *
      * This is the *byte-based* half of the picture: successes and failures are
@@ -386,6 +436,7 @@ object Kernel {
     private external fun nativeProxyStart(port: Int, rules: ByteArray): Long
     private external fun nativeProxyPort(handle: Long): Int
     private external fun nativeProxyReplaceRules(handle: Long, rules: ByteArray): Int
+    private external fun nativeProxyStats(handle: Long, out: LongArray): Int
     private external fun nativeProxyStop(handle: Long)
 
     private external fun nativeMitmStart(port: Int, rules: ByteArray, caDir: String): Long
@@ -594,6 +645,28 @@ object Kernel {
             return nativeProxyReplaceRules(h, document) == 0
         }
 
+        /**
+         * The proxy's counters, or null when the handle is closed or the native
+         * side refused.
+         *
+         * The proxy counterpart of [Engine.stats] and [Mitm.stats]. This mode
+         * has no `step()` — the proxy owns its own accept loop and one thread
+         * per connection — so these are the only numbers that say it is doing
+         * anything at all.
+         */
+        fun stats(): ProxyStats? {
+            val h = handle.get()
+            if (h == 0L) return null
+            if (!ensureLoaded()) return null
+            val raw = LongArray(PROXY_STATS_FIELDS)
+            if (nativeProxyStats(h, raw) != 0) return null
+            return ProxyStats(
+                connections = raw[0], matched = raw[1], direct = raw[2],
+                served = raw[3], dialFailures = raw[4],
+                bytesToUpstream = raw[5], bytesToClient = raw[6],
+            )
+        }
+
         override fun close() {
             val h = handle.getAndSet(0L)
             if (h != 0L) nativeProxyStop(h)
@@ -780,6 +853,15 @@ object Kernel {
      * the gap. This is the one number to check when a proxy counter is added.
      */
     private const val MITM_STATS_FIELDS = 7
+
+    /**
+     * How many `jlong`s [nativeProxyStats] writes.
+     *
+     * The same hazard [STATS_FIELDS] carries: the Rust side writes the array out
+     * by hand, so a mismatch does not fail — it silently shifts every field after
+     * the gap. This is the one number to check when a proxy counter is added.
+     */
+    private const val PROXY_STATS_FIELDS = 7
 }
 
 class KernelException(message: String) : Exception(message)

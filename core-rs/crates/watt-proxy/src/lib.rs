@@ -42,7 +42,7 @@ use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use watt_rules::{Family, Outcome, Router, Strategy};
@@ -105,16 +105,124 @@ const COPY_BUFFER: usize = 32 * 1024;
 /// from Caddy, for the same reason.
 const DIAL_REFRESH: Duration = Duration::from_secs(60);
 
+/// Counters for one running proxy.
+///
+/// Atomics rather than the plain struct the tunnel engine keeps, and the
+/// difference is not a preference: this proxy hands every connection its own
+/// thread, so each field is written concurrently by construction. `Relaxed`
+/// throughout — no counter is read to make a routing decision, and no reader
+/// needs two of them to agree.
+///
+/// # Why `matched`/`direct` and not just `served`
+///
+/// The obvious "how many rules were hit" answer is `served`, and it is wrong
+/// here. This proxy relays **everything** it is asked for — a domain no rule
+/// mentions is dialled through the system resolver rather than refused (see the
+/// module docs). So `served` counts the whole of what the client chose to send
+/// here, listed or not. `matched` counts only the connections whose domain the
+/// rule set claimed, which is the number the shell can honestly label "rules
+/// hit". The two are kept apart rather than derived from one another because
+/// `connections` also includes requests that never reached a name at all
+/// (a malformed request line is answered `400` and returns before any plan), so
+/// `matched + direct` is deliberately not asserted to equal `connections`.
+#[derive(Debug, Default)]
+pub struct Stats {
+    connections: AtomicU64,
+    matched: AtomicU64,
+    direct: AtomicU64,
+    served: AtomicU64,
+    dial_failures: AtomicU64,
+    bytes_to_upstream: AtomicU64,
+    bytes_to_client: AtomicU64,
+}
+
+impl Stats {
+    /// Every counter, read once.
+    ///
+    /// One pass rather than handing out a reference: the counters move under the
+    /// reader, and a caller that read them one at a time would be comparing
+    /// values from different moments as if they were one.
+    pub fn snapshot(&self) -> StatsSnapshot {
+        StatsSnapshot {
+            connections: self.connections.load(Ordering::Relaxed),
+            matched: self.matched.load(Ordering::Relaxed),
+            direct: self.direct.load(Ordering::Relaxed),
+            served: self.served.load(Ordering::Relaxed),
+            dial_failures: self.dial_failures.load(Ordering::Relaxed),
+            bytes_to_upstream: self.bytes_to_upstream.load(Ordering::Relaxed),
+            bytes_to_client: self.bytes_to_client.load(Ordering::Relaxed),
+        }
+    }
+
+    /// Add `bytes` to one direction's total.
+    fn record_bytes(&self, direction: Direction, bytes: u64) {
+        let counter = match direction {
+            Direction::ToUpstream => &self.bytes_to_upstream,
+            Direction::ToClient => &self.bytes_to_client,
+        };
+        counter.fetch_add(bytes, Ordering::Relaxed);
+    }
+}
+
+/// A [`Stats`] read at one moment.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct StatsSnapshot {
+    /// Client TCP connections accepted.
+    pub connections: u64,
+    /// Connections whose domain the rule set claimed.
+    ///
+    /// "Claimed" rather than "routed by": a rule that matches but supplies no
+    /// address usable by this client still counts, because the question is
+    /// whether a rule had an opinion about the name, not whether that opinion
+    /// could be acted on.
+    ///
+    /// The counterpart of `served` in `watt-mitm`: in root mode only names
+    /// rewritten into the hosts file ever reach the proxy, so there `served`
+    /// already means "rules hit". Here it does not, because a listed and an
+    /// unlisted domain are both relayed — this is the honest numerator.
+    pub matched: u64,
+    /// Connections with no rule at all, relayed through the system resolver.
+    pub direct: u64,
+    /// Connections that were relayed: an upstream was dialled and the session
+    /// handed to the relay. Counted when the relay starts rather than when it
+    /// ends, so a connection cut short still counts — it was served.
+    pub served: u64,
+    /// Connections closed with `502` because no candidate reached the host.
+    ///
+    /// The complement of `served` among connections that got as far as a plan.
+    /// A non-zero value here means the rule's addresses and the system resolver
+    /// both failed, which is a network fact rather than a rule-table one.
+    pub dial_failures: u64,
+    /// Bytes carried from the client towards the origin.
+    pub bytes_to_upstream: u64,
+    /// Bytes carried from the origin back to the client.
+    pub bytes_to_client: u64,
+}
+
+/// Which way a byte moved, for [`Stats::record_bytes`].
+#[derive(Debug, Clone, Copy)]
+enum Direction {
+    /// Client bytes on their way to the origin.
+    ToUpstream,
+    /// Origin bytes on their way to the client.
+    ToClient,
+}
+
 /// Serve HTTP CONNECT requests until the process receives SIGTERM/SIGINT.
 ///
 /// The listener itself is blocking and each accepted connection gets one thread;
 /// this is the bootstrap implementation for Android, where the client count is
 /// small and the important property is that no thread owns or decrypts TLS data.
+///
+/// Counters are discarded here because this entry point has no caller to report
+/// them to — the shell starts the proxy through [`serve_until`] and keeps the
+/// [`Stats`] it passes in.
 pub fn serve(listener: TcpListener, router: Router) -> io::Result<()> {
     serve_until(
         listener,
         Arc::new(Mutex::new(router)),
         Arc::new(AtomicBool::new(false)),
+        Arc::new(Stats::default()),
     )
 }
 
@@ -138,10 +246,16 @@ const IDLE_POLL: Duration = Duration::from_millis(50);
 /// refused should not be first in line next time), mutable because
 /// [`Router::replace_rules`] is how a rule switch reaches a live proxy. The lock
 /// is held only across a plan or a report, never across a connection.
+///
+/// Takes the [`Stats`] the same way and for the same reason: the caller keeps a
+/// handle to it so it can read the counters while the proxy runs. The accept
+/// loop bumps `connections` itself and hands a clone to each worker thread; the
+/// rest of the counters are written by whichever thread owns that connection.
 pub fn serve_until(
     listener: TcpListener,
     router: Arc<Mutex<Router>>,
     stop: Arc<AtomicBool>,
+    stats: Arc<Stats>,
 ) -> io::Result<()> {
     listener.set_nonblocking(true)?;
     log::info!("proxy listening on {}", listener.local_addr()?);
@@ -154,11 +268,17 @@ pub fn serve_until(
     while !stop.load(Ordering::SeqCst) {
         match listener.accept() {
             Ok((stream, _)) => {
+                // Counted at accept, before the worker is spawned: a connection
+                // the thread pool refused to take was still a connection the
+                // client made, and dropping it from the count would make the
+                // other numbers disagree with the traffic the client saw.
+                stats.connections.fetch_add(1, Ordering::Relaxed);
                 let router = Arc::clone(&router);
+                let stats = Arc::clone(&stats);
                 thread::Builder::new()
                     .name("watt-connect".to_string())
                     .spawn(move || {
-                        if let Err(err) = handle(stream, &router) {
+                        if let Err(err) = handle(stream, &router, &stats) {
                             log::warn!("proxy connection failed: {err}");
                         }
                     })
@@ -290,7 +410,7 @@ fn read_opening(host: &str, client: &mut TcpStream) -> io::Result<Option<Vec<u8>
     }
 }
 
-fn handle(mut client: TcpStream, router: &Mutex<Router>) -> io::Result<()> {
+fn handle(mut client: TcpStream, router: &Mutex<Router>, stats: &Stats) -> io::Result<()> {
     client.set_read_timeout(Some(CONNECT_TIMEOUT))?;
     client.set_write_timeout(Some(CONNECT_TIMEOUT))?;
 
@@ -359,6 +479,16 @@ fn handle(mut client: TcpStream, router: &Mutex<Router>) -> io::Result<()> {
         let router = router.lock().expect("the router lock is never poisoned");
         router.plan(now, &host, Family::V4)
     };
+    // Counted the moment the rule set has answered, before anything is dialled:
+    // this is the question "did a rule have an opinion about this name", and it
+    // is answerable whether or not the connection is then served. A request that
+    // never got this far — a bad request line, an absolute `https://` URI — is
+    // not counted, because no name was ever put to the rule set.
+    if plan.strategy.is_matched() {
+        stats.matched.fetch_add(1, Ordering::Relaxed);
+    } else {
+        stats.direct.fetch_add(1, Ordering::Relaxed);
+    }
     // Every request says what the rule set decided about it. Without this the
     // three outcomes that look identical from outside — no rule matched, a rule
     // matched with no addresses, a rule matched and was dialled — are one
@@ -518,7 +648,13 @@ fn handle(mut client: TcpStream, router: &Mutex<Router>) -> io::Result<()> {
 
     let upstream = match upstream {
         Some(stream) => stream,
-        None => return response(&mut client, "502 Bad Gateway\r\n\r\n"),
+        None => {
+            // Every candidate in every stage failed to connect. Counted before
+            // the reply is written so the counter is set even if the client has
+            // already given up and the write itself fails.
+            stats.dial_failures.fetch_add(1, Ordering::Relaxed);
+            return response(&mut client, "502 Bad Gateway\r\n\r\n");
+        }
     };
     match served_by {
         // Worth a line: the rule for this domain is not describing a reachable
@@ -546,24 +682,32 @@ fn handle(mut client: TcpStream, router: &Mutex<Router>) -> io::Result<()> {
         opening
     };
 
+    // Counted here, at the point the relay takes over, rather than when the
+    // connection opened: a request that was answered `502`, or a CONNECT client
+    // that vanished before sending its opening bytes, never became a session.
+    stats.served.fetch_add(1, Ordering::Relaxed);
+
     // Timeouts are the relay's business: it needs a deadline on the upstream
     // until the first byte arrives, and none afterwards.
-    let copied = relay(Session {
-        host: &host,
-        client: &mut client,
-        upstream,
-        candidates: &stage_candidates,
-        router,
-        now,
-        opening,
-        // A forwarded request is one exchange: the client has sent its request
-        // and is waiting, so a client that closes has given up and the upstream
-        // should be told rather than left answering into a socket nobody reads.
-        // A CONNECT may be half-closed by a client that has finished uploading
-        // and is still waiting for the reply — the normal shape of an upload —
-        // and ending the session there would cut the response off.
-        client_ends_session: !tunnelled,
-    });
+    let copied = relay(
+        Session {
+            host: &host,
+            client: &mut client,
+            upstream,
+            candidates: &stage_candidates,
+            router,
+            now,
+            opening,
+            // A forwarded request is one exchange: the client has sent its request
+            // and is waiting, so a client that closes has given up and the upstream
+            // should be told rather than left answering into a socket nobody reads.
+            // A CONNECT may be half-closed by a client that has finished uploading
+            // and is still waiting for the reply — the normal shape of an upload —
+            // and ending the session there would cut the response off.
+            client_ends_session: !tunnelled,
+        },
+        stats,
+    );
 
     // The connection is over, so now there is something worth saying about it.
     // A session that opened and moved no bytes downstream is the one failure the
@@ -1156,7 +1300,7 @@ struct Session<'a> {
 ///
 /// A silent attempt is reported as [`Outcome::Silent`], so the address sinks in
 /// the ranking and the next request does not repeat the discovery.
-fn relay(session: Session<'_>) -> io::Result<SessionBytes> {
+fn relay(session: Session<'_>, stats: &Stats) -> io::Result<SessionBytes> {
     let Session {
         host,
         client,
@@ -1187,6 +1331,12 @@ fn relay(session: Session<'_>) -> io::Result<SessionBytes> {
     loop {
         let replied = match upstream.write_all(&opening) {
             Ok(()) => {
+                // The opening bytes really did leave on this attempt, whether or
+                // not a reply ever comes back, so they are counted here rather
+                // than once the session is known to have worked. A failover
+                // replays `opening` to the next candidate and counts it again,
+                // which is exactly what happened on the wire.
+                stats.record_bytes(Direction::ToUpstream, opening_len as u64);
                 upstream.set_read_timeout(Some(FIRST_BYTE_DEADLINE))?;
                 let mut reply = vec![0u8; COPY_BUFFER];
                 match upstream.read(&mut reply) {
@@ -1203,7 +1353,8 @@ fn relay(session: Session<'_>) -> io::Result<SessionBytes> {
             upstream.set_read_timeout(None)?;
             client.set_read_timeout(None)?;
             client.write_all(&reply)?;
-            let mut bytes = copy_bidirectional(client, &mut upstream, client_ends_session)?;
+            stats.record_bytes(Direction::ToClient, reply.len() as u64);
+            let mut bytes = copy_bidirectional(client, &mut upstream, client_ends_session, stats)?;
             bytes.upstream += opening_len as u64;
             bytes.downstream += reply.len() as u64;
             return Ok(bytes);
@@ -1273,6 +1424,7 @@ fn copy_bidirectional(
     client: &mut TcpStream,
     upstream: &mut TcpStream,
     client_ends_session: bool,
+    stats: &Stats,
 ) -> io::Result<SessionBytes> {
     let mut client_reader = client.try_clone()?;
     let mut upstream_writer = upstream.try_clone()?;
@@ -1288,6 +1440,11 @@ fn copy_bidirectional(
             Ok(0) => break,
             Ok(n) => {
                 downstream += n as u64;
+                // Counted beside the local total so the two never disagree:
+                // `SessionBytes` is what the log line reports and `Stats` is what
+                // the shell reads, and a session whose byte count differed between
+                // the two would be a bug nobody could see.
+                stats.record_bytes(Direction::ToClient, n as u64);
                 if let Err(err) = client.write_all(&buffer[..n]) {
                     failure = Some(err);
                     break;
@@ -1309,6 +1466,7 @@ fn copy_bidirectional(
     // mid-upload is routine and must not turn into an error for the caller. Its
     // byte count is still worth keeping.
     let upstream_bytes = forward.join().ok().and_then(Result::ok).unwrap_or(0);
+    stats.record_bytes(Direction::ToUpstream, upstream_bytes);
 
     match failure {
         Some(err) => Err(err),
@@ -1440,7 +1598,7 @@ mod tests {
         let stop = Arc::new(AtomicBool::new(false));
         let serving = {
             let stop = Arc::clone(&stop);
-            thread::spawn(move || serve_until(listener, router, stop))
+            thread::spawn(move || serve_until(listener, router, stop, Arc::new(Stats::default())))
         };
         (address, stop, serving)
     }

@@ -80,6 +80,12 @@ import kotlinx.coroutines.withContext
 fun HomeScreen() {
     val status by KernelState.status.collectAsState()
     val stats by KernelState.stats.collectAsState()
+    // The two proxy modes keep their counters in flows of their own — they are
+    // different subsystems from the tunnel, and a mode that is not running has
+    // to read as "nothing" rather than as zeros. Only the session card below
+    // reads them, and only in the mode they belong to.
+    val mitmStats by KernelState.mitmStats.collectAsState()
+    val proxyStats by KernelState.proxyStats.collectAsState()
     val context = LocalContext.current
     val prefs = Prefs.of(context)
     val developerView = prefs.developerView
@@ -339,7 +345,23 @@ fun HomeScreen() {
 
         Spacer(Modifier.height(12.dp))
 
-        SessionCard(stats, developerView)
+        // The "rules hit" number has to come from whichever subsystem is actually
+        // running. Only VPN mode has the tunnel that `stats.dnsAnsweredLocally`
+        // describes; root mode and proxy mode have no tunnel at all, so that field
+        // is structurally zero there and reading it would print "0 rules hit"
+        // beside a byte total that is moving.
+        //
+        // Root mode is served by the TLS proxy, and only names the hosts rewrite
+        // covers ever reach it — so there `served` really is the rule-hit count.
+        // Proxy mode is not: it relays a domain no rule mentions through the
+        // system resolver rather than refusing it, so `served` counts everything
+        // the client sent and `matched` is the honest numerator.
+        val ruleHits = when (status.mode) {
+            KernelState.Mode.ROOT -> mitmStats?.served ?: 0L
+            KernelState.Mode.PROXY -> proxyStats?.matched ?: 0L
+            KernelState.Mode.VPN -> stats.dnsAnsweredLocally
+        }
+        SessionCard(stats, ruleHits, developerView)
 
         // Which rules are in force and how old they are. The home screen used to
         // say nothing about the rule set at all, so "am I running last week's
@@ -397,11 +419,15 @@ fun HomeScreen() {
             DetourKeyValueRow(stringResource(R.string.home_rule_cache_label), cacheValue)
         }
 
-        // Only while the tunnel is up: with nothing running these counters are a
-        // row of zeros that reads as "the tunnel is broken". The question they
-        // answer — is traffic going through the rules or straight out — only
-        // exists while there is traffic.
-        if (status.isRunning) {
+        // Only while the tunnel is up, and only in VPN mode: these counters are a
+        // breakdown of the *tunnel's* flows — matched against direct, live flows,
+        // traffic that arrived without a name, what the client's own handshake did
+        // about it. Root mode and proxy mode have no tunnel, so every one of those
+        // fields is structurally zero there and the card would announce "no traffic
+        // has gone through the tunnel" while the byte total above it is climbing.
+        // Each of those modes answers "did the rules do anything" with the single
+        // number in the session card instead.
+        if (status.isRunning && status.mode == KernelState.Mode.VPN) {
             Spacer(Modifier.height(12.dp))
             val matched = stats.flowsMatchedRules
             val direct = stats.flowsDirect
@@ -842,7 +868,11 @@ private fun RateCard(
 }
 
 @Composable
-private fun SessionCard(stats: dev.detour.core.Kernel.Stats, developerView: Boolean) {
+private fun SessionCard(
+    stats: dev.detour.core.Kernel.Stats,
+    ruleHits: Long,
+    developerView: Boolean,
+) {
     DetourCard(
         modifier = Modifier.fillMaxWidth(),
         style = DetourCardStyle.Glass,
@@ -865,7 +895,7 @@ private fun SessionCard(stats: dev.detour.core.Kernel.Stats, developerView: Bool
 
             Spacer(Modifier.height(8.dp))
             Text(
-                text = stringResource(R.string.home_domains_saved, stats.dnsAnsweredLocally),
+                text = stringResource(R.string.home_domains_saved, ruleHits),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

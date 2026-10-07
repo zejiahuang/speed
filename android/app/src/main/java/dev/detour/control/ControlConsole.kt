@@ -223,6 +223,11 @@ object ControlConsole {
             // a field that belongs to another subsystem, and this block is where a
             // root-mode run is observable at all.
             .put("mitm", mitmJson(KernelState.mitmStats.value))
+            // The no-root proxy's counters, absent unless that mode is up. A
+            // different block from `mitm` because it is a different subsystem
+            // with different counters — `matched`/`direct` have no counterpart
+            // there, and `handshakes`/`refused` have none here.
+            .put("proxy", proxyJson(KernelState.proxyStats.value))
     }
 
     /**
@@ -240,6 +245,25 @@ object ControlConsole {
             .put("handshakes", stats.handshakes)
             .put("served", stats.served)
             .put("refused", stats.refused)
+            .put("dial_failures", stats.dialFailures)
+            .put("bytes_to_upstream", stats.bytesToUpstream)
+            .put("bytes_to_client", stats.bytesToClient)
+    }
+
+    /**
+     * The no-root proxy's counters as JSON, or an explicit null.
+     *
+     * Null for the same reason [mitmJson] is: "the proxy is not running" and
+     * "the proxy is running and has served nothing" must not look alike.
+     */
+    private fun proxyJson(stats: Kernel.ProxyStats?): Any = if (stats == null) {
+        JSONObject.NULL
+    } else {
+        JSONObject()
+            .put("connections", stats.connections)
+            .put("matched", stats.matched)
+            .put("direct", stats.direct)
+            .put("served", stats.served)
             .put("dial_failures", stats.dialFailures)
             .put("bytes_to_upstream", stats.bytesToUpstream)
             .put("bytes_to_client", stats.bytesToClient)

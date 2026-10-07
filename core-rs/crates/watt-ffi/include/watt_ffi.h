@@ -161,6 +161,28 @@ int32_t watt_proxy_replace_rules(WattProxy *proxy,
                                  const uint8_t *rules,
                                  size_t rules_len);
 
+/* Counters, filled in by watt_proxy_stats. Same plain-integer shape as
+ * WattStats, and for the same reason.
+ *
+ * `matched` is how many connections had their domain claimed by a rule. It is
+ * NOT `served`: this proxy relays unlisted domains too, through the system
+ * resolver, so `served` counts everything the client chose to send here.
+ * `direct` is the unlisted half of the same decision. A request answered before
+ * any name reached the rule set (a malformed request line) is counted in
+ * neither, which is why `matched + direct` is not `connections`. */
+typedef struct {
+    uint64_t connections;
+    uint64_t matched;
+    uint64_t direct;
+    uint64_t served;
+    uint64_t dial_failures;
+    uint64_t bytes_to_upstream;
+    uint64_t bytes_to_client;
+} WattProxyStats;
+
+/* Copy the counters out. Returns 0 on success, -1 on failure. */
+int32_t watt_proxy_stats(WattProxy *proxy, WattProxyStats *out);
+
 /* Stop the proxy and release the handle. NULL is a no-op. Blocks until the
  * accept loop has noticed, which is at most one idle poll. */
 void watt_proxy_stop(WattProxy *proxy);
