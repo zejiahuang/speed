@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/watt-rules", "crates/watt-net", "crates/watt-stack", "crates/watt-daemon", "crates/watt-ffi", "crates/watt-proxy"]
+members = ["crates/watt-rules", "crates/watt-net", "crates/watt-stack", "crates/watt-daemon", "crates/watt-ffi", "crates/watt-proxy", "crates/watt-mitm"]
 
 [workspace.package]
 version = "0.1.0"
@@ -15,3 +15,4 @@ watt-net = { path = "crates/watt-net" }
 watt-stack = { path = "crates/watt-stack" }
 watt-daemon = { path = "crates/watt-daemon" }
 watt-proxy = { path = "crates/watt-proxy" }
+watt-mitm = { path = "crates/watt-mitm" }

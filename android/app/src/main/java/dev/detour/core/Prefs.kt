@@ -353,6 +353,19 @@ class Prefs private constructor(private val store: SharedPreferences) {
         private set
 
     /**
+     * Whether the root-mode warning has been accepted.
+     *
+     * Root mode is the only mode whose cost is not visible after the fact: the
+     * client stops verifying the upstream certificate, because the proxy presents
+     * its own. The flag records that this was shown once, so the warning is a
+     * gate rather than a dialog that reappears until it is dismissed without being
+     * read. It is not a permission — root itself is the system's to grant — and
+     * clearing the app's data re-asks, which is the correct behaviour for a notice.
+     */
+    var rootConsent by mutableStateOf(store.getBoolean(KEY_ROOT_CONSENT, false))
+        private set
+
+    /**
      * Which palette to use. `dynamic` follows the wallpaper on Android 12+;
      * anything else is a seed the theme builds a full scheme from, for devices
      * where Material You is unavailable or unwanted.
@@ -1280,6 +1293,8 @@ class Prefs private constructor(private val store: SharedPreferences) {
 
     fun updateMode(value: String) { mode = value; edit { putString(KEY_MODE, value) } }
 
+    fun updateRootConsent(value: Boolean) { rootConsent = value; edit { putBoolean(KEY_ROOT_CONSENT, value) } }
+
     fun updateThemeColor(value: String) { themeColor = value; edit { putString(KEY_THEME_COLOR, value) } }
     fun updateCornerStyle(value: String) { cornerStyle = value; edit { putString(KEY_CORNER_STYLE, value) } }
     fun updateGlassEnabled(value: Boolean) { glassEnabled = value; edit { putBoolean(KEY_GLASS_ENABLED, value) } }
@@ -1839,6 +1854,7 @@ class Prefs private constructor(private val store: SharedPreferences) {
         private const val KEY_HOME_RATE = "home_rate"
         private const val KEY_CONFIRM_DISCONNECT = "confirm_disconnect"
     private const val KEY_MODE = "mode"
+    private const val KEY_ROOT_CONSENT = "root_consent"
     private const val KEY_AUTO_CONNECT = "auto_connect"
 
     /**

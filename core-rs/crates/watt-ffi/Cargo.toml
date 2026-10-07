@@ -28,6 +28,9 @@ serde_json = "1"
 watt-proxy = { workspace = true }
 watt-rules = { workspace = true }
 watt-stack = { workspace = true }
+# The root-mode reverse proxy. Only the MITM entry points touch it; the tunnel
+# and the plain proxy do not, which is why it is a separate crate.
+watt-mitm = { workspace = true }
 jni = { version = "0.21", optional = true }
 # The level filter handed to `android_logger`. Named here rather than reached
 # through a re-export, because a crate has to depend on what it names.

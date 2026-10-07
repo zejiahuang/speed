@@ -41,12 +41,23 @@
          surprise, and the card is where the user of this mode is looking. -->
     <string name="home_proxy_limits">超时、上游出口、上游解析器等内核参数只对 VPN 模式生效</string>
     <string name="home_mode_pick">选择模式</string>
+    <string name="home_mode_root">Root 模式</string>
     <string name="home_mode_proxy_desc">免 Root，不需要系统授权。只对能设置 HTTP 代理的软件生效。</string>
     <string name="home_mode_vpn_desc">接管公网流量，需要系统 VPN 授权。能力完整。</string>
+    <string name="home_mode_root_desc">免 VPN 授权，改写系统 hosts 并用 iptables 把流量重定向到本机代理。需要 Root，且不再校验上游证书。</string>
     <string name="home_error_hint">连接失败。检查规则是否已下载，或换一个模式试试。</string>
     <string name="home_disconnect_confirm_title">断开连接？</string>
     <string name="home_disconnect_confirm_text">正在传输的数据会立刻中断。</string>
     <string name="home_disconnect_confirm_ok">断开</string>
+
+    <!-- Root mode. The picker omits the Root row entirely when no usable su was
+         found, so a mode the device cannot run is never offered; these strings
+         cover the consent it asks for first and the two ways its install fails. -->
+    <string name="root_consent_title">进入 Root 模式？</string>
+    <string name="root_consent_text">Root 模式会在本机终结 TLS，以中间人身份连接真实服务器：客户端看到的证书由本 App 签发，上游证书不再被校验。启用需要 Root 权限，会改写系统 hosts 文件并向系统信任库安装一张自签 CA；断开连接时会全部还原。</string>
+    <string name="root_consent_ok">我已了解，继续</string>
+    <string name="root_unavailable">没有可用的 Root 权限</string>
+    <string name="root_ca_failed">无法读取本机 CA 证书</string>
 
     <!-- Rules -->
     <string name="rules_title">规则</string>
@@ -135,6 +146,12 @@
     <string name="settings_back">返回</string>
     <string name="settings_proxy_port">代理监听端口</string>
     <string name="settings_proxy_port_hint">App 需要把 HTTP 代理指向 127.0.0.1:%1$d</string>
+    <!-- The one thing a user must be told before choosing Root mode. Stated on
+         the settings screen, not only in the README: it is a privacy property of
+         the mode — the connection is no longer end-to-end verified — and it is
+         the reason this mode is offered last. -->
+    <string name="settings_root_risk_title">关于 Root 模式</string>
+    <string name="settings_root_risk_body">Root 模式会在本机终结 TLS：App 自己签发证书、以中间人身份连接真实服务器。因此客户端看到的证书由本 App 签发，上游（真实服务器）的证书不再被校验。这需要 Root 权限，会改写系统 hosts 文件并向系统信任库安装一张自签 CA；断开连接时会全部还原。已在运行的应用可能要到重启一次之后才会读取到新装的 CA。注意：改写 hosts 只对走系统解析器的应用生效；启用 Private DNS（DoT）或浏览器自带 Secure DNS/DoH 的应用会自行解析、绕过 hosts，因此该模式并不覆盖全部流量。</string>
     <string name="settings_rules_url">规则源地址</string>
     <string name="settings_refresh_interval">刷新间隔</string>
     <string name="settings_offline">离线模式</string>

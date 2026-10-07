@@ -21,6 +21,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
+import java.io.File
 
 /**
  * The tunnel, and the kernel that runs inside it.
@@ -44,6 +45,16 @@ class DetourVpnService : VpnService() {
     private var loop: Job? = null
     private var engine: Kernel.Engine? = null
     private var proxy: Kernel.Proxy? = null
+    private var mitm: Kernel.Mitm? = null
+
+    /**
+     * The privileged edits root mode made, held so they can be undone.
+     *
+     * Not a `Kernel` handle: it owns changes to the *system* — the hosts file,
+     * the trust store, an iptables rule — and the only thing that matters about
+     * it is that [RootHelper.Session.restore] runs before this service stops.
+     */
+    private var rootSession: RootHelper.Session? = null
     private var tunnel: ParcelFileDescriptor? = null
 
     override fun onCreate() {
@@ -79,7 +90,7 @@ class DetourVpnService : VpnService() {
     }
 
     private fun start(mode: KernelState.Mode) {
-        if (engine != null || proxy != null) {
+        if (engine != null || proxy != null || mitm != null) {
             KernelState.log(KernelState.LogEntry.Level.WARN, TAG, "已在运行，忽略重复请求")
             return
         }
@@ -99,6 +110,7 @@ class DetourVpnService : VpnService() {
                 when (mode) {
                     KernelState.Mode.PROXY -> startProxy(document)
                     KernelState.Mode.VPN -> startVpn(document)
+                    KernelState.Mode.ROOT -> startRoot(document)
                 }
             } catch (err: Throwable) {
                 fail(err.message ?: err.javaClass.simpleName)
@@ -215,6 +227,72 @@ class DetourVpnService : VpnService() {
         updateNotification(getString(R.string.home_state_on))
 
         runLoop()
+    }
+
+    /**
+     * The mode that needs root instead of consent.
+     *
+     * Nothing here is a tunnel. The kernel starts a TLS-terminating reverse proxy
+     * on a free loopback port, and the *system* is pointed at it three ways by
+     * [RootHelper]: intercepted names are written into the hosts file at
+     * [RootHelper.REDIRECT_ADDRESS], an iptables rule rewrites port 443 to that
+     * address to the proxy's port, and the proxy's CA is installed into the
+     * device trust store so clients accept what it mints.
+     *
+     * **The order matters and is why this is not folded into one call.** The
+     * proxy has to be listening before the redirect points at it — a redirect to
+     * a closed port turns every intercepted connection into a reset — and the CA
+     * is only knowable once the proxy has loaded it from disk, which happens
+     * inside [Kernel.startMitm]. So the proxy starts first, its certificate is
+     * read out, and only then is the system changed.
+     *
+     * Every failure from here on calls [fail], which restores the system and
+     * closes the proxy, so a half-installed state is not reachable: either the
+     * three edits are all in place and the mode is up, or none of them are.
+     */
+    private suspend fun startRoot(document: ByteArray) {
+        val session = RootHelper.open(this)
+            ?: run { fail(getString(R.string.root_unavailable)); return }
+        rootSession = session
+
+        val caDir = File(filesDir, MITM_CA_DIR).apply { mkdirs() }
+        val started = try {
+            // Port 0: the kernel picks a free one. The proxy cannot bind 443 —
+            // measured `ip_unprivileged_port_start = 1024` — so a fixed port would
+            // only ever be a second way to collide.
+            Kernel.startMitm(0, document, caDir.absolutePath)
+        } catch (err: Throwable) {
+            fail(err.message ?: err.javaClass.simpleName)
+            return
+        }
+        mitm = started
+
+        val caPem = started.caPem()
+        if (caPem == null) {
+            fail(getString(R.string.root_ca_failed))
+            return
+        }
+
+        val names = RootHelper.domainsOf(document)
+        val error = session.apply(caPem, names, started.port)
+        if (error != null) {
+            fail(error)
+            return
+        }
+
+        KernelState.setStatus {
+            it.copy(
+                phase = KernelState.Phase.ON,
+                sinceMillis = System.currentTimeMillis(),
+                proxyPort = started.port,
+            )
+        }
+        KernelState.log(
+            KernelState.LogEntry.Level.INFO, TAG,
+            "root 模式已启动：${names.size} 个域名 → ${RootHelper.REDIRECT_ADDRESS}，" +
+                "代理监听 127.0.0.1:${started.port}",
+        )
+        updateNotification(getString(R.string.home_state_on))
     }
 
     /**
@@ -369,14 +447,25 @@ class DetourVpnService : VpnService() {
     fun reloadRules() {
         val tunnel = engine
         val relay = proxy
-        if (tunnel == null && relay == null) return
+        val root = mitm
+        if (tunnel == null && relay == null && root == null) return
         scope.launch {
             try {
                 val document = RulesRepository.load(this@DetourVpnService, forceRefresh = false)
                 val applied = when {
                     tunnel != null -> tunnel.replaceRules(document)
                     relay != null -> relay.replaceRules(document)
+                    root != null -> root.replaceRules(document)
                     else -> false
+                }
+                // Root mode is two edits, and the proxy's rules are only one of
+                // them. The names the system is told to send here live in the
+                // hosts file, so a rule switch that is not written there would
+                // leave the proxy filtering a set it no longer agrees with — a
+                // domain switched on would never arrive, and one switched off
+                // would keep arriving and be refused.
+                if (root != null) {
+                    rootSession?.setNames(RootHelper.domainsOf(document))
                 }
                 if (applied) {
                     KernelState.log(
@@ -458,7 +547,8 @@ class DetourVpnService : VpnService() {
         // anything running" has to be read *before* `stopLoop()` clears `loop`:
         // logging unconditionally reported two disconnects for one, and reported
         // a disconnect after a start that never succeeded.
-        val wasRunning = loop != null || engine != null || proxy != null || tunnel != null
+        val wasRunning = loop != null || engine != null || proxy != null ||
+            mitm != null || rootSession != null || tunnel != null
         runBlocking { stopLoop() }
         engine?.close()
         engine = null
@@ -468,6 +558,14 @@ class DetourVpnService : VpnService() {
         // running, and the next reader of this field has to be able to trust
         // that.
         KernelState.ipStats = null
+        // The system is put back **before** the proxy is closed, and the order is
+        // not cosmetic: the redirect still points at the proxy's port until it is
+        // removed, so closing the proxy first leaves a window in which intercepted
+        // connections are redirected to a closed port and reset.
+        rootSession?.restore()
+        rootSession = null
+        mitm?.close()
+        mitm = null
         proxy?.close()
         proxy = null
         // Closing the descriptor is what actually tears the tunnel down; the
@@ -498,6 +596,13 @@ class DetourVpnService : VpnService() {
         engine?.close()
         engine = null
         KernelState.ipStats = null
+        // The same restore the stop path runs, and for the same reason: a failure
+        // after `apply` returned is still a failure with the system already
+        // changed, and the only acceptable end state is "as it was found".
+        rootSession?.restore()
+        rootSession = null
+        mitm?.close()
+        mitm = null
         proxy?.close()
         proxy = null
         runCatching { tunnel?.close() }
@@ -581,6 +686,16 @@ class DetourVpnService : VpnService() {
         private const val LOOP_STOP_TIMEOUT_MS = 2_000L
 
         private const val INTERFACE = "detour0"
+
+        /**
+         * Where the root-mode CA certificate and key live.
+         *
+         * App-private, and stable across runs: the kernel loads the authority from
+         * here rather than minting a new one, which is what lets the device trust
+         * one anchor and keep trusting it. A directory that moved would be a new
+         * authority the device has never accepted.
+         */
+        private const val MITM_CA_DIR = "mitm-ca"
 
         // 198.18.0.0/15 is reserved for benchmarking by RFC 2544 and is not
         // routable, which makes it a safe private identity for the tunnel.

@@ -53,6 +53,7 @@ import dev.detour.core.BuildFlags
 import dev.detour.core.KernelState
 import dev.detour.core.Prefs
 import dev.detour.core.Rate
+import dev.detour.core.RootHelper
 import dev.detour.core.RulesRepository
 import dev.detour.ui.components.DetourAlertDialog
 import dev.detour.ui.components.DetourAssistChip
@@ -63,7 +64,9 @@ import dev.detour.ui.components.DetourKeyValueRow
 import dev.detour.ui.components.DetourSectionCard
 import dev.detour.ui.components.LocalBottomBarClearance
 import dev.detour.ui.icons.DetourIcons
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 /**
  * The hero screen: one control, and what it is doing.
@@ -80,6 +83,15 @@ fun HomeScreen() {
     val context = LocalContext.current
     val prefs = Prefs.of(context)
     val developerView = prefs.developerView
+
+    // Whether root mode is offered at all. Probed off the main thread — it spawns
+    // a process and may raise a consent prompt the first time — and never assumed:
+    // a mode that is on screen but cannot start is the "control that does nothing"
+    // this app refuses to ship, so without root the entry is not drawn.
+    var rootAvailable by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        rootAvailable = withContext(Dispatchers.IO) { RootHelper.isAvailable() }
+    }
 
     // How much room the floating glass bar takes at the bottom of this screen.
     // Read once, in composition, for the trailing `Spacer` inside the scroll
@@ -109,6 +121,13 @@ fun HomeScreen() {
     // When the user has asked for a confirmation, the button opens this instead of
     // tearing the tunnel down; when they have not, it disconnects immediately.
     var showDisconnectConfirm by remember { mutableStateOf(false) }
+
+    // Root mode is the one choice with a cost that is not visible anywhere else:
+    // the client stops verifying the upstream certificate, because the proxy
+    // presents its own. It is asked once, before the first entry, and the answer
+    // is stored — a warning that reappeared every time would be dismissed without
+    // being read, which is the same as not showing it.
+    var showRootConsent by remember { mutableStateOf(false) }
 
     // The column is scrollable because the content (a 168dp hero control plus
     // the rate and session cards) is taller than the viewport on a short screen;
@@ -198,6 +217,7 @@ fun HomeScreen() {
                         when (status.mode) {
                             KernelState.Mode.PROXY -> R.string.home_mode_proxy
                             KernelState.Mode.VPN -> R.string.home_mode_vpn
+                            KernelState.Mode.ROOT -> R.string.home_mode_root
                         },
                     ),
                     trailingIcon = {
@@ -213,14 +233,22 @@ fun HomeScreen() {
         if (showModePicker) {
             ModePicker(
                 current = status.mode,
+                rootAvailable = rootAvailable,
                 onDismiss = { showModePicker = false },
                 onPick = { picked ->
-                    // Stored as well as shown: the holder is a process singleton,
-                    // so a choice that only lived there would be forgotten the
-                    // next time the app was killed.
-                    prefs.updateMode(picked.name.lowercase())
-                    KernelState.setStatus { it.copy(mode = picked) }
                     showModePicker = false
+                    // Root mode asks first. The other two are reversible by
+                    // tapping again; this one changes what the device trusts, so
+                    // the cost is stated before it is paid rather than after.
+                    if (picked == KernelState.Mode.ROOT && !prefs.rootConsent) {
+                        showRootConsent = true
+                    } else {
+                        // Stored as well as shown: the holder is a process
+                        // singleton, so a choice that only lived there would be
+                        // forgotten the next time the app was killed.
+                        prefs.updateMode(picked.name.lowercase())
+                        KernelState.setStatus { it.copy(mode = picked) }
+                    }
                 },
             )
         }
@@ -467,6 +495,18 @@ fun HomeScreen() {
             },
         )
     }
+
+    if (showRootConsent) {
+        RootConsent(
+            onDismiss = { showRootConsent = false },
+            onConfirm = {
+                prefs.updateRootConsent(true)
+                prefs.updateMode(KernelState.Mode.ROOT.name.lowercase())
+                KernelState.setStatus { it.copy(mode = KernelState.Mode.ROOT) }
+                showRootConsent = false
+            },
+        )
+    }
 }
 
 /**
@@ -485,6 +525,35 @@ private fun DisconnectConfirm(onDismiss: () -> Unit, onConfirm: () -> Unit) {
         confirmButton = {
             TextButton(onClick = onConfirm) {
                 Text(stringResource(R.string.home_disconnect_confirm_ok))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(android.R.string.cancel))
+            }
+        },
+    )
+}
+
+/**
+ * The one-time warning before root mode is entered.
+ *
+ * Its subject is the trade the mode makes, not the permission it needs: root is
+ * the means, and the thing the user cannot find out afterwards by looking at the
+ * screen is that the client no longer verifies the upstream certificate — the
+ * proxy presents its own, and that is the whole mechanism. A confirmation that
+ * only said "this needs root" would be asking about the tool rather than about
+ * the consequence.
+ */
+@Composable
+private fun RootConsent(onDismiss: () -> Unit, onConfirm: () -> Unit) {
+    DetourAlertDialog(
+        onDismissRequest = onDismiss,
+        title = stringResource(R.string.root_consent_title),
+        text = { Text(stringResource(R.string.root_consent_text)) },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(stringResource(R.string.root_consent_ok))
             }
         },
         dismissButton = {
@@ -662,6 +731,7 @@ private fun ProxyAddressCard(port: Int) {
 @Composable
 private fun ModePicker(
     current: KernelState.Mode,
+    rootAvailable: Boolean,
     onDismiss: () -> Unit,
     onPick: (KernelState.Mode) -> Unit,
 ) {
@@ -683,6 +753,18 @@ private fun ModePicker(
                     selected = current == KernelState.Mode.VPN,
                     onClick = { onPick(KernelState.Mode.VPN) },
                 )
+                // Only drawn when a usable `su` is present. A row that is on
+                // screen but cannot start is the defect this app keeps removing,
+                // and there is no partial version of root mode to offer instead.
+                if (rootAvailable) {
+                    Spacer(Modifier.height(8.dp))
+                    ModeRow(
+                        title = stringResource(R.string.home_mode_root),
+                        detail = stringResource(R.string.home_mode_root_desc),
+                        selected = current == KernelState.Mode.ROOT,
+                        onClick = { onPick(KernelState.Mode.ROOT) },
+                    )
+                }
             }
         },
         confirmButton = {

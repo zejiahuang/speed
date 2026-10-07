@@ -33,6 +33,15 @@ object KernelState {
          * system consent dialog.
          */
         VPN,
+
+        /**
+         * A TLS-terminating reverse proxy reached through the system hosts file
+         * and an iptables redirect. All traffic, with no VPN consent and no TUN —
+         * at the cost of root, and at the cost of the client no longer verifying
+         * the upstream certificate (the proxy presents its own). See
+         * [RootHelper] for the three privileged edits this needs.
+         */
+        ROOT,
     }
 
     enum class Phase { OFF, STARTING, ON, ERROR }

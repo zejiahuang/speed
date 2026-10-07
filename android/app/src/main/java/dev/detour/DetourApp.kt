@@ -10,6 +10,7 @@ import dev.detour.core.Kernel
 import dev.detour.core.KernelState
 import dev.detour.core.LogArchive
 import dev.detour.core.Prefs
+import dev.detour.core.RootHelper
 import dev.detour.core.RulesRepository
 import dev.detour.core.UpdateState
 import kotlinx.coroutines.CoroutineScope
@@ -68,6 +69,21 @@ class DetourApp : Application() {
                 .getOrDefault(KernelState.Mode.PROXY)
         }
         KernelState.restoreMode(restored)
+
+        // A root-mode run that was killed never ran its restore, so the device can
+        // still be pointed at a proxy that is gone — a hosts entry at a dead
+        // loopback address is a device-wide outage, so it is cleaned up before
+        // anything else can act on it.
+        //
+        // **Guarded on `!autoConnect` deliberately.** When auto-connect is on, the
+        // service is about to start, and its own start path runs the identical
+        // undo before it installs anything — so cleaning up here as well would be
+        // two undos racing, and the loser would be whichever finished last, which
+        // could be the undo landing *after* the fresh install. One of the two, not
+        // both.
+        if (restored == KernelState.Mode.ROOT && !Prefs.of(this).autoConnect) {
+            scope.launch { RootHelper.recoverStale(this@DetourApp) }
+        }
 
         // Before the first log line, so the kernel-load result below is archived
         // too. The sink itself checks the "按天归档" setting on every write, so

@@ -337,6 +337,12 @@ object Kernel {
     private external fun nativeProxyReplaceRules(handle: Long, rules: ByteArray): Int
     private external fun nativeProxyStop(handle: Long)
 
+    private external fun nativeMitmStart(port: Int, rules: ByteArray, caDir: String): Long
+    private external fun nativeMitmPort(handle: Long): Int
+    private external fun nativeMitmReplaceRules(handle: Long, rules: ByteArray): Int
+    private external fun nativeMitmCaPem(handle: Long): String?
+    private external fun nativeMitmStop(handle: Long)
+
     private external fun nativeStep(handle: Long): Int
     private external fun nativeReplaceRules(handle: Long, rules: ByteArray): Int
     private external fun nativeStats(handle: Long, out: LongArray): Int
@@ -559,6 +565,93 @@ object Kernel {
             throw KernelException(nativeLastError() ?: "the proxy did not start")
         }
         return Proxy(handle, nativeProxyPort(handle))
+    }
+
+    /**
+     * A running root-mode TLS-terminating reverse proxy.
+     *
+     * This is the mode that needs **root** — not for the proxy itself, which
+     * runs unprivileged inside the app process, but for the two file writes
+     * around it: the hosts entries that point intercepted names at loopback, and
+     * the CA certificate installed in the system trust store. The proxy only
+     * sees traffic because of the first, and the client only accepts what it
+     * serves because of the second.
+     *
+     * The one thing this mode owns that the others do not is a certificate
+     * authority. [caPem] hands it out because the caller has to install it;
+     * without that install the client rejects every certificate the proxy mints
+     * and nothing on the network explains why.
+     */
+    class Mitm internal constructor(handle: Long, val port: Int) : Closeable {
+
+        // Same guard as `Engine.close`, and for the same reason: a read-then-
+        // zero `var` lets two threads both stop the proxy. See that method's
+        // comment — the failure it prevents is a native double free, and the
+        // crash it produces is never at the free.
+        private val handle = java.util.concurrent.atomic.AtomicLong(handle)
+
+        val isOpen: Boolean get() = handle.get() != 0L
+
+        /**
+         * Swap in a new rule document without cutting in-flight connections.
+         *
+         * Only routing decisions not yet made change, which is the same promise
+         * [Engine.replaceRules] makes for the tunnel. Returns false when the
+         * handle is closed or the native side refused the document.
+         */
+        fun replaceRules(document: ByteArray): Boolean {
+            if (document.isEmpty()) return false
+            val h = handle.get()
+            if (h == 0L) return false
+            if (!ensureLoaded()) return false
+            return nativeMitmReplaceRules(h, document) == 0
+        }
+
+        /**
+         * The CA certificate in PEM, for the root helper to install.
+         *
+         * Null when the handle is closed. The certificate is stable across
+         * restarts — the CA is loaded from disk rather than reminted, so the
+         * anchor the device trusts does not change under it — which is what
+         * makes installing it once enough.
+         */
+        fun caPem(): String? {
+            val h = handle.get()
+            if (h == 0L) return null
+            if (!ensureLoaded()) return null
+            return runCatching { nativeMitmCaPem(h) }.getOrNull()
+        }
+
+        override fun close() {
+            val h = handle.getAndSet(0L)
+            if (h != 0L) nativeMitmStop(h)
+        }
+    }
+
+    /**
+     * Start the root-mode reverse proxy on [port].
+     *
+     * Pass 0 to let the kernel choose a free port; the one it picked comes back
+     * on the returned [Mitm]. The caller is expected to have already rewritten
+     * the intercepted names to loopback in the system hosts file and installed
+     * an iptables redirect from that address's port 443 to [Mitm.port] — the
+     * proxy is reachable only through those.
+     *
+     * @param caDir the app-private directory the CA certificate and key live in;
+     *              the CA is loaded if present and minted if not
+     * @throws KernelException when the port is taken, the rule document is bad,
+     *                         or the CA directory cannot be read
+     */
+    @Throws(KernelException::class)
+    fun startMitm(port: Int, rules: ByteArray, caDir: String): Mitm {
+        if (!ensureLoaded()) throw KernelException(loadError ?: "native library unavailable")
+        if (rules.isEmpty()) throw KernelException("the rule document is empty")
+        if (caDir.isEmpty()) throw KernelException("no CA directory was given")
+        val handle = nativeMitmStart(port, rules, caDir)
+        if (handle == 0L) {
+            throw KernelException(nativeLastError() ?: "the mitm proxy did not start")
+        }
+        return Mitm(handle, nativeMitmPort(handle))
     }
 
     /**

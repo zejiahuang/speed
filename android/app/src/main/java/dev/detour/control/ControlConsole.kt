@@ -247,10 +247,11 @@ object ControlConsole {
             val mode = when (value?.lowercase()) {
                 "vpn" -> KernelState.Mode.VPN
                 "proxy", "connect" -> KernelState.Mode.PROXY
+                "root" -> KernelState.Mode.ROOT
                 else -> null
             }
             if (mode == null) {
-                JSONObject().put("error", "mode expects vpn or proxy")
+                JSONObject().put("error", "mode expects vpn, proxy or root")
             } else {
                 // Stored as well as shown. Setting only the holder looked right
                 // and meant a mode chosen here was forgotten on the next cold

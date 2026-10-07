@@ -18,6 +18,7 @@
 //! Enabled by the `jni-bridge` feature. A plain host build leaves it out and the
 //! C ABI stays testable without a JVM.
 
+use std::ffi::CString;
 use std::os::unix::io::RawFd;
 
 use jni::objects::{GlobalRef, JByteArray, JClass, JLongArray, JObject, JString};
@@ -577,6 +578,169 @@ pub extern "system" fn Java_dev_detour_core_Kernel_nativeProxyReplaceRules(
             document.len(),
         )
     }
+}
+
+/// Start the root-mode reverse proxy. Returns the handle, or 0 on failure.
+///
+/// `ca_dir` is the app-private directory the CA certificate and key live in. It
+/// is a JVM string rather than a byte array because it is a path, and the C ABI
+/// wants it NUL-terminated — the JVM's copy is not, so a `CString` is built
+/// around it before the call.
+///
+/// The port is returned by [`Java_dev_detour_core_Kernel_nativeMitmPort`] rather
+/// than by this call, for the same reason the plain proxy does it: passing 0
+/// asks the kernel to choose, and the caller has no other way to learn what it
+/// chose.
+#[no_mangle]
+pub extern "system" fn Java_dev_detour_core_Kernel_nativeMitmStart(
+    mut env: JNIEnv,
+    _class: JClass,
+    port: jint,
+    rules: JByteArray,
+    ca_dir: JString,
+) -> jlong {
+    // The MITM path does not go through `nativeNew`, so the logger has to be
+    // installed here too or this mode reports nothing at all.
+    init_logcat();
+
+    let document = match env.convert_byte_array(&rules) {
+        Ok(document) => document,
+        Err(err) => {
+            set_error(&mut env, &format!("reading the rule document: {err}"));
+            return 0;
+        }
+    };
+    if ca_dir.is_null() {
+        set_error(&mut env, "no CA directory was given");
+        return 0;
+    }
+    let directory: String = match env.get_string(&ca_dir) {
+        Ok(text) => text.into(),
+        Err(err) => {
+            set_error(&mut env, &format!("reading the CA directory: {err}"));
+            return 0;
+        }
+    };
+    let directory = match CString::new(directory) {
+        Ok(text) => text,
+        Err(_) => {
+            set_error(&mut env, "the CA directory contains a NUL byte");
+            return 0;
+        }
+    };
+
+    let started = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // Safe here: `document` is an owned `Vec<u8>` and `directory` an owned
+        // `CString`, both alive for the call, and their pointers come from the
+        // values themselves.
+        unsafe {
+            crate::watt_mitm_start(port, document.as_ptr(), document.len(), directory.as_ptr())
+        }
+    }));
+
+    match started {
+        Ok(handle) if !handle.is_null() => handle as jlong,
+        Ok(_) => {
+            set_error(
+                &mut env,
+                &crate::last_error().unwrap_or_else(|| "the mitm proxy did not start".to_string()),
+            );
+            0
+        }
+        Err(_) => {
+            set_error(&mut env, "the mitm proxy constructor panicked");
+            0
+        }
+    }
+}
+
+/// The port the MITM proxy actually bound. 0 when the handle is invalid.
+#[no_mangle]
+pub extern "system" fn Java_dev_detour_core_Kernel_nativeMitmPort(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) -> jint {
+    if handle == 0 {
+        return 0;
+    }
+    unsafe { crate::watt_mitm_port(handle as *mut crate::WattMitm) }
+}
+
+/// Swap the rule set of a running MITM proxy. Returns 0 on success, -1 on
+/// failure.
+#[no_mangle]
+pub extern "system" fn Java_dev_detour_core_Kernel_nativeMitmReplaceRules(
+    env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    rules: JByteArray,
+) -> jint {
+    if handle == 0 {
+        return -1;
+    }
+    let document = match env.convert_byte_array(&rules) {
+        Ok(document) => document,
+        Err(err) => {
+            log::warn!("watt: reading the mitm rule document failed: {err}");
+            return -1;
+        }
+    };
+    unsafe {
+        crate::watt_mitm_replace_rules(
+            handle as *mut crate::WattMitm,
+            document.as_ptr(),
+            document.len(),
+        )
+    }
+}
+
+/// The CA certificate in PEM, for the root helper to install. Null on failure.
+///
+/// Returned as a `jstring` rather than through the C ABI's `char *` so there is
+/// no buffer for the shell to free: the JVM copies the bytes when the string is
+/// built, and the C buffer is released here before returning. The C entry point
+/// (`watt_mitm_ca_pem`) keeps the `watt_free_buffer` contract for non-Java
+/// callers; both read the same authority, so the two surfaces cannot disagree.
+#[no_mangle]
+pub extern "system" fn Java_dev_detour_core_Kernel_nativeMitmCaPem(
+    env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) -> jstring {
+    if handle == 0 {
+        return std::ptr::null_mut();
+    }
+    let pointer = unsafe { crate::watt_mitm_ca_pem(handle as *mut crate::WattMitm) };
+    if pointer.is_null() {
+        return std::ptr::null_mut();
+    }
+    // Copy out of the C buffer, then release it. The buffer is the boxed-slice
+    // form the C ABI hands out, so it is freed with `watt_free_buffer` and a
+    // length that includes the NUL terminator — `CStr` stops short of it, hence
+    // the `+ 1`.
+    let text = unsafe { std::ffi::CStr::from_ptr(pointer) }
+        .to_string_lossy()
+        .into_owned();
+    unsafe { crate::watt_free_buffer(pointer as *mut u8, text.len() + 1) };
+    match env.new_string(text) {
+        Ok(text) => text.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Stop the MITM proxy and release the handle. Blocks until the accept loop
+/// notices.
+#[no_mangle]
+pub extern "system" fn Java_dev_detour_core_Kernel_nativeMitmStop(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) {
+    if handle == 0 {
+        return;
+    }
+    unsafe { crate::watt_mitm_stop(handle as *mut crate::WattMitm) }
 }
 
 /// Apply the user's switches to a rule document. Returns null on failure.

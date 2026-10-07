@@ -615,6 +615,30 @@ fun SettingsScreen(
             },
         )
 
+        // --- root mode --------------------------------------------------------
+
+        // The root-mode cost, stated here rather than only in the mode picker.
+        // It is the one consequence this app cannot show once the mode is running:
+        // the proxy presents its own certificate, so the client stops verifying
+        // the real one. A row of its own — always present, matched by search — so
+        // it is findable whether or not the mode is selected, which a hint on a
+        // mode-only control would not be.
+        val rootRiskTitle = stringResource(R.string.settings_root_risk_title)
+        val rootRiskBody = stringResource(R.string.settings_root_risk_body)
+        add(
+            SettingsRow(SettingsPage.CONNECTION, listOf(rootRiskTitle, rootRiskBody)) {
+                Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                    Text(rootRiskTitle, style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        rootRiskBody,
+                        modifier = Modifier.padding(top = 4.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+        )
+
         // --- the upstream exit ------------------------------------------------
 
         // One row, not five, and that is not a layout preference. The endpoint is

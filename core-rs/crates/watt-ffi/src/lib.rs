@@ -1577,6 +1577,224 @@ pub unsafe extern "C" fn watt_proxy_stop(proxy: *mut WattProxy) {
     }
 }
 
+/// A running root-mode TLS-terminating reverse proxy.
+///
+/// Separate from [`WattProxy`] because the two share only the rule set: this one
+/// terminates the client's TLS itself and re-originates over a second TLS
+/// connection, so it carries an authority the plain proxy has no notion of. The
+/// authority is kept on the handle, not inside the proxy, because the shell is
+/// the one that has to install its certificate and the PEM is only reachable
+/// through the authority.
+pub struct WattMitm {
+    proxy: watt_mitm::Proxy,
+    ca: Arc<watt_mitm::Authority>,
+    port: u16,
+    /// This proxy's own identity, for the same reason [`WattProxy::free_id`]
+    /// exists: MITM handles are created and stopped once per session, and an
+    /// address they recycle is ordinary, so the guard they share must not
+    /// confuse one with another.
+    free_id: FreeId,
+}
+
+/// Start the root-mode reverse proxy on `port`, serving `rules`, with the
+/// authority kept in `ca_dir`.
+///
+/// Returns NULL on failure; read [`watt_last_error`]. Release the handle with
+/// [`watt_mitm_stop`].
+///
+/// # Why loopback and a caller-chosen port
+///
+/// The listener binds `127.0.0.1:<port>`, not the `127.0.0.2` the hosts rewrite
+/// writes and not `443`. Two measurements on the target device decide this:
+///
+/// * `net.ipv4.ip_unprivileged_port_start = 1024`, so an `untrusted_app` process
+///   cannot bind 443 at all — the traffic has to arrive on a high port through
+///   an iptables redirect, which the root helper installs.
+/// * With `iptables -t nat -A OUTPUT -p tcp -d 127.0.0.2 --dport 443 -j REDIRECT
+///   --to-ports <port>`, a client connecting to `127.0.0.2:443` reached only a
+///   listener bound to `127.0.0.1:<port>`; one bound to `127.0.0.2:<port>` was
+///   refused. REDIRECT rewrites the local packet's destination to loopback
+///   proper, so the listener has to be on `127.0.0.1`. The hosts file still
+///   names `127.0.0.2`, which is what keeps the redirect from capturing genuine
+///   local services on `127.0.0.1`.
+///
+/// `ca_dir` is the app's private directory. The CA is loaded from it if present
+/// and minted if not, so the certificate the device was told to trust survives a
+/// restart — reminting per run would mean reinstalling per run.
+///
+/// # Safety
+///
+/// `rules` must point at `rules_len` readable bytes, and `ca_dir` must be NULL
+/// or point at a NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn watt_mitm_start(
+    port: c_int,
+    rules: *const u8,
+    rules_len: usize,
+    ca_dir: *const c_char,
+) -> *mut WattMitm {
+    if rules.is_null() || rules_len == 0 {
+        set_last_error("the rule document is empty");
+        return ptr::null_mut();
+    }
+    if !(0..=65535).contains(&port) {
+        set_last_error("the port must be between 0 and 65535");
+        return ptr::null_mut();
+    }
+    let directory = match optional_str(ca_dir) {
+        Some(directory) if !directory.is_empty() => directory,
+        _ => {
+            set_last_error("no CA directory was given");
+            return ptr::null_mut();
+        }
+    };
+
+    let started = catch_unwind(AssertUnwindSafe(|| -> Result<*mut WattMitm, String> {
+        let document = std::slice::from_raw_parts(rules, rules_len);
+        let parsed = parse_rules(document)?;
+        // Port 0 means "any free port"; the kernel picks one and the real number
+        // is read back through `watt_mitm_port`. A product binds a fixed port;
+        // asking for 0 is what a test does.
+        let bind = SocketAddr::from(([127, 0, 0, 1], port as u16));
+        let (proxy, ca) = watt_mitm::start_with_ca(bind, parsed, std::path::Path::new(&directory))
+            .map_err(|err| format!("starting the mitm proxy on {bind}: {err}"))?;
+        let bound = proxy.addr().port();
+        Ok(Box::into_raw(Box::new(WattMitm {
+            proxy,
+            ca,
+            port: bound,
+            free_id: next_free_id(),
+        })))
+    }));
+
+    match started {
+        Ok(Ok(handle)) => handle,
+        Ok(Err(message)) => {
+            set_last_error(message);
+            ptr::null_mut()
+        }
+        Err(_) => {
+            set_last_error("the mitm proxy constructor panicked");
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Swap the rule set of a running MITM proxy.
+///
+/// Returns 0 on success, -1 on failure (read [`watt_last_error`]).
+///
+/// The same promise the tunnel and the plain proxy make: a rule change reaches
+/// the routing decisions not yet taken and never cuts a connection already being
+/// served.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from [`watt_mitm_start`], and `rules` must
+/// point at `rules_len` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn watt_mitm_replace_rules(
+    handle: *mut WattMitm,
+    rules: *const u8,
+    rules_len: usize,
+) -> c_int {
+    if handle.is_null() {
+        set_last_error("watt_mitm_replace_rules called with a NULL handle");
+        return -1;
+    }
+    if rules.is_null() || rules_len == 0 {
+        set_last_error("the rule document is empty");
+        return -1;
+    }
+    let document = std::slice::from_raw_parts(rules, rules_len);
+    let parsed = match parse_rules(document) {
+        Ok(parsed) => parsed,
+        Err(message) => {
+            set_last_error(message);
+            return -1;
+        }
+    };
+    if (*handle).proxy.replace_rules(parsed) {
+        0
+    } else {
+        // A poisoned lock means a previous holder panicked mid-update, leaving
+        // the rule set in an unknown state. Reporting is safer than writing.
+        set_last_error("the mitm proxy's rule table is poisoned");
+        -1
+    }
+}
+
+/// The port the MITM proxy is actually listening on.
+///
+/// Worth asking rather than assuming: passing 0 asks the kernel to choose, and
+/// the caller has no other way to learn what it chose.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from [`watt_mitm_start`].
+#[no_mangle]
+pub unsafe extern "C" fn watt_mitm_port(handle: *mut WattMitm) -> c_int {
+    if handle.is_null() {
+        return 0;
+    }
+    (*handle).port as c_int
+}
+
+/// The CA certificate in PEM, for the root helper to install in the system trust
+/// store.
+///
+/// The caller owns the returned NUL-terminated buffer and releases it with
+/// [`watt_free_buffer`], passing `strlen(buffer) + 1` as the length — the
+/// terminator is part of the buffer, so it counts. NULL when `handle` is NULL.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from [`watt_mitm_start`].
+#[no_mangle]
+pub unsafe extern "C" fn watt_mitm_ca_pem(handle: *mut WattMitm) -> *mut c_char {
+    if handle.is_null() {
+        return ptr::null_mut();
+    }
+    let mut bytes = (*handle).ca.certificate_pem().as_bytes().to_vec();
+    // NUL-terminate so a C caller can read it as a string. The same boxed-slice
+    // form `watt_engine_ip_stats` hands out, so `watt_free_buffer`'s
+    // `Vec::from_raw_parts(buffer, len, len)` reconstructs exactly what leaked.
+    bytes.push(0);
+    let mut boxed = bytes.into_boxed_slice();
+    let pointer = boxed.as_mut_ptr() as *mut c_char;
+    std::mem::forget(boxed);
+    pointer
+}
+
+/// Stop the MITM proxy and release the handle.
+///
+/// Blocks until the accept loop has noticed, which is at most one idle poll.
+/// Passing NULL is a no-op so teardown can call it unconditionally.
+///
+/// # Safety
+///
+/// `handle` must be a handle from [`watt_mitm_start`] that has not been stopped.
+#[no_mangle]
+pub unsafe extern "C" fn watt_mitm_stop(handle: *mut WattMitm) {
+    if handle.is_null() {
+        return;
+    }
+    // See `watt_proxy_stop` for why this check exists and why it is here rather
+    // than only in the shell: the id is read before the box is reconstructed, so
+    // the claim is on this proxy rather than on its address.
+    let free_id = (*handle).free_id;
+    if !claim_for_free(free_id) {
+        log::error!(
+            "watt: refusing to stop a mitm proxy that was already stopped ({handle:p}, \
+             id {free_id:?})"
+        );
+        return;
+    }
+    // Dropping the box stops the listener: `Proxy`'s `Drop` sets the stop flag
+    // and joins the accept loop, and the authority drops with the handle.
+    drop(Box::from_raw(handle));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

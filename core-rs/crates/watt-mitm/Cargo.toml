@@ -1,0 +1,31 @@
+[package]
+name = "watt-mitm"
+description = "Root-mode local reverse proxy: terminates TLS with a self-signed CA and re-originates to rule addresses"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+watt-rules = { workspace = true }
+log = "0.4"
+# The listener's own transport. `ring` rather than the default `aws-lc-rs` for
+# the same reason `watt-stack` chose it: the latter needs cmake and a full C
+# toolchain, which the Android NDK does not provide.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+# Issuing the CA and the per-name leaf certificates. The `ring` backend is
+# selected explicitly: rcgen's default feature set also pulls `ring`, but naming
+# it keeps that from changing under us if the default is ever revised.
+#
+# `x509-parser` is what enables `Issuer::from_ca_cert_pem`, so a reloaded CA
+# issues leaves whose issuer name is read out of the certificate the device was
+# told to trust rather than reconstructed from a second copy of the parameters.
+# It is pure Rust — no cmake, no C toolchain — so the Android NDK builds it the
+# same way the host does.
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring", "x509-parser"] }
+# Validity windows are anchored at the moment a certificate is minted rather than
+# at a date written here. A hardcoded window is a certificate that silently
+# expires, and the leaf window in particular has to stay under the 398 days
+# clients are entitled to demand. `time` is already in the tree through rcgen, so
+# naming it costs nothing.
+time = { version = "0.3", default-features = false, features = ["std"] }

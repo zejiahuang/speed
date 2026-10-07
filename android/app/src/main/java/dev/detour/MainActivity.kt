@@ -196,6 +196,10 @@ class MainActivity : ComponentActivity() {
             // No consent dialog: the proxy creates no tunnel and captures no
             // traffic the app did not send it.
             KernelState.Mode.PROXY -> startTunnel(KernelState.Mode.PROXY)
+            // Nor here. Root mode asks the *root manager* for its privilege, and
+            // that prompt belongs to `su`, not to this app — there is nothing for
+            // `VpnService.prepare` to prepare.
+            KernelState.Mode.ROOT -> startTunnel(KernelState.Mode.ROOT)
         }
     }
 
