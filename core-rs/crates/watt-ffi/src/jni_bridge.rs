@@ -729,6 +729,41 @@ pub extern "system" fn Java_dev_detour_core_Kernel_nativeMitmCaPem(
     }
 }
 
+/// Fill `out` with the root-mode proxy's counters, in the order
+/// `Kernel.MitmStats` reads them.
+///
+/// Seven fields, fixed by `Kernel.MITM_STATS_FIELDS`. The hazard is the same one
+/// `nativeStats` carries: a mismatch does not fail, it silently shifts every
+/// field after the gap.
+#[no_mangle]
+pub extern "system" fn Java_dev_detour_core_Kernel_nativeMitmStats(
+    mut env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    out: JLongArray,
+) -> jint {
+    if handle == 0 {
+        set_error(&mut env, "the mitm proxy is not running");
+        return -1;
+    }
+    let stats = crate::collect_mitm_stats(unsafe { &(*(handle as *mut crate::WattMitm)).proxy });
+    let values = [
+        stats.connections,
+        stats.handshakes,
+        stats.served,
+        stats.refused,
+        stats.dial_failures,
+        stats.bytes_to_upstream,
+        stats.bytes_to_client,
+    ];
+    let widened: Vec<jlong> = values.iter().map(|v| *v as jlong).collect();
+    if env.set_long_array_region(&out, 0, &widened).is_err() {
+        set_error(&mut env, "could not write the counters");
+        return -1;
+    }
+    0
+}
+
 /// Stop the MITM proxy and release the handle. Blocks until the accept loop
 /// notices.
 #[no_mangle]

@@ -55,7 +55,7 @@
 
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -96,12 +96,110 @@ const CHUNK: usize = 16 * 1024;
 /// thread that is holding a client mid-handshake.
 const DIAL_REFRESH: Duration = Duration::from_secs(60);
 
+/// What the proxy has done, shared with every connection thread.
+///
+/// Atomics rather than the plain struct `watt-stack` uses for its own counters,
+/// and the difference is not a preference: that struct is owned by a single step
+/// loop, while this proxy hands every connection its own thread, so each field
+/// here is written concurrently by construction. `Relaxed` throughout — no
+/// counter is read to make a decision, and no reader needs two of them to agree.
+#[derive(Debug, Default)]
+pub struct Stats {
+    pub(crate) connections: AtomicU64,
+    pub(crate) handshakes: AtomicU64,
+    pub(crate) served: AtomicU64,
+    pub(crate) refused: AtomicU64,
+    pub(crate) dial_failures: AtomicU64,
+    pub(crate) bytes_to_upstream: AtomicU64,
+    pub(crate) bytes_to_client: AtomicU64,
+}
+
+impl Stats {
+    /// Every counter, read once.
+    ///
+    /// One pass rather than handing out a reference: the counters move under the
+    /// reader, and a caller that read them one at a time would be comparing
+    /// values from different moments as if they were one.
+    pub fn snapshot(&self) -> StatsSnapshot {
+        StatsSnapshot {
+            connections: self.connections.load(Ordering::Relaxed),
+            handshakes: self.handshakes.load(Ordering::Relaxed),
+            served: self.served.load(Ordering::Relaxed),
+            refused: self.refused.load(Ordering::Relaxed),
+            dial_failures: self.dial_failures.load(Ordering::Relaxed),
+            bytes_to_upstream: self.bytes_to_upstream.load(Ordering::Relaxed),
+            bytes_to_client: self.bytes_to_client.load(Ordering::Relaxed),
+        }
+    }
+
+    /// Add `bytes` to one direction's total.
+    fn record_bytes(&self, direction: Direction, bytes: u64) {
+        let counter = match direction {
+            Direction::ToUpstream => &self.bytes_to_upstream,
+            Direction::ToClient => &self.bytes_to_client,
+        };
+        counter.fetch_add(bytes, Ordering::Relaxed);
+    }
+}
+
+/// A [`Stats`] read at one moment.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct StatsSnapshot {
+    /// Client TCP connections accepted.
+    pub connections: u64,
+    /// Connections whose client-side TLS handshake completed.
+    ///
+    /// The counter that proves a certificate was actually presented: a
+    /// connection that fails here never reached a name, a rule or an origin.
+    /// Read against `connections` — the gap is clients that connected and then
+    /// could not be spoken to, which is what a client that does not trust the
+    /// installed authority looks like.
+    pub handshakes: u64,
+    /// Connections that became fully usable: routed, dialled, and handshaken
+    /// with the origin.
+    ///
+    /// Counted when the relay starts rather than when it ends, so a connection
+    /// cut short by a stop or a hung-up client still counts — it was served.
+    pub served: u64,
+    /// Connections closed for having no address to dial.
+    ///
+    /// Two paths land here and they mean the same thing to the client. No rule
+    /// owns the name (`Strategy::Direct`), or the rule matched but carries no
+    /// usable address yet — the latter is the dial-name refresh not having run,
+    /// and the module docs explain why it is refused rather than resolved:
+    /// resolving it here would dial this very listener.
+    pub refused: u64,
+    /// Connections where every address the rule lists refused to connect.
+    ///
+    /// Separate from `refused` because the cause is different and so is the fix:
+    /// `refused` is a rule-table question, this is a network one.
+    pub dial_failures: u64,
+    /// Plaintext bytes carried from the client towards the origin.
+    pub bytes_to_upstream: u64,
+    /// Plaintext bytes carried from the origin back to the client.
+    ///
+    /// Plaintext, not wire bytes: this is what crossed between the two TLS
+    /// endpoints, so it is the size of the traffic actually carried and not of
+    /// the two encrypted streams around it.
+    pub bytes_to_client: u64,
+}
+
+/// Which of the two byte counters a relay direction feeds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Direction {
+    /// Client plaintext on its way to the origin.
+    ToUpstream,
+    /// Origin plaintext on its way to the client.
+    ToClient,
+}
+
 /// A running listener.
 pub struct Proxy {
     stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
     addr: SocketAddr,
     router: Arc<Mutex<Router>>,
+    stats: Arc<Stats>,
 }
 
 impl std::fmt::Debug for Proxy {
@@ -114,6 +212,15 @@ impl Proxy {
     /// The address the listener actually bound.
     pub fn addr(&self) -> SocketAddr {
         self.addr
+    }
+
+    /// Every counter, read once.
+    ///
+    /// A snapshot rather than a borrow, for the reason [`Stats::snapshot`] gives:
+    /// these are written by connection threads, so values read one at a time are
+    /// from different moments.
+    pub fn stats(&self) -> StatsSnapshot {
+        self.stats.snapshot()
     }
 
     /// Swap the rule set of the running proxy.
@@ -155,14 +262,16 @@ pub fn start(bind: SocketAddr, rules: RuleSet, ca: Arc<Authority>) -> io::Result
     let listener = TcpListener::bind(bind)?;
     let addr = listener.local_addr()?;
     let router = Arc::new(Mutex::new(Router::new(rules)));
+    let stats = Arc::new(Stats::default());
     let stop = Arc::new(AtomicBool::new(false));
 
     let worker_router = Arc::clone(&router);
+    let worker_stats = Arc::clone(&stats);
     let worker_stop = Arc::clone(&stop);
     let worker = thread::Builder::new()
         .name("watt-mitm".to_string())
         .spawn(move || {
-            if let Err(err) = serve_until(listener, worker_router, ca, worker_stop) {
+            if let Err(err) = serve_until(listener, worker_router, ca, worker_stats, worker_stop) {
                 log::error!("mitm: the listener stopped: {err}");
             }
         })?;
@@ -172,15 +281,21 @@ pub fn start(bind: SocketAddr, rules: RuleSet, ca: Arc<Authority>) -> io::Result
         worker: Some(worker),
         addr,
         router,
+        stats,
     })
 }
 
 /// Accept loop. Split out from [`start`] so a test can drive it with its own
 /// listener and shut it down without a handle.
+///
+/// The counters are passed down rather than kept here: the work being counted
+/// happens on the connection threads, so this loop only owns the one count it
+/// itself performs — a connection accepted.
 pub fn serve_until(
     listener: TcpListener,
     router: Arc<Mutex<Router>>,
     ca: Arc<Authority>,
+    stats: Arc<Stats>,
     stop: Arc<AtomicBool>,
 ) -> io::Result<()> {
     let server = Arc::new(server_config(ca)?);
@@ -197,9 +312,11 @@ pub fn serve_until(
     while !stop.load(Ordering::SeqCst) {
         match listener.accept() {
             Ok((stream, peer)) => {
+                stats.connections.fetch_add(1, Ordering::Relaxed);
                 let server = Arc::clone(&server);
                 let client = Arc::clone(&client);
                 let router = Arc::clone(&router);
+                let stats = Arc::clone(&stats);
                 let stop = Arc::clone(&stop);
                 // One thread per connection, matching what the no-root proxy
                 // does: a connection here is two handshakes and a relay, and
@@ -208,7 +325,7 @@ pub fn serve_until(
                 let spawned = thread::Builder::new()
                     .name("watt-mitm-conn".to_string())
                     .spawn(move || {
-                        if let Err(err) = serve_one(stream, peer, server, client, router, stop) {
+                        if let Err(err) = serve_one(stream, peer, server, client, router, stats, stop) {
                             // Not an error worth surfacing: a client that hangs
                             // up mid-handshake, a name with no rule, and a
                             // browser cancelling a request all land here, and
@@ -302,6 +419,7 @@ fn serve_one(
     server: Arc<rustls::ServerConfig>,
     client_config: Arc<rustls::ClientConfig>,
     router: Arc<Mutex<Router>>,
+    stats: Arc<Stats>,
     stop: Arc<AtomicBool>,
 ) -> io::Result<()> {
     client.set_read_timeout(Some(HANDSHAKE_TIMEOUT))?;
@@ -310,6 +428,7 @@ fn serve_one(
     let mut server_conn = ServerConnection::new(server)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))?;
     handshake(&mut server_conn, &mut client)?;
+    stats.handshakes.fetch_add(1, Ordering::Relaxed);
 
     // The name the client asked for. Read after the handshake because rustls
     // only exposes it once the ClientHello has been processed, and it is the
@@ -338,6 +457,7 @@ fn serve_one(
                 (plan.addresses, plan.port)
             }
             Strategy::Direct => {
+                stats.refused.fetch_add(1, Ordering::Relaxed);
                 return Err(io::Error::new(
                     io::ErrorKind::NotFound,
                     format!("no rule owns {name}, so there is no address to dial"),
@@ -346,6 +466,7 @@ fn serve_one(
         }
     };
     if addresses.is_empty() {
+        stats.refused.fetch_add(1, Ordering::Relaxed);
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
             format!("the rule for {name} carries no usable address"),
@@ -353,12 +474,16 @@ fn serve_one(
     }
 
     let port = port.unwrap_or(443);
-    let upstream = dial(&addresses, port).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::NotConnected,
-            format!("none of the {} addresses for {name} accepted a connection", addresses.len()),
-        )
-    })?;
+    let upstream = match dial(&addresses, port) {
+        Some(upstream) => upstream,
+        None => {
+            stats.dial_failures.fetch_add(1, Ordering::Relaxed);
+            return Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                format!("none of the {} addresses for {name} accepted a connection", addresses.len()),
+            ));
+        }
+    };
 
     let server_name = ServerName::try_from(name.clone())
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
@@ -376,7 +501,8 @@ fn serve_one(
         addresses.len()
     );
 
-    relay(client, server_conn, upstream, client_conn, stop)
+    stats.served.fetch_add(1, Ordering::Relaxed);
+    relay(client, server_conn, upstream, client_conn, stats, stop)
 }
 
 /// Pick the first candidate that accepts a connection.
@@ -439,6 +565,7 @@ fn relay(
     server_conn: ServerConnection,
     upstream: TcpStream,
     client_conn: ClientConnection,
+    stats: Arc<Stats>,
     stop: Arc<AtomicBool>,
 ) -> io::Result<()> {
     let (to_upstream_tx, to_upstream_rx) = mpsc::channel::<Vec<u8>>();
@@ -446,16 +573,38 @@ fn relay(
 
     let stop_a = Arc::clone(&stop);
     let stop_b = Arc::clone(&stop);
+    let stats_a = Arc::clone(&stats);
+    let stats_b = Arc::clone(&stats);
     let client_sock = client.try_clone()?;
 
     // Client -> upstream, driven by the server-side connection.
     let up = thread::Builder::new()
         .name("watt-mitm-up".to_string())
-        .spawn(move || pump(client, Box::new(server_conn), to_upstream_tx, to_client_rx, stop_a))?;
+        .spawn(move || {
+            pump(
+                client,
+                Box::new(server_conn),
+                to_upstream_tx,
+                to_client_rx,
+                stats_a,
+                Direction::ToUpstream,
+                stop_a,
+            )
+        })?;
     // Upstream -> client, driven by the client-side connection.
     let down = thread::Builder::new()
         .name("watt-mitm-down".to_string())
-        .spawn(move || pump(upstream, Box::new(client_conn), to_client_tx, to_upstream_rx, stop_b))?;
+        .spawn(move || {
+            pump(
+                upstream,
+                Box::new(client_conn),
+                to_client_tx,
+                to_upstream_rx,
+                stats_b,
+                Direction::ToClient,
+                stop_b,
+            )
+        })?;
 
     let _ = up.join();
     let _ = down.join();
@@ -470,6 +619,8 @@ fn pump(
     mut conn: Box<dyn TlsSide>,
     outbound: mpsc::Sender<Vec<u8>>,
     inbound: mpsc::Receiver<Vec<u8>>,
+    stats: Arc<Stats>,
+    direction: Direction,
     stop: Arc<AtomicBool>,
 ) -> io::Result<()> {
     sock.set_nonblocking(true)?;
@@ -512,6 +663,8 @@ fn pump(
                             Ok(0) => {
                                 // Clean close from this side; tell the peer so
                                 // it can stop waiting.
+                                // Not counted: the empty marker carries no
+                                // bytes, only the close.
                                 let _ = outbound.send(Vec::new());
                                 return Ok(());
                             }
@@ -519,6 +672,7 @@ fn pump(
                                 if outbound.send(buf[..n].to_vec()).is_err() {
                                     return Ok(());
                                 }
+                                stats.record_bytes(direction, n as u64);
                             }
                             Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => break,
                             Err(err) => return Err(err),
@@ -737,3 +891,78 @@ trait Pipe: Sized {
     }
 }
 impl<T> Pipe for T {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use watt_rules::RuleSource;
+
+    /// One source of unique temp-directory names within a process.
+    static SERIAL: AtomicU64 = AtomicU64::new(0);
+
+    const DOC: &str = r#"{"meta":{"version":"t"},"groups":[{"group":"g","entries":[
+        {"id":"a","name":"a","ips":["203.0.113.10"],"domains":["a.example"]}]}]}"#;
+
+    /// A connection that cannot handshake must count as exactly one connection,
+    /// and nothing else.
+    ///
+    /// The point is the negative half. `connections` is bumped by the accept
+    /// loop and every other counter by `serve_one`, which runs on its own
+    /// thread; a bump placed too early would still pass a test that only
+    /// checked `connections`. Asserting the rest are zero is what pins the
+    /// counting to the branches it belongs to.
+    #[test]
+    fn a_connection_that_cannot_handshake_counts_only_connections() {
+        let rules = RuleSet::from_slice(DOC.as_bytes(), RuleSource::Provided)
+            .expect("the fixture compiles");
+
+        let dir = std::env::temp_dir().join(format!(
+            "watt-mitm-stats-{}-{}",
+            std::process::id(),
+            SERIAL.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).expect("the temp CA directory is writable");
+        let authority = Authority::load_or_create(&dir).expect("the authority is built");
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a free port is available");
+        let addr = listener.local_addr().expect("the listener reports its address");
+        let stats = Arc::new(Stats::default());
+        let stop = Arc::new(AtomicBool::new(false));
+
+        let worker = thread::Builder::new()
+            .name("watt-mitm-test".to_string())
+            .spawn({
+                let stats = Arc::clone(&stats);
+                let stop = Arc::clone(&stop);
+                let router = Arc::new(Mutex::new(Router::new(rules)));
+                let authority = Arc::new(authority);
+                move || {
+                    let _ = serve_until(listener, router, authority, stats, stop);
+                }
+            })
+            .expect("the accept loop thread starts");
+
+        // A plain connection, closed at once: no ClientHello is ever sent, so
+        // the handshake cannot complete and the other counters must not move.
+        let client = TcpStream::connect(addr).expect("the listener accepts");
+        let _ = client.shutdown(Shutdown::Both);
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while stats.snapshot().connections < 1 && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        let snapshot = stats.snapshot();
+        assert_eq!(snapshot.connections, 1, "the accept loop counted the connection");
+        assert_eq!(snapshot.handshakes, 0, "a plain connection cannot handshake");
+        assert_eq!(snapshot.served, 0);
+        assert_eq!(snapshot.refused, 0);
+        assert_eq!(snapshot.dial_failures, 0);
+        assert_eq!(snapshot.bytes_to_upstream, 0);
+        assert_eq!(snapshot.bytes_to_client, 0);
+
+        stop.store(true, Ordering::SeqCst);
+        let _ = worker.join();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

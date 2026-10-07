@@ -293,6 +293,7 @@ class DetourVpnService : VpnService() {
                 "代理监听 127.0.0.1:${started.port}",
         )
         updateNotification(getString(R.string.home_state_on))
+        runRootLoop()
     }
 
     /**
@@ -427,6 +428,79 @@ class DetourVpnService : VpnService() {
                     lastReport = now
                     KernelState.setStats(stats)
                 }
+            }
+        }
+    }
+
+    /**
+     * The counters loop for root mode.
+     *
+     * Root mode has no tunnel, so there is no `step()` to pace this — the proxy
+     * runs on its own threads inside this process and there is nothing to drive.
+     * The loop therefore sleeps rather than blocks, and [MITM_POLL_INTERVAL_MS] is
+     * what keeps it off a core.
+     *
+     * Same two cadences as [runLoop], for the same reasons: the rate is a
+     * derivative and has to be sampled finely to be watchable, while the counters
+     * the UI shows are a report the user sets the interval for.
+     *
+     * The tunnel's own counters are published as well, carrying only the two
+     * fields the home screen reads. Every other field there describes the tunnel —
+     * flows, DNS, listeners — and root mode has none of them, so zero is the
+     * honest answer rather than a placeholder.
+     */
+    private suspend fun runRootLoop() {
+        loop?.cancel()
+        loop = scope.launch {
+            var lastRateSample = 0L
+            var lastReport = 0L
+            var previous = Kernel.MitmStats()
+            var previousAt = System.currentTimeMillis()
+
+            while (isActive) {
+                val current = mitm ?: break
+
+                // Re-read every tick so moving the "统计输出间隔" stepper changes a
+                // running proxy rather than only the next one, exactly as the
+                // tunnel's loop does.
+                val reportIntervalMs =
+                    Prefs.of(this@DetourVpnService).statsIntervalSeconds.coerceIn(1, 60) * 1000L
+
+                val now = System.currentTimeMillis()
+                val rateDue = now - lastRateSample >= RATE_SAMPLE_INTERVAL_MS
+                val reportDue = now - lastReport >= reportIntervalMs
+                if (!rateDue && !reportDue) {
+                    delay(MITM_POLL_INTERVAL_MS)
+                    continue
+                }
+
+                val stats = current.stats()
+                if (stats == null) {
+                    delay(MITM_POLL_INTERVAL_MS)
+                    continue
+                }
+
+                if (rateDue) {
+                    lastRateSample = now
+                    val elapsed = (now - previousAt).coerceAtLeast(1)
+                    Rate.update(
+                        down = (stats.bytesToClient - previous.bytesToClient) * 1000 / elapsed,
+                        up = (stats.bytesToUpstream - previous.bytesToUpstream) * 1000 / elapsed,
+                    )
+                    previous = stats
+                    previousAt = now
+                }
+                if (reportDue) {
+                    lastReport = now
+                    KernelState.setMitmStats(stats)
+                    KernelState.setStats(
+                        Kernel.Stats(
+                            bytesToUpstream = stats.bytesToUpstream,
+                            bytesToClient = stats.bytesToClient,
+                        ),
+                    )
+                }
+                delay(MITM_POLL_INTERVAL_MS)
             }
         }
     }
@@ -596,6 +670,7 @@ class DetourVpnService : VpnService() {
         engine?.close()
         engine = null
         KernelState.ipStats = null
+        KernelState.setMitmStats(null)
         // The same restore the stop path runs, and for the same reason: a failure
         // after `apply` returned is still a failure with the system already
         // changed, and the only acceptable end state is "as it was found".
@@ -674,6 +749,15 @@ class DetourVpnService : VpnService() {
          * [runLoop].
          */
         private const val RATE_SAMPLE_INTERVAL_MS = 500L
+
+        /**
+         * How long the root-mode counters loop sleeps between reads.
+         *
+         * `runLoop` has no equivalent because `step()` blocks and paces it. This
+         * loop only reads atomics, so without a sleep it would spin a core for no
+         * information.
+         */
+        private const val MITM_POLL_INTERVAL_MS = 200L
 
         /**
          * How long the teardown waits for the step loop to leave `step()`.

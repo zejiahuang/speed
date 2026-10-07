@@ -152,6 +152,25 @@ pub struct WattStats {
     pub dns_upstream_overflowed: u64,
 }
 
+/// Counters for the root-mode proxy, filled in by [`watt_mitm_stats`].
+///
+/// A struct of its own rather than more fields on [`WattStats`]: the two describe
+/// different subsystems reached through different handles — that one a tunnel
+/// engine, this one a TLS-terminating proxy — and the shell reads them from the
+/// handle it actually holds. Same `#[repr(C)]`-of-plain-integers shape, so JNI
+/// can read it without matching Rust's field ordering.
+#[repr(C)]
+#[derive(Debug, Default, Clone, Copy)]
+pub struct WattMitmStats {
+    pub connections: u64,
+    pub handshakes: u64,
+    pub served: u64,
+    pub refused: u64,
+    pub dial_failures: u64,
+    pub bytes_to_upstream: u64,
+    pub bytes_to_client: u64,
+}
+
 /// A protector supplied from outside Rust.
 ///
 /// The C ABI supplies a function pointer and a context; the JNI bridge supplies
@@ -772,6 +791,20 @@ pub(crate) fn collect_stats(engine: &WattEngine) -> Option<WattStats> {
         dns_upstream_retries: stats.dns_upstream_retries,
         dns_upstream_overflowed: stats.dns_upstream_overflowed,
     })
+}
+
+/// Copy the root-mode proxy's counters out of the proxy.
+pub(crate) fn collect_mitm_stats(proxy: &watt_mitm::Proxy) -> WattMitmStats {
+    let stats = proxy.stats();
+    WattMitmStats {
+        connections: stats.connections,
+        handshakes: stats.handshakes,
+        served: stats.served,
+        refused: stats.refused,
+        dial_failures: stats.dial_failures,
+        bytes_to_upstream: stats.bytes_to_upstream,
+        bytes_to_client: stats.bytes_to_client,
+    }
 }
 
 pub(crate) fn uptime_seconds(engine: &WattEngine) -> f64 {
@@ -1764,6 +1797,25 @@ pub unsafe extern "C" fn watt_mitm_ca_pem(handle: *mut WattMitm) -> *mut c_char 
     let pointer = boxed.as_mut_ptr() as *mut c_char;
     std::mem::forget(boxed);
     pointer
+}
+
+/// Copy the root-mode proxy's counters out. Returns 0 on success, -1 on failure.
+///
+/// # Safety
+///
+/// `handle` must be a live handle from [`watt_mitm_start`], and `out` must point
+/// at a writable [`WattMitmStats`].
+#[no_mangle]
+pub unsafe extern "C" fn watt_mitm_stats(
+    handle: *mut WattMitm,
+    out: *mut WattMitmStats,
+) -> c_int {
+    if handle.is_null() || out.is_null() {
+        set_last_error("watt_mitm_stats needs both a proxy and an output");
+        return -1;
+    }
+    *out = collect_mitm_stats(&(*handle).proxy);
+    0
 }
 
 /// Stop the MITM proxy and release the handle.

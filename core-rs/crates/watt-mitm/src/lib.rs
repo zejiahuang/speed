@@ -57,7 +57,7 @@ use std::sync::Arc;
 use watt_rules::RuleSet;
 
 pub use crate::ca::{cert_path, Authority, CA_CERT_FILE, CA_KEY_FILE};
-pub use crate::proxy::{serve_until, start, Proxy};
+pub use crate::proxy::{serve_until, start, Proxy, Stats, StatsSnapshot};
 
 /// The address intercepted names are rewritten to in the system hosts file.
 ///

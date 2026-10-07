@@ -213,6 +213,36 @@ object ControlConsole {
             // flow attributions so a single `status` dump answers where a flow
             // went -- matched a rule, went direct, or was rejected outright.
             .put("tcp_flows_rejected", stats.tcpRejected)
+            // The root-mode proxy's counters, absent unless that mode is up.
+            //
+            // Read the block above against this one. In root mode only its two
+            // byte counters mean anything — the service publishes those so the
+            // home screen's total is not zero while traffic is moving — and
+            // everything else there stays at zero because there is no tunnel to
+            // describe. So a zero `tcp_opened` in root mode is not "no TCP"; it is
+            // a field that belongs to another subsystem, and this block is where a
+            // root-mode run is observable at all.
+            .put("mitm", mitmJson(KernelState.mitmStats.value))
+    }
+
+    /**
+     * The root-mode proxy's counters as JSON, or an explicit null.
+     *
+     * Null rather than an object of zeros: a caller has to be able to tell "root
+     * mode is not running" from "root mode is running and has served nothing",
+     * and a zeroed object cannot express the first.
+     */
+    private fun mitmJson(stats: Kernel.MitmStats?): Any = if (stats == null) {
+        JSONObject.NULL
+    } else {
+        JSONObject()
+            .put("connections", stats.connections)
+            .put("handshakes", stats.handshakes)
+            .put("served", stats.served)
+            .put("refused", stats.refused)
+            .put("dial_failures", stats.dialFailures)
+            .put("bytes_to_upstream", stats.bytesToUpstream)
+            .put("bytes_to_client", stats.bytesToClient)
     }
 
     private fun dispatch(

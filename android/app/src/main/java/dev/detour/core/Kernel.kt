@@ -189,6 +189,57 @@ object Kernel {
     }
 
     /**
+     * Counters for the root-mode proxy.
+     *
+     * A type of its own rather than more fields on [Stats]: that one describes the
+     * tunnel, which root mode does not have. Everything here is about the
+     * TLS-terminating proxy — the connections it accepted, the certificates it
+     * presented, the connections it served, and the plaintext it carried.
+     */
+    data class MitmStats(
+        /** Client TCP connections accepted. */
+        val connections: Long = 0,
+        /**
+         * Connections whose client-side TLS handshake completed.
+         *
+         * The counter that proves a certificate was actually presented. Read it
+         * against [connections]: the gap is clients that connected and could not
+         * be spoken to, which is what a client that does not trust the installed
+         * authority looks like — and nothing else on screen would say so.
+         */
+        val handshakes: Long = 0,
+        /**
+         * Connections that became fully usable — routed, dialled, and handshaken
+         * with the origin.
+         *
+         * Counted when the relay starts rather than when it ends, so a connection
+         * cut short still counts: it was served.
+         */
+        val served: Long = 0,
+        /**
+         * Connections closed for having no address to dial.
+         *
+         * Read against [served]. This is the proxy answering a name it was
+         * rewritten for but has no rule for, which is what a rule switch that
+         * reached the hosts file and not the rule table looks like.
+         */
+        val refused: Long = 0,
+        /**
+         * Connections where every address the rule lists refused to connect.
+         *
+         * Separate from [refused] because the cause and the fix are different:
+         * that one is a rule-table question, this one is a network one.
+         */
+        val dialFailures: Long = 0,
+        /** Plaintext bytes carried from the client towards the origin. */
+        val bytesToUpstream: Long = 0,
+        /** Plaintext bytes carried from the origin back to the client. */
+        val bytesToClient: Long = 0,
+    ) {
+        val bytesTotal: Long get() = bytesToUpstream + bytesToClient
+    }
+
+    /**
      * One address's dial history, as the selector remembers it.
      *
      * This is the *byte-based* half of the picture: successes and failures are
@@ -341,6 +392,7 @@ object Kernel {
     private external fun nativeMitmPort(handle: Long): Int
     private external fun nativeMitmReplaceRules(handle: Long, rules: ByteArray): Int
     private external fun nativeMitmCaPem(handle: Long): String?
+    private external fun nativeMitmStats(handle: Long, out: LongArray): Int
     private external fun nativeMitmStop(handle: Long)
 
     private external fun nativeStep(handle: Long): Int
@@ -622,6 +674,27 @@ object Kernel {
             return runCatching { nativeMitmCaPem(h) }.getOrNull()
         }
 
+        /**
+         * The proxy's counters, or null when the handle is closed or the native
+         * side refused.
+         *
+         * The root-mode counterpart of [Engine.stats]. This mode has no tunnel and
+         * therefore no `step()`, so these are the only numbers that say the proxy
+         * is doing anything at all.
+         */
+        fun stats(): MitmStats? {
+            val h = handle.get()
+            if (h == 0L) return null
+            if (!ensureLoaded()) return null
+            val raw = LongArray(MITM_STATS_FIELDS)
+            if (nativeMitmStats(h, raw) != 0) return null
+            return MitmStats(
+                connections = raw[0], handshakes = raw[1], served = raw[2],
+                refused = raw[3], dialFailures = raw[4],
+                bytesToUpstream = raw[5], bytesToClient = raw[6],
+            )
+        }
+
         override fun close() {
             val h = handle.getAndSet(0L)
             if (h != 0L) nativeMitmStop(h)
@@ -698,6 +771,15 @@ object Kernel {
      * is added.
      */
     private const val STATS_FIELDS = 28
+
+    /**
+     * How many `jlong`s [nativeMitmStats] writes.
+     *
+     * The same hazard [STATS_FIELDS] carries: the Rust side writes the array out
+     * by hand, so a mismatch does not fail — it silently shifts every field after
+     * the gap. This is the one number to check when a proxy counter is added.
+     */
+    private const val MITM_STATS_FIELDS = 7
 }
 
 class KernelException(message: String) : Exception(message)
