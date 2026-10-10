@@ -581,10 +581,11 @@ fn load_hosts_document(
         started,
         "hosts",
         &format!(
-            "origin={origin} version={} lines={} addresses={} dial_names={} domains={} groups={} skipped={}",
+            "origin={origin} version={} lines={} addresses={} no_sni={} dial_names={} domains={} groups={} skipped={}",
             document.meta.version,
             stats.lines,
             stats.addresses,
+            stats.no_sni,
             stats.dial_names,
             stats.domains,
             stats.groups,

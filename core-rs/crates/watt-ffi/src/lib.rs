@@ -167,6 +167,10 @@ pub struct WattMitmStats {
     pub served: u64,
     pub refused: u64,
     pub dial_failures: u64,
+    /// Connections whose origin handshake presented a rule-supplied name.
+    pub named_upstreams: u64,
+    /// Connections whose origin handshake sent no SNI at all.
+    pub no_sni_upstreams: u64,
     pub bytes_to_upstream: u64,
     pub bytes_to_client: u64,
 }
@@ -823,6 +827,8 @@ pub(crate) fn collect_mitm_stats(proxy: &watt_mitm::Proxy) -> WattMitmStats {
         served: stats.served,
         refused: stats.refused,
         dial_failures: stats.dial_failures,
+        named_upstreams: stats.named_upstreams,
+        no_sni_upstreams: stats.no_sni_upstreams,
         bytes_to_upstream: stats.bytes_to_upstream,
         bytes_to_client: stats.bytes_to_client,
     }

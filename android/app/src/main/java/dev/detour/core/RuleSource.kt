@@ -25,6 +25,21 @@ import org.json.JSONObject
  * update to fix it. Only user-added sources — the ones the app cannot know — are
  * stored.
  *
+ * ## The third category: a source that is not a choice
+ *
+ * [rootSource] is neither of those. It is **defined in code like a built-in but
+ * deliberately absent from [defaults]**, so it is never stored *and* never
+ * offered: root mode loads it whatever [Prefs.selectedSource] says, and no screen
+ * lists it as something to pick. It exists because root mode cannot work with a
+ * source the user chose — see [rootSource] for the measurement — and a source
+ * that is forced is not a source that should appear in a list of options.
+ *
+ * Keeping it out of [defaults] is what makes that airtight. [Prefs.selectedSource]
+ * resolves against the stored list, so an id that is not in the list cannot be
+ * selected, cannot be deleted, and cannot be reached by a `set rule_source`
+ * command — the only way to get it is to ask for it by name, which is what the
+ * service does when it starts in root mode.
+ *
  * ## The third kind: a source that is a file on this device
  *
  * A user-added source used to mean exactly one thing — a URL. [localFile] adds a
@@ -147,6 +162,15 @@ data class RuleSource(
     companion object {
         const val GITHUB_HOSTS_ID = "github-hosts"
         const val HELLOGITHUB_HOSTS_ID = "hellogithub-hosts"
+
+        /**
+         * The id of the source root mode is pinned to. See [rootSource].
+         *
+         * Not in [defaults], so it is not a value [Prefs.selectedSource] can ever
+         * return. The id is here for [forMode] to hand back, for the settings and
+         * rules screens to recognise the pinned case, and for logs.
+         */
+        const val S302_UPSTREAM_ID = "s302-upstream"
 
         /**
          * The prefix that marks an [id] — and an [identity] — as belonging to a
@@ -291,6 +315,135 @@ data class RuleSource(
                 builtin = true,
             ),
         )
+
+        /**
+         * The document root mode is pinned to, and why it is not the one the
+         * settings screen offers.
+         *
+         * Root mode hijacks names into a local TLS-terminating proxy — the hosts
+         * file points them at [RootHelper.REDIRECT_ADDRESS] and an iptables rule
+         * sends port 443 to the proxy — so the proxy has to **re-originate** every
+         * connection it terminates. A rule source is therefore usable in root mode
+         * only if it says, per domain, where that connection should go.
+         *
+         * The s302 hosts document (`/2`) does not, and it fails in a way that looks
+         * like a working rule set:
+         *
+         * ```text
+         * /2   127.0.0.1  store.steampowered.com   (862 domains, every address 127.0.0.1)
+         * ```
+         *
+         * `127.0.0.1` there is **s302's own listener**, correct for a machine
+         * running s302 and meaningless on a phone. Measured on the device with the
+         * app installed and the s302 hosts file absent: nothing is listening on
+         * 443 at all (`ss -ltn | grep :443` empty, rc=1), while the proxy itself
+         * binds a random high port. So every hijacked domain would be redirected
+         * into a closed port — a RST per connection, for 862 domains.
+         *
+         * `/3` is the same rule set in the shape this needs:
+         *
+         * ```text
+         * /3   steamstore-a.akamaihd.net.edgesuite.net<TAB>store.steampowered.com
+         * ```
+         *
+         * The first field is a **name**, and `watt-rules` reads a non-IP first field
+         * as a dial name (`hosts.rs`), so the proxy gets an address that resolves
+         * from this network. Five sampled targets all completed TLS from the device
+         * (the alternatives — resolving the original names out of band — were
+         * measured and do not work: every foreign DoH endpoint is blocked here and
+         * the reachable domestic ones answer with poisoned addresses).
+         *
+         * **The name is also what the origin has to be asked for.** Measured against
+         * one edge address: the client's own name gave `rc=35`, the target name gave
+         * `200` / 14399 bytes. That is why the kernel keeps the pairing between an
+         * address and the name that produced it — see `Plan::dial_addresses`.
+         *
+         * ## Coverage, stated rather than implied
+         *
+         * `/2` has **862** domains and `/3` has **714**; the **148** in between are
+         * not one category. They were counted from the caddyfile, not assumed, and
+         * the split is **42 / 90 / 16**:
+         *
+         * * **42** are named literally in an HTTPS block whose `reverse_proxy`
+         *   target is a **bare IPv4** — `itch.io` → `45.79.115.66`,
+         *   `xdaforums.com` → `3.214.214.173`, `dropbox.com` → `162.125.248.18`.
+         *   The aggregator accepts an upstream token only if it has a domain shape
+         *   (`S302Parser::parseBlock`'s `/^[a-z0-9][a-z0-9.\-]*\.[a-z]{2,}$/`), and
+         *   an address does not, so the target is discarded and the domain ends up
+         *   with no upstream at all.
+         * * **90** are reached only through a **wildcard head** on one of those same
+         *   blocks (`*.gravatar.com`, `*.artstation.com`,
+         *   `*.dl-eu.dropboxusercontent.com`). The hosts file expands the wildcard,
+         *   so the names exist in `/2`, but no block ever names them, and the block
+         *   they belong to is dropped whole.
+         * * **16** are in `http://` blocks with **no `reverse_proxy` at all** — 12
+         *   `redir` to a China mirror, 4 carry neither directive. These are port 80,
+         *   which root mode does not hijack (the iptables rule rewrites 443), so
+         *   they are out of scope rather than lost.
+         *
+         * **Both of the first two categories are recovered, and the earlier claim
+         * that they could not be was wrong.** Accepting a bare IPv4 is not enough on
+         * its own — the kernel would still put the **requested domain** in the SNI
+         * (`proxy.rs` falls back to the client's name when no dial name produced the
+         * address), and that is the case that fails: 11 of the 13 addresses reset the
+         * handshake or time out when asked for the original name. What the format was
+         * missing was a way to say "dial this address and send **no SNI**".
+         *
+         * **It has one now.** A first field of `!<address>` means exactly that:
+         * `RuleSet` reads it with `strip_prefix('!')`, and `proxy.rs` presents nothing
+         * when the address that answered is in the entry's `no_sni`. The puller writes
+         * that form for a `reverse_proxy` target that is a bare IPv4.
+         *
+         * The **90** came back with the 42, and the reasoning that they would not was
+         * wrong. An INI section's `Domain` field is **plaintext** and lists those names
+         * outright (`0.gravatar.com`, `1.gravatar.com`, …); `parse()` unions it with
+         * the block's `hosts`, and the aggregator attaches the section's upstreams to
+         * *every* domain it holds. So they had no upstream for one reason only — the
+         * section's sole target was a bare address and was dropped. The wildcard head
+         * never mattered. Measured on the live `/3`: **714 → 846 domains,
+         * +132 = 42 + 90, nothing lost.**
+         *
+         * ⚠️ **The `!<address>` form works, but only partly, and one measurement
+         * disagrees with another.** On the emulator, six of the new domains went
+         * through the MITM as `served from <address>:443 as <no SNI>`, with
+         * `no_sni_upstreams` moving 0 → 6 while the named-upstream control stayed at 1.
+         * **Two answered** (`dropbox.com` → 301, `0.gravatar.com` → 200) and four hung.
+         * The bare-`curl` probe had recorded `artstation.com` → 403 for the same address
+         * with no SNI, so **the two disagree and the disagreement is not explained** —
+         * do not invent a reason. Nothing is worse off either way: these domains were
+         * `direct` before, and direct does not reach them.
+         */
+        private const val S302_UPSTREAM_URL = "https://abhuang.dpdns.org/3"
+
+        /**
+         * The source root mode loads, whatever is selected elsewhere.
+         *
+         * `builtin = true` so [parseDocument] applies the built-in entry floor: this
+         * document's size is known, and a truncated fetch must be rejected rather
+         * than start a mode that hijacks a handful of names.
+         */
+        fun rootSource(): RuleSource = RuleSource(
+            id = S302_UPSTREAM_ID,
+            label = "",
+            labelRes = R.string.rules_source_s302_upstream,
+            url = S302_UPSTREAM_URL,
+            builtin = true,
+        )
+
+        /**
+         * The source [mode] will load: [rootSource] in root mode, [selected] in the
+         * other two.
+         *
+         * **The mode is a parameter rather than read from [Prefs].** Two layers ask
+         * this question and they must not be able to answer it differently — the
+         * service asks it about the mode it was *told to start*, and the screens ask
+         * it about the mode that is *running* (`KernelState.status.mode`, which is
+         * also what the connect button passes on). Taking the mode as an argument is
+         * what makes that one rule instead of two implementations of it; a version
+         * that read the stored setting would be a third opinion.
+         */
+        fun forMode(mode: KernelState.Mode, selected: RuleSource): RuleSource =
+            if (mode == KernelState.Mode.ROOT) rootSource() else selected
 
         /**
          * Serialise the user-added sources. Built-ins are skipped — see the class

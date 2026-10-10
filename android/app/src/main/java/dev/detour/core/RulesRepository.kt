@@ -54,8 +54,12 @@ import org.json.JSONObject
  * meaning; the difference is whether a local proxy exists, not the endpoint.
  *
  * `/2` is therefore **retired** rather than offered: it was meaningful only next
- * to software this app does not ship. It survives as an un-selectable
- * [RuleSource] so the owner can still see that it exists.
+ * to software this app does not ship. No source sets [RuleSource.unavailable] any
+ * more, so "retired" here means *deleted*, not *hidden*. The document is still
+ * fetched — by root mode, and in a different shape: `/3` carries the same rule set
+ * with a **substitute upstream name** where `/2` has `127.0.0.1`, which is an
+ * address a re-originating proxy can dial and a name it can be asked for. See
+ * [RuleSource.rootSource] for that document and its measured coverage.
  *
  * ## The merge
  *
@@ -214,10 +218,40 @@ object RulesRepository {
      */
     private val EMPTY_DOCUMENT = "{}".toByteArray()
 
-    /** The document to hand the kernel. */
+    /**
+     * The document to hand the kernel.
+     *
+     * [source] is the source to load, or `null` for "whichever one is in force for
+     * the mode the app is in" — the selection, except in root mode, where it is the
+     * pinned source (see [RuleSource.forMode]).
+     *
+     * **The default is derived here rather than left to each caller**, because the
+     * callers that do not name a source are not a minority: the rules screen's
+     * index, the about screen's counts, the control channel, and — the one that
+     * matters — [DetourVpnService.reloadRulesIfRunning], which re-reads the
+     * document and hands it to the running engine. If that one resolved the
+     * selection instead, a reload while root mode was up would fetch the *other*
+     * source and rewrite the hosts block to that document's domains, mid-session.
+     * A default that is wrong in one mode is a trap; a default that asks the mode
+     * is not.
+     *
+     * The service's start path still passes its source explicitly, from the mode it
+     * was told to start. That value is the same one this default would compute, but
+     * naming it does not depend on the status having been updated first.
+     *
+     * Everything downstream that asks "which source" takes this value as an
+     * argument instead of reading [Prefs] itself, so the stamp, the fetch and the
+     * offline branch cannot come to three different answers.
+     */
     @Synchronized
-    fun load(context: Context, forceRefresh: Boolean = false): ByteArray {
+    fun load(
+        context: Context,
+        forceRefresh: Boolean = false,
+        source: RuleSource? = null,
+    ): ByteArray {
         val prefs = Prefs.of(context)
+        val source = source
+            ?: RuleSource.forMode(KernelState.status.value.mode, prefs.selectedSource)
         val cached = cacheFile(context)
 
         // A cache left by a build that wrote no identity stamp cannot be validated,
@@ -238,9 +272,16 @@ object RulesRepository {
         // document whose stamp is missing is treated exactly like no document at
         // all — that is the case the device hit, where a stale `/2` document sat
         // next to a `hosts` preference and was served as if it were current.
-        val stamp = sourceStamp(context)
+        //
+        // The stamp is computed from the source *this* load will use, so switching
+        // between root mode and the others is a stamp change and therefore a cache
+        // miss: the two modes hold different documents, one file cannot be both, and
+        // the cost is one fetch per mode switch. Paying it is what keeps the rule
+        // the class comment describes — a document is only served for the source
+        // whose stamp it carries — true for a source that is not the selected one.
+        val stamp = sourceStamp(source)
         val cachedSource = readStamp(context)
-        val identityMatches = stamp != null && cachedSource == stamp
+        val identityMatches = cachedSource == stamp
         val hasCache = cached.isFile && cached.length() > 0 && identityMatches
 
         // Two settings decide whether the network is touched at all, and they are
@@ -257,7 +298,10 @@ object RulesRepository {
         // therefore a different stamp. Both checks are skipped here rather than
         // special-cased inside the offline branch, which is what keeps that branch
         // able to refuse honestly when it really has nothing to serve.
-        val localSource = runCatching { prefs.selectedSource.isLocal }.getOrDefault(false)
+        //
+        // Read from `source`, not from the selection: in root mode those differ, and
+        // the answer has to describe the document this call is about to return.
+        val localSource = source.isLocal
 
         val ageMillis = if (hasCache) {
             (System.currentTimeMillis() - cached.lastModified()).coerceAtLeast(0L)
@@ -279,7 +323,7 @@ object RulesRepository {
                     // which looks like a working tunnel that drops every packet.
                     throw IllegalStateException("离线模式，且本地还没有已下载的规则")
                 }
-                if (cachedSource != null && stamp != null && cachedSource != stamp) {
+                if (cachedSource != null && cachedSource != stamp) {
                     // **A known mismatch is refused, not served.** The document's
                     // own stamp says it came from a different rule set than the one
                     // selected now — so it is known *not* to be the document that
@@ -327,23 +371,24 @@ object RulesRepository {
                 KernelState.log(KernelState.LogEntry.Level.INFO, TAG, "离线模式：使用已下载的规则")
                 cached.readBytes()
             }
-            forceRefresh || stale || !identityMatches -> fetchInto(context, cached)
+            forceRefresh || stale || !identityMatches -> fetchInto(context, cached, source)
             else -> cached.readBytes()
         }
         return applySwitches(context, merged)
     }
 
     /**
-     * The identity to stamp, or `null` when the source cannot be resolved.
+     * The identity to stamp for [source].
      *
-     * `null` means "do not trust anything": a stamp can never equal it, so the
-     * cache is treated as a miss and refetched, and [writeStamp] writes nothing. A
-     * lazily-constructed `Prefs` can only fail to materialise if the settings store
-     * itself is unreadable, which is a state where guessing the cache's provenance
-     * is worse than refetching.
+     * Total, and that is a consequence of the parameter rather than a choice: the
+     * value used to be read from a live [Prefs] inside a `runCatching`, which meant
+     * a `null` here stood for "the settings store could not be read". It cannot —
+     * [load] has already called `Prefs.of` by the time this runs, and that call
+     * caches its instance, so a second one cannot fail. A `null` return would
+     * therefore have been a branch no input could reach, and a comment claiming a
+     * failure mode that does not exist is worse than no comment.
      */
-    private fun sourceStamp(context: Context): String? =
-        runCatching { Prefs.of(context).selectedSource.identity }.getOrNull()
+    private fun sourceStamp(source: RuleSource): String = source.identity
 
     /** Which source the cached document says it came from, or `null` if unstamped. */
     private fun readStamp(context: Context): String? =
@@ -353,11 +398,13 @@ object RulesRepository {
         }.getOrNull()
 
     /**
-     * Fetch the document and write it to the cache.
+     * Fetch [source] and write it to the cache.
      *
      * On failure the cache is the fallback — a tunnel that cannot start without a
      * network is a tunnel that cannot start on a plane — and only when there is no
-     * cache at all is the failure real.
+     * cache at all is the failure real. "The cache" means one whose stamp is
+     * [source]'s: a failure while root mode is starting must not hand the proxy a
+     * document fetched for some other source.
      *
      * # Write order
      *
@@ -368,14 +415,14 @@ object RulesRepository {
      * stamp fails the other way: a bare document with no stamp reads as a miss and
      * is refetched. A wasted fetch is the cheap side of this trade.
      */
-    private fun fetchInto(context: Context, cached: File): ByteArray {
+    private fun fetchInto(context: Context, cached: File, source: RuleSource): ByteArray {
         return try {
-            val fetched = fetch(context)
+            val fetched = fetch(context, source)
             cached.writeBytes(fetched)
-            writeStamp(context)
+            writeStamp(context, source)
             KernelState.log(
                 KernelState.LogEntry.Level.INFO, TAG,
-                "规则已更新（${fetched.size / 1024} KiB，来源 ${sourceStamp(context) ?: "未知"}）",
+                "规则已更新（${fetched.size / 1024} KiB，来源 ${sourceStamp(source)}）",
             )
             fetched
         } catch (err: Throwable) {
@@ -383,7 +430,7 @@ object RulesRepository {
             KernelState.log(
                 KernelState.LogEntry.Level.WARN, TAG, "拉取规则失败：${err.message}",
             )
-            val identityMatches = sourceStamp(context)?.let { it == readStamp(context) } ?: false
+            val identityMatches = sourceStamp(source) == readStamp(context)
             // The fallback only exists for a cache that still describes a document
             // this build would accept. Serving one whose stamp does not match would
             // re-create the bug this round fixes — a fetch failure would hand the
@@ -410,10 +457,13 @@ object RulesRepository {
      * Written **after** the document, deliberately — see [fetchInto]. Bumped to
      * the same `lastModified` as the document by writing it second, which also
      * means the one age check in [load] covers both files.
+     *
+     * The write can still fail (a full disk), and that is the failure [fetchInto]
+     * is built around: the document is on disk and the stamp is not, so the next
+     * load sees a miss and refetches.
      */
-    private fun writeStamp(context: Context) {
-        val stamp = sourceStamp(context) ?: return
-        runCatching { sourceFile(context).writeText(stamp) }
+    private fun writeStamp(context: Context, source: RuleSource) {
+        runCatching { sourceFile(context).writeText(sourceStamp(source)) }
     }
 
     /**
@@ -460,8 +510,8 @@ object RulesRepository {
     }
 
     /**
-     * Fetch the selected source and return a kernel document that is known to
-     * hold at least one rule.
+     * Fetch [source] and return a kernel document that is known to hold at least
+     * one rule.
      *
      * The gates are not decoration, and they catch different things: `fetchText`
      * refuses a non-200 ("the server said it failed"), [looksLikeHtml] refuses a
@@ -478,8 +528,7 @@ object RulesRepository {
      *
      * A local source never reaches the loop: see [readLocal].
      */
-    private fun fetch(context: Context): ByteArray {
-        val source = Prefs.of(context).selectedSource
+    private fun fetch(context: Context, source: RuleSource): ByteArray {
         if (!source.usable) {
             // Reachable only if something selected a source whose `usable` later
             // became false — the UI will not offer one. Refusing loudly beats

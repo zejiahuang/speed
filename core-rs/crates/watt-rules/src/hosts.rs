@@ -15,9 +15,12 @@
 //! merges them — see `watt_rules::merge_documents`. This parser is what the same
 //! data the desktop tool consumes is read with.
 //!
-//! The syntax is an ordinary hosts file plus one upstream convention:
+//! The syntax is an ordinary hosts file plus two upstream conventions:
 //! `# === [group name] ===` opens a section, so the grouping survives into the
-//! compiled rule set instead of collapsing into a single bucket.
+//! compiled rule set instead of collapsing into a single bucket; and a first
+//! field written `!<address>` means "dial this address and present no SNI",
+//! which is how a source with an address but no name for it expresses that —
+//! see `CompiledEntry::no_sni` for why that is a distinct claim.
 
 use std::collections::BTreeMap;
 use std::net::IpAddr;
@@ -33,6 +36,12 @@ pub struct HostsStats {
     pub lines: usize,
     /// `address domain` pairs accepted.
     pub addresses: usize,
+    /// Of [`HostsStats::addresses`], how many were written `!<address>` and so
+    /// are reached without SNI. A sub-count rather than a peer, because those
+    /// lines *are* address lines — they are dialled like any other — and a total
+    /// that excluded them would break the reading `addresses + dial_names +
+    /// skipped == lines`.
+    pub no_sni: usize,
     /// Lines whose first field named a host to resolve rather than an address.
     pub dial_names: usize,
     /// Distinct domains.
@@ -95,17 +104,37 @@ pub fn parse(raw: &str) -> Result<(RuleDocument, HostsStats)> {
         // The first field is normally an address. When it is not, the file is
         // naming a host to resolve instead — the same extension the JSON rule
         // format accepts, so both sources can express "dial this name".
-        let target = match address.parse::<IpAddr>() {
+        //
+        // A leading `!` on an address is the third form: dial it and present no
+        // SNI. It only means anything for an address — a name *is* what SNI
+        // carries, so `!name` asks for a contradiction and is dropped rather than
+        // reinterpreted as the plain name. The token survives into the document
+        // unchanged; `RuleSet` is what tells the three forms apart, so the
+        // classification lives in one place rather than in each parser.
+        let (field, no_sni) = match address.strip_prefix('!') {
+            Some(rest) => (rest, true),
+            None => (address, false),
+        };
+        let target = match field.parse::<IpAddr>() {
             Ok(addr) => {
                 if addr.is_unspecified() || addr.is_multicast() {
                     stats.skipped += 1;
                     continue;
                 }
                 stats.addresses += 1;
-                addr.to_string()
+                if no_sni {
+                    stats.no_sni += 1;
+                    format!("!{addr}")
+                } else {
+                    addr.to_string()
+                }
             }
             Err(_) => {
-                let Some(name) = normalize_dial_name(address) else {
+                if no_sni {
+                    stats.skipped += 1;
+                    continue;
+                }
+                let Some(name) = normalize_dial_name(field) else {
                     stats.skipped += 1;
                     continue;
                 };
@@ -262,6 +291,58 @@ mod tests {
         assert_eq!(stats.dial_names, 0);
         assert_eq!(stats.domains, 1);
         assert_eq!(doc.groups[0].entries[0].domains, vec!["keep.example"]);
+    }
+
+    #[test]
+    fn a_bang_address_is_carried_through_as_a_route_with_no_name() {
+        // The token is not interpreted here — `RuleSet` owns that classification —
+        // but it has to *survive* this parser. Without this branch it would be an
+        // unusable first field and the line would be silently dropped, which is
+        // the failure mode that would make the whole feature look like it did not
+        // work rather than like it was never fed anything.
+        let (doc, stats) = parse("!45.79.115.66\texample.com\n1.1.1.1 plain.example\n").unwrap();
+        assert_eq!(stats.no_sni, 1);
+        assert_eq!(stats.addresses, 2, "a flagged address is still an address");
+        assert_eq!(stats.dial_names, 0);
+        assert_eq!(stats.skipped, 0);
+        let entry = doc.groups[0]
+            .entries
+            .iter()
+            .find(|entry| entry.domains == vec!["example.com"])
+            .expect("the flagged domain is present");
+        assert_eq!(entry.ips, vec!["!45.79.115.66".to_string()]);
+    }
+
+    #[test]
+    fn a_bang_on_something_that_is_not_an_address_is_skipped() {
+        // `!name` contradicts itself, and `!0.0.0.0` is a blocklist entry that must
+        // not become a route just because it was flagged. Both are skipped rather
+        // than read as the unflagged form.
+        let (doc, stats) = parse(
+            "!edge.example.net a.example\n!0.0.0.0 b.example\n!1.2.3 c.example\n1.1.1.1 keep.example\n",
+        )
+        .unwrap();
+        assert_eq!(stats.skipped, 3);
+        assert_eq!(stats.no_sni, 0);
+        assert_eq!(stats.dial_names, 0);
+        assert_eq!(stats.domains, 1);
+        assert_eq!(doc.groups[0].entries[0].domains, vec!["keep.example"]);
+    }
+
+    #[test]
+    fn a_bang_address_compiles_into_a_route_that_presents_nothing() {
+        // End to end through both layers, which is the pairing that matters: the
+        // parser keeps the token and the compiler is what gives it meaning.
+        let (doc, _) = parse("!45.79.115.66\texample.com\n").unwrap();
+        let rules =
+            crate::ruleset::RuleSet::from_document(doc, crate::ruleset::RuleSource::Provided)
+                .unwrap();
+        let entry = rules
+            .lookup("example.com")
+            .expect("a rule must match")
+            .entry;
+        assert_eq!(entry.ips.len(), 1);
+        assert_eq!(entry.no_sni, entry.ips);
     }
 
     #[test]

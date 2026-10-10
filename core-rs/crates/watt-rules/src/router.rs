@@ -106,6 +106,44 @@ pub struct Plan {
     /// They are tried after `addresses`: a literal address is data the rule
     /// author already verified, while a name is a lookup that may fail.
     pub dial_names: Vec<String>,
+    /// What each dial name resolved to on the last refresh tick, paired with the
+    /// name it came from.
+    ///
+    /// A rule that names a host instead of an address is saying *which* host to
+    /// talk to, and for a caller that re-originates TLS that is not only where to
+    /// connect but also what to present as SNI — the origin answers to the rule's
+    /// name, and the address it resolved to is an alias for it. Measured on the
+    /// device: reaching a Steam Community address with the client's own name in
+    /// SNI fails the handshake (`rc=35`), while the rule's name completes it and
+    /// returns 200. The client's name and the origin's name are genuinely
+    /// different questions here, and only this pairing answers the second.
+    ///
+    /// Paired rather than a bare list because one entry may name several hosts,
+    /// and the host that answered is the one whose name has to be presented.
+    ///
+    /// It is a lookup table, not a parallel array to `addresses`: an address that
+    /// is also listed literally appears in both, and an address no name produced
+    /// appears in neither.
+    ///
+    /// Carried on the plan rather than looked up again after the connect, because
+    /// the cache is refilled on a tick — a second read could describe a later
+    /// tick than the addresses that were actually dialled.
+    pub dial_addresses: Vec<(String, IpAddr)>,
+    /// Candidates that must be dialled *without* SNI, when one of them answers.
+    ///
+    /// The third answer to "which name is the origin asked for". A rule's source
+    /// sometimes has an address and no name for it, and asking such an origin for
+    /// the client's name is measured to be refused — see
+    /// [`CompiledEntry::no_sni`](crate::ruleset::CompiledEntry::no_sni).
+    ///
+    /// A subset of `addresses`, filtered to the same family for the same reason
+    /// the pairing above is: a plan dials one family, and a flag on an address
+    /// this plan will never dial would claim something that cannot happen.
+    ///
+    /// Only meaningful to a caller that re-originates TLS. A caller that relays
+    /// ciphertext cannot change SNI and has no use for this — the client's own
+    /// ClientHello already carries whatever it is going to carry.
+    pub no_sni: Vec<IpAddr>,
     /// Preferred port from the rule, when it supplies one.
     pub port: Option<u16>,
     /// Certificate names from the rule, for diagnostics and future pinning.
@@ -125,6 +163,8 @@ impl Plan {
             rule_domain: None,
             addresses: Vec::new(),
             dial_names: Vec::new(),
+            dial_addresses: Vec::new(),
+            no_sni: Vec::new(),
             port: None,
             cert: Vec::new(),
             placeholders: Vec::new(),
@@ -154,10 +194,14 @@ pub struct Router {
     /// order of minutes, and it would put a blocking lookup in the engine's data
     /// path — which is why the engine had no dial-name support at all before this.
     ///
+    /// Each address keeps the name that produced it. An entry may name several
+    /// hosts, and a caller that re-originates TLS has to present the right one —
+    /// see [`Plan::dial_addresses`].
+    ///
     /// Keyed by entry because that is what a plan carries. Entry keys are indices
     /// into the current rule set, so the cache is dropped whenever the rules are
     /// replaced; stale keys would otherwise point at unrelated entries.
-    resolved_dial: HashMap<u32, Vec<IpAddr>>,
+    resolved_dial: HashMap<u32, Vec<(String, IpAddr)>>,
 }
 
 impl Router {
@@ -229,16 +273,20 @@ impl Router {
         F: FnMut(&str) -> Vec<IpAddr>,
     {
         let mut resolved = 0usize;
-        let mut cache: HashMap<u32, Vec<IpAddr>> = HashMap::new();
+        let mut cache: HashMap<u32, Vec<(String, IpAddr)>> = HashMap::new();
         for entry in self.rules.entries() {
             if entry.dial_names.is_empty() {
                 continue;
             }
-            let mut addresses: Vec<IpAddr> = Vec::new();
+            // Deduplicated by address, keeping the first name that produced it.
+            // Two names in one entry often resolve to the same edge (the puller's
+            // upstream map has 2610 pairs over 75 distinct names), and the first
+            // is the one the rule author ranked first.
+            let mut addresses: Vec<(String, IpAddr)> = Vec::new();
             for name in &entry.dial_names {
                 for addr in resolve(name) {
-                    if !addr.is_unspecified() && !addresses.contains(&addr) {
-                        addresses.push(addr);
+                    if !addr.is_unspecified() && !addresses.iter().any(|(_, seen)| *seen == addr) {
+                        addresses.push((name.clone(), addr));
                     }
                 }
             }
@@ -259,6 +307,25 @@ impl Router {
     /// How many entries currently have addresses from a dial name.
     pub fn resolved_dial_entries(&self) -> usize {
         self.resolved_dial.len()
+    }
+
+    /// The cached resolutions for `key`, paired with their names and filtered to
+    /// the family the caller asked for.
+    ///
+    /// Filtered by family here rather than at each call site because the cache is
+    /// family-agnostic — a name is a lookup whose family is not known until it
+    /// answers — while every plan is built for one family.
+    fn named_addresses(&self, key: u32, family: Family) -> Vec<(String, IpAddr)> {
+        self.resolved_dial
+            .get(&key)
+            .map(|pairs| {
+                pairs
+                    .iter()
+                    .filter(|(_, addr)| family.admits(*addr))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Plan a connection for `domain` in the requested address `family`.
@@ -294,22 +361,34 @@ impl Router {
         // Membership is tested against a set built once rather than by scanning
         // the candidate list per name: the list can hold hundreds of addresses and
         // `Vec::contains` in that loop would make planning quadratic again.
-        let addresses = if strategy == Strategy::RuleAddresses {
+        let (addresses, dial_addresses) = if strategy == Strategy::RuleAddresses {
             let mut candidates = self.selector.rank(now, &same_family);
-            if let Some(from_names) = self.resolved_dial.get(&entry.key) {
-                let mut present: HashSet<IpAddr> = candidates.iter().copied().collect();
-                for addr in from_names {
-                    if family.admits(*addr) && present.insert(*addr) {
-                        candidates.push(*addr);
-                    }
+            let named = self.named_addresses(entry.key, family);
+            let mut present: HashSet<IpAddr> = candidates.iter().copied().collect();
+            for (_, addr) in &named {
+                if present.insert(*addr) {
+                    candidates.push(*addr);
                 }
             }
-            candidates
+            (candidates, named)
         } else {
-            Vec::new()
+            (Vec::new(), Vec::new())
         };
         let dial_names = if strategy == Strategy::RuleAddresses {
             entry.dial_names.clone()
+        } else {
+            Vec::new()
+        };
+        // Gated on the same condition as the candidates, and filtered to the same
+        // family: an address this plan will not dial must not be described as one
+        // it would reach without a name.
+        let no_sni = if strategy == Strategy::RuleAddresses {
+            entry
+                .no_sni
+                .iter()
+                .copied()
+                .filter(|addr| family.admits(*addr))
+                .collect()
         } else {
             Vec::new()
         };
@@ -322,6 +401,8 @@ impl Router {
             rule_domain: Some(found.rule_domain.to_string()),
             addresses,
             dial_names,
+            dial_addresses,
+            no_sni,
             port: entry.port,
             cert: entry.cert.clone(),
             placeholders: entry.placeholders.clone(),
@@ -375,6 +456,13 @@ impl Router {
             rule_domain: entry.domains.first().cloned(),
             addresses,
             dial_names: entry.dial_names.clone(),
+            dial_addresses: self.named_addresses(entry.key, family),
+            no_sni: entry
+                .no_sni
+                .iter()
+                .copied()
+                .filter(|candidate| family.admits(*candidate))
+                .collect(),
             port: entry.port,
             cert: entry.cert.clone(),
             placeholders: entry.placeholders.clone(),
@@ -440,7 +528,9 @@ mod tests {
           { "id": "2", "name": "Placeholder", "domains": ["placeholder.example"], "ips": ["{Cloudflare}"], "port": "443", "isPlaceholder": true },
           { "id": "3", "name": "V6 only", "domains": ["v6.example"], "ips": ["2001:db8::1"], "port": "443", "isPlaceholder": false },
           { "id": "4", "name": "Dialled", "domains": ["dialled.example"], "ips": ["steamstore-a.akamaihd.net.edgesuite.net"], "port": "443", "isPlaceholder": false },
-          { "id": "5", "name": "Both", "domains": ["both.example"], "ips": ["203.0.113.30", "edge.example.net"], "port": "443", "isPlaceholder": false }
+          { "id": "5", "name": "Both", "domains": ["both.example"], "ips": ["203.0.113.30", "edge.example.net", "other.example.net"], "port": "443", "isPlaceholder": false },
+          { "id": "6", "name": "Unnamed", "domains": ["unnamed.example"], "ips": ["!203.0.113.40", "203.0.113.41"], "port": "443", "isPlaceholder": false },
+          { "id": "7", "name": "Unnamed v6", "domains": ["unnamed6.example"], "ips": ["!2001:db8::7"], "port": "443", "isPlaceholder": false }
         ] }
       ]
     }"#;
@@ -475,6 +565,60 @@ mod tests {
     }
 
     #[test]
+    fn a_flagged_address_rides_the_plan_as_one_to_reach_without_a_name() {
+        // The rule named an address and no host, so the caller has to present
+        // nothing. The unflagged address beside it is untouched — the flag is per
+        // address, not per entry, because the two lines make different claims.
+        let plan = router().plan(Instant::now(), "unnamed.example", Family::V4);
+        assert_eq!(plan.strategy, Strategy::RuleAddresses);
+        assert_eq!(plan.addresses, vec![v4(40), v4(41)]);
+        assert_eq!(plan.no_sni, vec![v4(40)]);
+        assert!(plan.dial_addresses.is_empty(), "no name was resolved here");
+    }
+
+    #[test]
+    fn a_rule_that_names_a_host_has_nothing_to_leave_unnamed() {
+        // The complement of the case above. A rule that named a host wants that
+        // name presented, so the two lists must never both fill up for one entry
+        // — that would be two contradictory answers to one question.
+        let plan = router().plan(Instant::now(), "dialled.example", Family::V4);
+        assert!(plan.no_sni.is_empty());
+    }
+
+    #[test]
+    fn a_flag_on_an_address_this_plan_cannot_dial_is_dropped() {
+        // The rule flags a v6 address and the caller asked for v4. This plan will
+        // dial nothing, so saying it would reach something without a name would
+        // describe a connection that cannot happen.
+        let plan = router().plan(Instant::now(), "unnamed6.example", Family::V4);
+        assert!(plan.addresses.is_empty());
+        assert!(plan.no_sni.is_empty());
+
+        let plan = router().plan(Instant::now(), "unnamed6.example", Family::V6);
+        assert_eq!(plan.no_sni.len(), 1, "v6 asked, so v6 is answered");
+    }
+
+    #[test]
+    fn a_plan_that_dials_nothing_flags_nothing() {
+        // A placeholder-only entry yields no candidates at all: there is nothing
+        // to reach and therefore nothing to leave unnamed.
+        let plan = router().plan(Instant::now(), "placeholder.example", Family::V4);
+        assert_eq!(plan.strategy, Strategy::PlaceholderFallback);
+        assert!(plan.no_sni.is_empty());
+    }
+
+    #[test]
+    fn planning_by_address_keeps_the_flag() {
+        // The address-only path — what a client whose DNS was never observed
+        // takes — builds its own candidate list, with the dialled address moved
+        // first. The flag has to survive that, or the two paths would disagree
+        // about the same rule.
+        let plan = router().plan_for_ip(Instant::now(), v4(41));
+        assert_eq!(plan.addresses, vec![v4(41), v4(40)]);
+        assert_eq!(plan.no_sni, vec![v4(40)]);
+    }
+
+    #[test]
     fn a_dial_name_is_a_usable_plan_without_addresses() {
         // The rule knows a name but no address. That is still a plan: the caller
         // resolves it. Reporting `needs_upstream_resolution` here would make the
@@ -494,7 +638,10 @@ mod tests {
         let plan = router().plan(Instant::now(), "both.example", Family::V4);
         assert_eq!(plan.strategy, Strategy::RuleAddresses);
         assert_eq!(plan.addresses, vec![v4(30)]);
-        assert_eq!(plan.dial_names, vec!["edge.example.net"]);
+        assert_eq!(
+            plan.dial_names,
+            vec!["edge.example.net", "other.example.net"]
+        );
         assert!(!plan.needs_upstream_resolution());
     }
 
@@ -554,6 +701,131 @@ mod tests {
         // has to resolve something — it just is not a rule address.
         let plan = r.plan(Instant::now(), "dialled.example", Family::V4);
         assert!(plan.addresses.is_empty());
+    }
+
+    #[test]
+    fn a_resolved_name_travels_with_the_address_it_produced() {
+        // The pairing is what lets a caller that re-originates TLS present the
+        // *rule's* name: the origin answers to that name, not to the client's.
+        // Without it the caller only knows an address and has to guess.
+        let mut r = router();
+        r.resolve_dial_names(|name| {
+            if name == "edge.example.net" {
+                vec![v4(88)]
+            } else {
+                vec![v4(77)]
+            }
+        });
+
+        let plan = r.plan(Instant::now(), "dialled.example", Family::V4);
+        assert_eq!(
+            plan.dial_addresses,
+            vec![(
+                "steamstore-a.akamaihd.net.edgesuite.net".to_string(),
+                v4(77)
+            )]
+        );
+        assert_eq!(
+            plan.addresses,
+            vec![v4(77)],
+            "the address is still dialable"
+        );
+    }
+
+    #[test]
+    fn each_name_keeps_its_own_address_in_the_pairing() {
+        // One entry, several names: the pair is what says which name to present
+        // for the address that actually answered. Pairing by position instead
+        // would be wrong as soon as two names resolve to different addresses,
+        // because the caller dials a set, not a list of names.
+        let mut r = router();
+        r.resolve_dial_names(|name| {
+            if name == "edge.example.net" {
+                vec![v4(88)]
+            } else {
+                vec![v4(77)]
+            }
+        });
+
+        let plan = r.plan(Instant::now(), "both.example", Family::V4);
+        assert_eq!(
+            plan.dial_addresses,
+            vec![
+                ("edge.example.net".to_string(), v4(88)),
+                ("other.example.net".to_string(), v4(77)),
+            ]
+        );
+        // Literal first, then the names in document order.
+        assert_eq!(plan.addresses, vec![v4(30), v4(88), v4(77)]);
+    }
+
+    #[test]
+    fn a_name_that_produced_no_address_is_absent_from_the_pairing() {
+        // The entry's first name fails, the second answers. The pairing must
+        // claim the answer for the name that produced it and say nothing about
+        // the one that did not — a caller reading a name off the wrong address
+        // would present a name that origin never answered to.
+        let mut r = router();
+        r.resolve_dial_names(|name| {
+            if name == "edge.example.net" {
+                Vec::new()
+            } else {
+                vec![v4(77)]
+            }
+        });
+
+        let plan = r.plan(Instant::now(), "both.example", Family::V4);
+        assert_eq!(plan.addresses, vec![v4(30), v4(77)]);
+        assert_eq!(
+            plan.dial_addresses,
+            vec![("other.example.net".to_string(), v4(77))]
+        );
+        // The literal address is nobody's answer, so no name may be attached.
+        assert!(
+            !plan.dial_addresses.iter().any(|(_, addr)| *addr == v4(30)),
+            "no name produced that address"
+        );
+    }
+
+    #[test]
+    fn an_entry_whose_names_all_fail_keeps_its_literal_addresses() {
+        // Every name fails but the rule still lists a literal address. That
+        // address stays dialable and the pairing stays empty: there is no name
+        // to present for it, so the caller falls back to the client's.
+        let mut r = router();
+        r.resolve_dial_names(|_| Vec::new());
+
+        let plan = r.plan(Instant::now(), "both.example", Family::V4);
+        assert_eq!(plan.addresses, vec![v4(30)]);
+        assert!(plan.dial_addresses.is_empty());
+        assert_eq!(plan.dial_names.len(), 2, "the names are still reported");
+    }
+
+    #[test]
+    fn a_pairing_is_dropped_when_its_family_does_not_match() {
+        // The cache is family-agnostic — a name's family is unknown until it
+        // answers — but a plan is not. Keeping a pair for an address the plan
+        // will never dial would make the pairing claim something false.
+        let mut r = router();
+        r.resolve_dial_names(|_| vec!["2001:db8::1".parse::<IpAddr>().unwrap()]);
+
+        let plan = r.plan(Instant::now(), "dialled.example", Family::V4);
+        assert!(plan.addresses.is_empty());
+        assert!(plan.dial_addresses.is_empty());
+        // The name itself is still reported: the rule did name a host.
+        assert_eq!(
+            plan.dial_names,
+            vec!["steamstore-a.akamaihd.net.edgesuite.net"]
+        );
+    }
+
+    #[test]
+    fn a_rule_with_only_literal_addresses_pairs_nothing() {
+        // Nothing resolved here, so there is no rule name to present. A caller
+        // must fall back to the name the client asked for.
+        let plan = router().plan(Instant::now(), "concrete.example", Family::V4);
+        assert!(!plan.addresses.is_empty());
+        assert!(plan.dial_addresses.is_empty());
     }
 
     #[test]

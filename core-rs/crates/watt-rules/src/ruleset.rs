@@ -100,6 +100,32 @@ pub struct CompiledEntry {
     /// constraint is the rule author's to satisfy, and the selector will learn
     /// about it the hard way if they get it wrong.
     pub dial_names: Vec<String>,
+    /// Addresses from `ips` written as `!<address>`, meaning "dial this address
+    /// and present *no* SNI".
+    ///
+    /// A third answer to "which name is the origin asked for", alongside the
+    /// client's name and a rule-supplied name. The upstream's own Caddyfile
+    /// reaches some of its blocks over a bare `reverse_proxy <address>` with no
+    /// `tls_server_name`, which is Caddy's way of saying the upstream has no
+    /// name — and a bare address is the only thing left to dial.
+    ///
+    /// Measured on the device over 13 such addresses: presenting the client's
+    /// name in SNI is refused by 11 of them (RST 0.06–0.4 s in, i.e. after the
+    /// TCP connect, so the address itself is live), while reaching the same
+    /// addresses with no SNI completes the handshake on 10. An unrelated name in
+    /// SNI succeeds on 8, which is what rules out "the address is dead".
+    ///
+    /// Always a subset of `ips`: the address stays a candidate to dial, and this
+    /// only says which name to leave out when it is the one that answers. A flag
+    /// on an address nobody dials would mean nothing, so the two are kept in step
+    /// rather than the flag living in a list of its own.
+    ///
+    /// It is *not* inferable from "the first field is an address". A hosts file
+    /// listing a domain's real address (`20.205.243.166 github.com`) describes an
+    /// origin that does answer to the client's name, and dropping SNI there would
+    /// ask a different question of a different server. The rule has to say which
+    /// it means, which is what the `!` token is for.
+    pub no_sni: Vec<IpAddr>,
     /// CDN placeholders found in `ips`.
     pub placeholders: Vec<Placeholder>,
     /// Upstream `port`, when present. Used as the default when the client does
@@ -195,12 +221,41 @@ impl RuleSet {
                 // the rule set quadratic — measurable as seconds of startup.
                 let mut ips: Vec<IpAddr> = Vec::new();
                 let mut seen_ips: HashSet<IpAddr> = HashSet::new();
+                let mut no_sni: Vec<IpAddr> = Vec::new();
                 let mut dial_names: Vec<String> = Vec::new();
                 let mut placeholders: Vec<Placeholder> = Vec::new();
                 for raw in &entry.ips {
                     if let Some(placeholder) = Placeholder::parse(raw) {
                         if !placeholders.contains(&placeholder) {
                             placeholders.push(placeholder);
+                        }
+                        continue;
+                    }
+                    // `!<address>`: dial it and present no SNI. Checked before the
+                    // bare-address branch because `!` is not part of an address,
+                    // so the two can never be confused.
+                    //
+                    // A malformed one is dropped rather than reinterpreted. `!name`
+                    // is a contradiction — a name *is* what SNI carries, so there is
+                    // no way to present nothing — and reading it as the plain dial
+                    // name `name` would silently discard the half of the author's
+                    // intent that the `!` expressed. One fewer candidate is the
+                    // honest outcome, and the same one a typo gets everywhere else
+                    // in this loop.
+                    if let Some(rest) = raw.trim().strip_prefix('!') {
+                        if let Ok(addr) = rest.trim().parse::<IpAddr>() {
+                            if !addr.is_unspecified() {
+                                if seen_ips.insert(addr) {
+                                    ips.push(addr);
+                                }
+                                // After `seen_ips` so that a bare `1.2.3.4`
+                                // elsewhere in the same list cannot un-flag it:
+                                // the `!` is the more specific claim, and it wins
+                                // whichever order the two appear in.
+                                if !no_sni.contains(&addr) {
+                                    no_sni.push(addr);
+                                }
+                            }
                         }
                         continue;
                     }
@@ -256,6 +311,7 @@ impl RuleSet {
                     domains,
                     ips,
                     dial_names,
+                    no_sni,
                     placeholders,
                     port: entry.port,
                     cert,
@@ -462,6 +518,72 @@ mod tests {
         let entry = only_entry(&rules);
         assert!(entry.dial_names.is_empty());
         assert!(entry.ips.is_empty());
+    }
+
+    #[test]
+    fn a_bang_address_is_a_route_that_presents_no_name() {
+        // The third state: dial this address and ask the origin for nothing.
+        // The address has to stay in `ips` — it is still what gets dialled, and
+        // `no_sni` alone would leave the entry looking like a placeholder.
+        let rules = compile(r#"["!203.0.113.7"]"#);
+        let entry = only_entry(&rules);
+        assert_eq!(entry.ips, vec!["203.0.113.7".parse::<IpAddr>().unwrap()]);
+        assert_eq!(entry.no_sni, vec!["203.0.113.7".parse::<IpAddr>().unwrap()]);
+        assert!(
+            entry.has_concrete_ips(),
+            "it is dialable, not a placeholder"
+        );
+        assert!(entry.dial_names.is_empty());
+        assert!(entry.placeholders.is_empty());
+    }
+
+    #[test]
+    fn a_plain_address_is_dialled_under_the_clients_own_name() {
+        // The guard against the tempting shortcut of reading "the first field is
+        // an address" as "this origin has no name". A hosts file that lists a
+        // domain's real address is describing an origin that *does* answer to the
+        // client's name, and switching it to no SNI would ask a different server
+        // a different question.
+        let rules = compile(r#"["203.0.113.7"]"#);
+        let entry = only_entry(&rules);
+        assert_eq!(entry.ips.len(), 1);
+        assert!(entry.no_sni.is_empty());
+    }
+
+    #[test]
+    fn a_bang_token_that_is_not_an_address_is_dropped() {
+        // `!name` is a contradiction — a name is exactly what SNI carries — so it
+        // is dropped rather than quietly read as the plain dial name `name`.
+        // `!1.2.3` is a typo, and an unspecified address is a hosts-file blocklist
+        // entry, which must not become a route just because it was flagged.
+        let rules = compile(r#"["!edge.example.net","!1.2.3","!0.0.0.0","!203.0.113.7"]"#);
+        let entry = only_entry(&rules);
+        assert_eq!(entry.ips, vec!["203.0.113.7".parse::<IpAddr>().unwrap()]);
+        assert_eq!(entry.no_sni, vec!["203.0.113.7".parse::<IpAddr>().unwrap()]);
+        assert!(
+            entry.dial_names.is_empty(),
+            "`!edge.example.net` is not a name"
+        );
+    }
+
+    #[test]
+    fn the_bang_form_wins_over_the_bare_one_in_either_order() {
+        // One entry may list the same address twice, once flagged. The flag is the
+        // more specific claim, so it must not depend on which line came first —
+        // the compiled entry is a set, and a set has no order to lose.
+        for ips in [
+            r#"["203.0.113.7","!203.0.113.7"]"#,
+            r#"["!203.0.113.7","203.0.113.7"]"#,
+        ] {
+            let rules = compile(ips);
+            let entry = only_entry(&rules);
+            assert_eq!(entry.ips.len(), 1, "still one address, not two");
+            assert_eq!(
+                entry.no_sni,
+                vec!["203.0.113.7".parse::<IpAddr>().unwrap()],
+                "for {ips}"
+            );
+        }
     }
 
     #[test]

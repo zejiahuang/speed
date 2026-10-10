@@ -768,7 +768,7 @@ pub extern "system" fn Java_dev_detour_core_Kernel_nativeMitmCaPem(
 /// Fill `out` with the root-mode proxy's counters, in the order
 /// `Kernel.MitmStats` reads them.
 ///
-/// Seven fields, fixed by `Kernel.MITM_STATS_FIELDS`. The hazard is the same one
+/// Nine fields, fixed by `Kernel.MITM_STATS_FIELDS`. The hazard is the same one
 /// `nativeStats` carries: a mismatch does not fail, it silently shifts every
 /// field after the gap.
 #[no_mangle]
@@ -789,6 +789,8 @@ pub extern "system" fn Java_dev_detour_core_Kernel_nativeMitmStats(
         stats.served,
         stats.refused,
         stats.dial_failures,
+        stats.named_upstreams,
+        stats.no_sni_upstreams,
         stats.bytes_to_upstream,
         stats.bytes_to_client,
     ];
