@@ -65,6 +65,25 @@ object UpdateChecker {
     private const val MIRROR_PREFIX = "https://gh-proxy.com/"
 
     /**
+     * The repository, as `owner/name`.
+     *
+     * One constant, because two places need it in two shapes and a second literal
+     * is a second place to forget: [DEFAULT_MANIFEST_URL] interpolates it into the
+     * API endpoint, and [REPO_URL] turns it into a page a person can open. The
+     * About screen shows the latter, so a repository that moved would otherwise
+     * leave the update check pointed at the new home and the link at the old one —
+     * and the link is the one nobody would notice was broken, because it is only
+     * read by eye.
+     */
+    private const val REPO_SLUG = "zejiahuang/speed"
+
+    /**
+     * The project's repository, for a person to open rather than for the checker
+     * to fetch. Shown on the About screen; see [REPO_SLUG].
+     */
+    const val REPO_URL = "https://github.com/$REPO_SLUG"
+
+    /**
      * The default update source: this project's GitHub Releases, reached through
      * the `gh-proxy.com` mirror rather than `api.github.com` directly.
      *
@@ -87,7 +106,7 @@ object UpdateChecker {
      * so the default and the code that consumes it cannot drift apart.
      */
     const val DEFAULT_MANIFEST_URL =
-        MIRROR_PREFIX + "https://api.github.com/repos/zejiahuang/speed/releases/latest"
+        MIRROR_PREFIX + "https://api.github.com/repos/$REPO_SLUG/releases/latest"
 
     /**
      * The path [DEFAULT_MANIFEST_URL] ends with, and the only shape

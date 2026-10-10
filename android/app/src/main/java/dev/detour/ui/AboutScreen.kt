@@ -22,6 +22,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.rememberCoroutineScope
@@ -35,12 +36,14 @@ import dev.detour.core.Kernel
 import dev.detour.core.KernelState
 import dev.detour.core.Prefs
 import dev.detour.core.RuleIndex
+import dev.detour.core.RuleSource
 import dev.detour.core.UpdateChecker
 import dev.detour.core.UpdateState
 import dev.detour.ui.components.DetourButton
 import dev.detour.ui.components.DetourButtonVariant
 import dev.detour.ui.components.DetourDivider
 import dev.detour.ui.components.DetourKeyValueRow
+import dev.detour.ui.components.DetourNavRow
 import dev.detour.ui.components.DetourPageHeader
 import dev.detour.ui.components.DetourSectionCard
 import dev.detour.ui.components.DetourSegmentedRow
@@ -132,7 +135,15 @@ fun AboutScreen(onClose: () -> Unit) {
     // carries a string resource, a user-added source carries its own label.
     // `prefs.ruleSource` would be wrong here — that is the source's *id*
     // (`github-hosts`), a storage key rather than something to show a person.
-    val source = prefs.selectedSource
+    //
+    // Resolved through the mode, because this line answers "which document is in
+    // force" and in root mode that is not the selected source. The mode is
+    // collected rather than read once: it can change underneath this page (a
+    // restart from the control channel, an auto-connect), and a line that kept
+    // naming the old document would be the same class of wrong as the stale rule
+    // count above it.
+    val status by KernelState.status.collectAsState()
+    val source = RuleSource.forMode(status.mode, prefs.selectedSource)
     val sourceLabel = source.labelRes?.let { stringResource(it) } ?: source.label
 
     val ruleScale = ruleCounts?.let { (domains, addresses) ->
@@ -221,6 +232,26 @@ fun AboutScreen(onClose: () -> Unit) {
                 DetourKeyValueRow(
                     label = stringResource(R.string.about_device),
                     value = device,
+                )
+            }
+
+            DetourSectionCard(
+                title = stringResource(R.string.about_section_project),
+                modifier = Modifier.padding(horizontal = 20.dp),
+            ) {
+                // The link is the whole card, and the URL is printed under it
+                // rather than hidden behind the tap. A row that says 项目仓库 and
+                // nothing else asks the reader to trust that it goes somewhere
+                // sane; showing the address is what makes it a link rather than a
+                // button whose destination is a secret.
+                //
+                // It comes from `UpdateChecker.REPO_URL`, the same constant the
+                // update check derives its endpoint from, so the two cannot point
+                // at different repositories — see that constant's note.
+                DetourNavRow(
+                    label = stringResource(R.string.about_repo),
+                    hint = UpdateChecker.REPO_URL,
+                    onClick = { openInBrowser(context, UpdateChecker.REPO_URL) },
                 )
             }
 

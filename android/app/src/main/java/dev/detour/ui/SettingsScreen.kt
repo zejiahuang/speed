@@ -163,8 +163,97 @@ private class SettingsRow(
     val page: SettingsPage,
     val searchText: List<String>,
     val visible: Boolean = true,
+    /**
+     * The modes this row's setting actually applies to.
+     *
+     * Defaults to [EVERY_MODE], so the rows that mean the same thing whatever is
+     * running say nothing about it. What carries a mode is a row whose setting
+     * reaches something only one mode has:
+     *
+     *   * **[VPN_ONLY]** — everything in [Prefs.kernelSettingsJson], the document
+     *     the engine is built from. `Kernel.startVpn` is its only consumer:
+     *     `startProxy(port, rules)` and `startMitm(port, rules, caDir)` take no
+     *     config at all, so in those two modes these rows would move a number that
+     *     nothing reads. That is the whole of the upstream exit, the DNS upstream
+     *     resolver and the kernel card.
+     *   * **[PROXY_ONLY]** — the proxy port, which only `startProxy` is given.
+     *
+     * Nothing is tagged for root mode, and that is a finding rather than an
+     * omission: root mode has no settings of its own. Its rule source is pinned by
+     * the mode (`RuleSource.rootSource`) and shown by the branch below, and it
+     * takes no kernel settings document — `startMitm(port, rules, caDir)` has no
+     * config parameter. What root mode *does* have is a notice about its cost, and
+     * that one row is deliberately left in every mode; the comment on it says why.
+     *
+     * ⚠️ **This is a filter on what is *drawn*, not a second `visible`.** [visible]
+     * is a control that is off, and the row animates open when it comes on — which
+     * is why it is a flag rather than an `if` around the `add`. A mode mismatch is
+     * not that: a proxy-port row in TUN mode is not a collapsed row waiting to
+     * expand, it is a row about a mode that is not running, and animating it in on
+     * a mode change would say the mode switch had revealed it.
+     */
+    val modes: Set<KernelState.Mode> = EVERY_MODE,
     val content: @Composable () -> Unit,
 )
+
+/** The rows that apply whatever is running. */
+private val EVERY_MODE: Set<KernelState.Mode> = setOf(
+    KernelState.Mode.VPN,
+    KernelState.Mode.PROXY,
+    KernelState.Mode.ROOT,
+)
+
+/**
+ * The rows that reach the kernel's settings document.
+ *
+ * A code fact rather than a judgement: `kernelSettingsJson` is read in exactly one
+ * place, `DetourVpnService.startVpn`, and neither of the other two entry points
+ * takes a config parameter. See [SettingsRow.modes].
+ */
+private val VPN_ONLY: Set<KernelState.Mode> = setOf(KernelState.Mode.VPN)
+
+/** The rows that reach the local proxy. See [SettingsRow.modes]. */
+private val PROXY_ONLY: Set<KernelState.Mode> = setOf(KernelState.Mode.PROXY)
+
+/**
+ * A group's title, which for one group depends on the mode.
+ *
+ * 高级 is titled 高级：内核参数, and in proxy and root mode that is a promise the
+ * page cannot keep: `startProxy` and `startMitm` take no config document, so every
+ * kernel row is filtered out and what is left is the console. A title naming rows
+ * the page does not have is worse than a plain one, because the title is also a
+ * **search key** — 内核参数 would answer with a group that contains none.
+ */
+private fun SettingsPage.titleFor(mode: KernelState.Mode): Int = when {
+    this != SettingsPage.ADVANCED -> titleRes
+    mode == KernelState.Mode.VPN -> R.string.settings_section_advanced
+    else -> R.string.settings_section_advanced_shell
+}
+
+/**
+ * A group's one-line summary, per mode.
+ *
+ * These name the rows inside, so they have to move with the filter. 连接's said
+ * 代理端口、规则源、上游出口与解析器, and **no single mode has all four**: TUN mode
+ * has no proxy port, proxy mode has neither the exit nor the resolver. The line a
+ * person reads to decide which page to open is the last place that should describe
+ * a page that does not exist.
+ */
+private fun SettingsPage.summaryFor(mode: KernelState.Mode): Int = when (this) {
+    SettingsPage.CONNECTION -> when (mode) {
+        KernelState.Mode.PROXY -> R.string.settings_page_connection_proxy
+        KernelState.Mode.ROOT -> R.string.settings_page_connection_root
+        else -> R.string.settings_page_connection
+    }
+
+    SettingsPage.ADVANCED -> if (mode == KernelState.Mode.VPN) {
+        R.string.settings_page_advanced
+    } else {
+        R.string.settings_page_advanced_shell
+    }
+
+    else -> summaryRes
+}
 
 /**
  * How many executed commands the console keeps on screen.
@@ -444,7 +533,7 @@ fun SettingsScreen(
             val proxyLabel = stringResource(R.string.settings_proxy_port)
             val proxyHint = stringResource(R.string.settings_proxy_port_hint, prefs.proxyPort)
             add(
-                SettingsRow(SettingsPage.CONNECTION, listOf(proxyLabel, proxyHint)) {
+                SettingsRow(SettingsPage.CONNECTION, listOf(proxyLabel, proxyHint), modes = PROXY_ONLY) {
                     DetourStepperRow(
                         label = proxyLabel,
                         value = prefs.proxyPort.toString(),
@@ -468,94 +557,141 @@ fun SettingsScreen(
         // one control: splitting them would let a search surface a source with
         // no heading, or a heading with no source, and the dividers between them
         // would appear where the original had none.
+        //
+        // **Root mode gets none of it**, and the branch is on the mode rather than
+        // on anything about the sources. Root mode's source is fixed by the mode
+        // itself — see `RuleSource.rootSource` — so a list of radios here could not
+        // change what runs, and neither could "添加自定义源" or "导入本地文件":
+        // both only take effect in the other two modes. A control that cannot move
+        // what the app runs is the thing this screen does not draw. What replaces
+        // them is the source that *is* in force, its address, and the one action
+        // that changes it — the mode picker on the home screen.
         val sourceHeading = stringResource(R.string.rules_source)
         val addSourceLabel = stringResource(R.string.rules_add_source)
         val importLocalLabel = stringResource(R.string.rules_import_local)
         val localSourceLabel = stringResource(R.string.rules_source_local)
-        add(
-            SettingsRow(
-                page = SettingsPage.CONNECTION,
-                searchText = buildList {
-                    add(sourceHeading)
-                    add(addSourceLabel)
-                    add(importLocalLabel)
-                    prefs.ruleSources.forEach { source ->
-                        add(source.labelRes?.let { stringResource(it) } ?: source.label)
-                        if (source.usable) add(source.url)
-                        if (source.isLocal) add(localSourceLabel)
+        val rootPinned = status.mode == KernelState.Mode.ROOT
+
+        if (rootPinned) {
+            val pinned = RuleSource.forMode(status.mode, prefs.selectedSource)
+            val pinnedLabel = pinned.labelRes?.let { stringResource(it) } ?: pinned.label
+            val pinnedHint = stringResource(R.string.rules_source_root_pinned)
+            add(
+                SettingsRow(
+                    page = SettingsPage.CONNECTION,
+                    searchText = listOf(sourceHeading, pinnedLabel, pinned.url, pinnedHint),
+                ) {
+                    Text(
+                        sourceHeading,
+                        modifier = Modifier.padding(start = 16.dp, top = 12.dp),
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                    ) {
+                        Text(pinnedLabel, style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            pinned.url,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            pinnedHint,
+                            modifier = Modifier.padding(top = 4.dp),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 },
-            ) {
-                Text(
-                    sourceHeading,
-                    modifier = Modifier.padding(start = 16.dp, top = 12.dp),
-                    style = MaterialTheme.typography.bodyLarge,
-                )
-                prefs.ruleSources.forEach { source ->
-                    RuleSourceRow(
-                        source = source,
-                        selected = source.id == prefs.ruleSourceId,
-                        onSelect = {
-                            prefs.updateRuleSource(source.id)
-                            RulesRepository.invalidate(context)
-                            DetourVpnService.reloadRulesIfRunning()
-                        },
-                        onDelete = {
-                            // Same two steps as selecting: the source list changed,
-                            // so the next load has to reflect it and a running
-                            // tunnel has to be handed the result. Removing the
-                            // *selected* source makes this load a different
-                            // document; removing any other is a no-op for the
-                            // tunnel, and the refetch it costs is the price of not
-                            // making the two paths differ in a way a caller cannot
-                            // see.
-                            prefs.removeRuleSource(source.id)
-                            RulesRepository.invalidate(context)
-                            DetourVpnService.reloadRulesIfRunning()
-                        },
-                    )
-                }
-                DetourDivider()
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { showAddSource = true }
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+            )
+        } else {
+            add(
+                SettingsRow(
+                    page = SettingsPage.CONNECTION,
+                    searchText = buildList {
+                        add(sourceHeading)
+                        add(addSourceLabel)
+                        add(importLocalLabel)
+                        prefs.ruleSources.forEach { source ->
+                            add(source.labelRes?.let { stringResource(it) } ?: source.label)
+                            if (source.usable) add(source.url)
+                            if (source.isLocal) add(localSourceLabel)
+                        }
+                    },
                 ) {
-                    Icon(Icons.Filled.Add, contentDescription = null)
-                    Spacer(Modifier.width(12.dp))
                     Text(
-                        addSourceLabel,
+                        sourceHeading,
+                        modifier = Modifier.padding(start = 16.dp, top = 12.dp),
                         style = MaterialTheme.typography.bodyLarge,
                     )
-                }
-                DetourDivider()
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { rulesImportPicker.launch(arrayOf("*/*")) }
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    // `Icons.Filled.Add` a second time, and that is a decision
-                    // rather than an oversight. `material-icons-core` is the only
-                    // icon artifact this app ships — the extended one is
-                    // deliberately not pulled in, see the build file — and it
-                    // carries no document or folder glyph. Of the ones it does
-                    // carry, `List` is already the rules tab's own icon and
-                    // `ExitToApp` points the opposite way; the plus is honest,
-                    // because this action *is* "add a source", only by file
-                    // instead of by address. The label is what separates the rows.
-                    Icon(Icons.Filled.Add, contentDescription = null)
-                    Spacer(Modifier.width(12.dp))
-                    Text(
-                        importLocalLabel,
-                        style = MaterialTheme.typography.bodyLarge,
-                    )
-                }
-            },
-        )
+                    prefs.ruleSources.forEach { source ->
+                        RuleSourceRow(
+                            source = source,
+                            selected = source.id == prefs.ruleSourceId,
+                            onSelect = {
+                                prefs.updateRuleSource(source.id)
+                                RulesRepository.invalidate(context)
+                                DetourVpnService.reloadRulesIfRunning()
+                            },
+                            onDelete = {
+                                // Same two steps as selecting: the source list changed,
+                                // so the next load has to reflect it and a running
+                                // tunnel has to be handed the result. Removing the
+                                // *selected* source makes this load a different
+                                // document; removing any other is a no-op for the
+                                // tunnel, and the refetch it costs is the price of not
+                                // making the two paths differ in a way a caller cannot
+                                // see.
+                                prefs.removeRuleSource(source.id)
+                                RulesRepository.invalidate(context)
+                                DetourVpnService.reloadRulesIfRunning()
+                            },
+                        )
+                    }
+                    DetourDivider()
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { showAddSource = true }
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Filled.Add, contentDescription = null)
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            addSourceLabel,
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                    }
+                    DetourDivider()
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { rulesImportPicker.launch(arrayOf("*/*")) }
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        // `Icons.Filled.Add` a second time, and that is a decision
+                        // rather than an oversight. `material-icons-core` is the only
+                        // icon artifact this app ships — the extended one is
+                        // deliberately not pulled in, see the build file — and it
+                        // carries no document or folder glyph. Of the ones it does
+                        // carry, `List` is already the rules tab's own icon and
+                        // `ExitToApp` points the opposite way; the plus is honest,
+                        // because this action *is* "add a source", only by file
+                        // instead of by address. The label is what separates the rows.
+                        Icon(Icons.Filled.Add, contentDescription = null)
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            importLocalLabel,
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                    }
+                },
+            )
+        }
 
         val refreshLabel = stringResource(R.string.settings_refresh_interval)
         add(
@@ -623,6 +759,12 @@ fun SettingsScreen(
         // the real one. A row of its own — always present, matched by search — so
         // it is findable whether or not the mode is selected, which a hint on a
         // mode-only control would not be.
+        // Deliberately **not** mode-scoped, unlike every other row in this card.
+        // It is a notice about a mode rather than a setting of one, and the row's
+        // own comment above says why it stays: it is the one consequence the app
+        // cannot show once the mode is running. Scoping it to root mode would hide
+        // the cost from exactly the people who have not chosen the mode yet —
+        // which is the only moment the warning can still change a decision.
         val rootRiskTitle = stringResource(R.string.settings_root_risk_title)
         val rootRiskBody = stringResource(R.string.settings_root_risk_body)
         add(
@@ -681,6 +823,10 @@ fun SettingsScreen(
                     exitLabel, exitHint, exitAddressLabel, exitKindLabel,
                     exitUserLabel, exitPassLabel, exitEnableLabel, exitEnableHint,
                 ),
+                // The exit is part of the settings document
+                // (`StackConfig::upstream_proxy`) and the document is read by
+                // `startVpn` alone — see [SettingsRow.modes].
+                modes = VPN_ONLY,
             ) {
                 Text(
                     exitLabel,
@@ -814,6 +960,9 @@ fun SettingsScreen(
                     add(resolverAddressLabel)
                     add(resolverAddressHint)
                 },
+                // The resolver is part of the settings document too, and the
+                // kernel only reads it in VPN mode — see [SettingsRow.modes].
+                modes = VPN_ONLY,
             ) {
                 DetourChoiceRow(
                     label = resolverLabel,
@@ -1206,7 +1355,7 @@ fun SettingsScreen(
 
         val maxCandLabel = stringResource(R.string.settings_max_candidates)
         add(
-            SettingsRow(SettingsPage.ADVANCED, listOf(maxCandLabel)) {
+            SettingsRow(SettingsPage.ADVANCED, listOf(maxCandLabel), modes = VPN_ONLY) {
                 DetourStepperRow(
                     label = maxCandLabel,
                     value = prefs.maxCandidates.toString(),
@@ -1218,7 +1367,7 @@ fun SettingsScreen(
 
         val staggerLabel = stringResource(R.string.settings_connect_stagger)
         add(
-            SettingsRow(SettingsPage.ADVANCED, listOf(staggerLabel)) {
+            SettingsRow(SettingsPage.ADVANCED, listOf(staggerLabel), modes = VPN_ONLY) {
                 DetourStepperRow(
                     label = staggerLabel,
                     value = "${prefs.connectStaggerMillis} ms",
@@ -1231,7 +1380,7 @@ fun SettingsScreen(
         val raceWidthLabel = stringResource(R.string.settings_race_width)
         val raceWidthHint = stringResource(R.string.settings_race_width_hint)
         add(
-            SettingsRow(SettingsPage.ADVANCED, listOf(raceWidthLabel, raceWidthHint)) {
+            SettingsRow(SettingsPage.ADVANCED, listOf(raceWidthLabel, raceWidthHint), modes = VPN_ONLY) {
                 DetourStepperRow(
                     label = raceWidthLabel,
                     value = prefs.raceWidth.toString(),
@@ -1244,7 +1393,7 @@ fun SettingsScreen(
 
         val raceLaunchLabel = stringResource(R.string.settings_race_launch)
         add(
-            SettingsRow(SettingsPage.ADVANCED, listOf(raceLaunchLabel)) {
+            SettingsRow(SettingsPage.ADVANCED, listOf(raceLaunchLabel), modes = VPN_ONLY) {
                 DetourStepperRow(
                     label = raceLaunchLabel,
                     value = "${prefs.raceLaunchMillis} ms",
@@ -1257,7 +1406,7 @@ fun SettingsScreen(
         val maxDialingLabel = stringResource(R.string.settings_max_dialing)
         val maxDialingHint = stringResource(R.string.settings_max_dialing_hint)
         add(
-            SettingsRow(SettingsPage.ADVANCED, listOf(maxDialingLabel, maxDialingHint)) {
+            SettingsRow(SettingsPage.ADVANCED, listOf(maxDialingLabel, maxDialingHint), modes = VPN_ONLY) {
                 DetourStepperRow(
                     label = maxDialingLabel,
                     value = prefs.maxDialing.toString(),
@@ -1270,7 +1419,7 @@ fun SettingsScreen(
 
         val cooldownLabel = stringResource(R.string.settings_failure_cooldown)
         add(
-            SettingsRow(SettingsPage.ADVANCED, listOf(cooldownLabel)) {
+            SettingsRow(SettingsPage.ADVANCED, listOf(cooldownLabel), modes = VPN_ONLY) {
                 DetourSliderRow(
                     label = cooldownLabel,
                     value = prefs.failureCooldownSeconds.toFloat(),
@@ -1284,7 +1433,7 @@ fun SettingsScreen(
         val dialNamesLabel = stringResource(R.string.settings_dial_names)
         val dialNamesHint = stringResource(R.string.settings_dial_names_hint)
         add(
-            SettingsRow(SettingsPage.ADVANCED, listOf(dialNamesLabel, dialNamesHint)) {
+            SettingsRow(SettingsPage.ADVANCED, listOf(dialNamesLabel, dialNamesHint), modes = VPN_ONLY) {
                 DetourToggleRow(
                     label = dialNamesLabel,
                     hint = dialNamesHint,
@@ -1309,7 +1458,7 @@ fun SettingsScreen(
         val mtuLabel = stringResource(R.string.settings_mtu)
         val mtuHint = stringResource(R.string.settings_mtu_hint)
         add(
-            SettingsRow(SettingsPage.ADVANCED, listOf(mtuLabel, mtuHint)) {
+            SettingsRow(SettingsPage.ADVANCED, listOf(mtuLabel, mtuHint), modes = VPN_ONLY) {
                 DetourStepperRow(
                     label = mtuLabel,
                     value = prefs.mtu.toString(),
@@ -1322,7 +1471,7 @@ fun SettingsScreen(
 
         val timeoutLabel = stringResource(R.string.settings_connect_timeout)
         add(
-            SettingsRow(SettingsPage.ADVANCED, listOf(timeoutLabel)) {
+            SettingsRow(SettingsPage.ADVANCED, listOf(timeoutLabel), modes = VPN_ONLY) {
                 DetourSliderRow(
                     label = timeoutLabel,
                     value = prefs.connectTimeoutSeconds.toFloat(),
@@ -1335,7 +1484,7 @@ fun SettingsScreen(
 
         val tcpIdleLabel = stringResource(R.string.settings_tcp_idle)
         add(
-            SettingsRow(SettingsPage.ADVANCED, listOf(tcpIdleLabel)) {
+            SettingsRow(SettingsPage.ADVANCED, listOf(tcpIdleLabel), modes = VPN_ONLY) {
                 DetourSliderRow(
                     label = tcpIdleLabel,
                     value = prefs.tcpIdleSeconds.toFloat(),
@@ -1348,7 +1497,7 @@ fun SettingsScreen(
 
         val udpIdleLabel = stringResource(R.string.settings_udp_idle)
         add(
-            SettingsRow(SettingsPage.ADVANCED, listOf(udpIdleLabel)) {
+            SettingsRow(SettingsPage.ADVANCED, listOf(udpIdleLabel), modes = VPN_ONLY) {
                 DetourSliderRow(
                     label = udpIdleLabel,
                     value = prefs.udpIdleSeconds.toFloat(),
@@ -1361,7 +1510,7 @@ fun SettingsScreen(
 
         val maxTcpLabel = stringResource(R.string.settings_max_tcp_flows)
         add(
-            SettingsRow(SettingsPage.ADVANCED, listOf(maxTcpLabel)) {
+            SettingsRow(SettingsPage.ADVANCED, listOf(maxTcpLabel), modes = VPN_ONLY) {
                 DetourStepperRow(
                     label = maxTcpLabel,
                     value = prefs.maxTcpFlows.toString(),
@@ -1373,7 +1522,7 @@ fun SettingsScreen(
 
         val maxUdpLabel = stringResource(R.string.settings_max_udp_flows)
         add(
-            SettingsRow(SettingsPage.ADVANCED, listOf(maxUdpLabel)) {
+            SettingsRow(SettingsPage.ADVANCED, listOf(maxUdpLabel), modes = VPN_ONLY) {
                 DetourStepperRow(
                     label = maxUdpLabel,
                     value = prefs.maxUdpFlows.toString(),
@@ -1386,7 +1535,7 @@ fun SettingsScreen(
         val answerDnsLabel = stringResource(R.string.settings_answer_dns)
         val answerDnsHint = stringResource(R.string.settings_answer_dns_hint)
         add(
-            SettingsRow(SettingsPage.ADVANCED, listOf(answerDnsLabel, answerDnsHint)) {
+            SettingsRow(SettingsPage.ADVANCED, listOf(answerDnsLabel, answerDnsHint), modes = VPN_ONLY) {
                 DetourToggleRow(
                     label = answerDnsLabel,
                     hint = answerDnsHint,
@@ -1402,7 +1551,7 @@ fun SettingsScreen(
         val certLabel = stringResource(R.string.settings_certificate_check)
         val certHint = stringResource(R.string.settings_certificate_check_hint)
         add(
-            SettingsRow(SettingsPage.ADVANCED, listOf(certLabel, certHint)) {
+            SettingsRow(SettingsPage.ADVANCED, listOf(certLabel, certHint), modes = VPN_ONLY) {
                 DetourToggleRow(
                     label = certLabel,
                     hint = certHint,
@@ -1415,7 +1564,7 @@ fun SettingsScreen(
         val observeDnsLabel = stringResource(R.string.settings_observe_dns)
         val observeDnsHint = stringResource(R.string.settings_observe_dns_hint)
         add(
-            SettingsRow(SettingsPage.ADVANCED, listOf(observeDnsLabel, observeDnsHint)) {
+            SettingsRow(SettingsPage.ADVANCED, listOf(observeDnsLabel, observeDnsHint), modes = VPN_ONLY) {
                 DetourToggleRow(
                     label = observeDnsLabel,
                     hint = observeDnsHint,
@@ -1658,11 +1807,24 @@ fun SettingsScreen(
     // rows themselves, rendered where the search was typed, and it reaches the
     // rows inside a page without navigating to one. A group's own title matches
     // too, so 外观 returns what is in 外观 rather than one entry row pointing at it.
-    val pageTitles = SettingsPage.entries.associateWith { stringResource(it.titleRes) }
+    //
+    // **The mode filter is applied first, once, and everything below is derived
+    // from its result** — the search, the group pages, and which entries the list
+    // offers. That is deliberate: a mode honoured in one of those three and
+    // forgotten in another is a screen that contradicts itself, and the three used
+    // to be three separate reads of `rows`.
+    //
+    // It is a filter and not a second `visible`, and the difference matters — see
+    // [SettingsRow.modes].
+    val modeRows = rows.filter { status.mode in it.modes }
+    // The titles the search matches, resolved for the mode that is running — the
+    // same strings the entry rows print, so a query cannot match a group under a
+    // name the list is not showing. See [titleFor].
+    val pageTitles = SettingsPage.entries.associateWith { stringResource(it.titleFor(status.mode)) }
     val matches = if (needle.isEmpty()) {
         emptyList()
     } else {
-        rows.filter { row ->
+        modeRows.filter { row ->
             // A collapsed row is not on screen, so it is not a result. The
             // console while 开发者视图 is off is not hidden-but-findable, it is
             // absent from the composition, and a hit that pointed at it would
@@ -1674,6 +1836,12 @@ fun SettingsScreen(
         }
     }
 
+    // The groups that still have something in them, in declaration order. A group
+    // whose every row belongs to another mode is not offered: an entry row that
+    // opens a page with nothing on it is a dead end, and the entry row is the only
+    // way to reach that page.
+    val pages = SettingsPage.entries.filter { target -> modeRows.any { it.page == target } }
+
     // The reconnect the pending banner offers, as one lambda rather than two
     // copies: both the list and the pages show the banner, and a second copy is a
     // second place to forget that the mode has to come from the running engine.
@@ -1684,20 +1852,31 @@ fun SettingsScreen(
         )
     }
 
-    if (page == null) {
+    // A page can stop existing under the user: the mode can change while this
+    // screen is open (the console's `mode` command, or a mode restored from
+    // prefs), and a group whose rows all belong to the mode that just left would
+    // render as an empty card under a title that promises settings. Falling back
+    // to the list is the honest answer, and the entry is gone from the list too,
+    // so nothing is left pointing at the page.
+    val openPage = page?.takeIf { it in pages }
+
+    if (openPage == null) {
         SettingsList(
             query = query,
             onQueryChange = { query = it },
             needle = needle,
             matches = matches,
+            pages = pages,
+            mode = status.mode,
             pending = pending,
             onRestart = onRestart,
             onOpenPage = onNavigate,
         )
     } else {
         SettingsGroupPage(
-            page = page,
-            rows = rows.filter { it.page == page },
+            page = openPage,
+            rows = modeRows.filter { it.page == openPage },
+            mode = status.mode,
             pending = pending,
             onRestart = onRestart,
             onClose = { onNavigate(null) },
@@ -1806,6 +1985,8 @@ private fun SettingsList(
     onQueryChange: (String) -> Unit,
     needle: String,
     matches: List<SettingsRow>,
+    pages: List<SettingsPage>,
+    mode: KernelState.Mode,
     pending: Boolean,
     onRestart: () -> Unit,
     onOpenPage: (SettingsPage) -> Unit,
@@ -1883,17 +2064,22 @@ private fun SettingsList(
         }
 
         if (needle.isEmpty()) {
-            // The five entries, as one untitled card. No heading: the page's own
+            // The entries, as one untitled card. No heading: the page's own
             // title is 设置 and every row already carries a group's name, so a
             // heading here would be the third copy of words already on screen
             // twice.
+            //
+            // [pages], not `SettingsPage.entries`: a group with nothing in the
+            // current mode is not offered, because its page would open empty.
+            // Every mode keeps at least 日志 / 外观 / 数据, so the card is never
+            // empty itself.
             item(key = "settings-entries") {
                 UntitledSectionCard {
-                    SettingsPage.entries.forEachIndexed { index, target ->
+                    pages.forEachIndexed { index, target ->
                         if (index > 0) DetourDivider()
                         DetourNavRow(
-                            label = stringResource(target.titleRes),
-                            hint = stringResource(target.summaryRes),
+                            label = stringResource(target.titleFor(mode)),
+                            hint = stringResource(target.summaryFor(mode)),
                             onClick = { onOpenPage(target) },
                         )
                     }
@@ -1909,7 +2095,7 @@ private fun SettingsList(
                 val hits = matches.filter { it.page == target }
                 if (hits.isEmpty()) return@forEach
                 item(key = target.name) {
-                    DetourSectionCard(stringResource(target.titleRes)) {
+                    DetourSectionCard(stringResource(target.titleFor(mode))) {
                         SettingsRows(hits)
                     }
                 }
@@ -1963,6 +2149,7 @@ private fun SettingsList(
 private fun SettingsGroupPage(
     page: SettingsPage,
     rows: List<SettingsRow>,
+    mode: KernelState.Mode,
     pending: Boolean,
     onRestart: () -> Unit,
     onClose: () -> Unit,
@@ -1988,7 +2175,7 @@ private fun SettingsGroupPage(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             DetourPageHeader(
-                title = stringResource(page.titleRes),
+                title = stringResource(page.titleFor(mode)),
                 actions = {
                     DetourButton(onClick = onClose, variant = DetourButtonVariant.Text) {
                         Text(stringResource(R.string.settings_back))

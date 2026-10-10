@@ -79,6 +79,18 @@
          It is a different document from github-hosts, so the name has to say
          which one: "HelloGitHub" alone would not tell the two apart. -->
     <string name="rules_source_hellogithub">HelloGitHub（GitHub520）</string>
+    <!-- Root mode's fixed source. It is not offered as a choice, so this name is
+         only ever a label: the settings row that replaces the source picker in
+         root mode, and the "which document am I running" line on the home and
+         about screens. The wording names the *shape* of the document (a list of
+         substitute upstreams) rather than its publisher, because the publisher is
+         this deployment's own host and a name that says "s302" alone would read
+         like the retired hosts document that every address of is 127.0.0.1. -->
+    <string name="rules_source_s302_upstream">s302 替代上游</string>
+    <!-- Shown in root mode in place of the source picker. States the fact and the
+         way out: the mode is what fixes the source, so switching modes is the
+         only thing that changes it. -->
+    <string name="rules_source_root_pinned">root 模式固定使用此来源，切换到 VPN 或代理模式后可选择其他来源</string>
     <string name="rules_add_source">添加自定义源</string>
     <string name="rules_source_name">名称（选填）</string>
     <string name="rules_source_url">地址</string>
@@ -133,15 +145,19 @@
     <string name="settings_section_logs">日志与诊断</string>
     <string name="settings_section_appearance">外观</string>
     <string name="settings_section_advanced">高级：内核参数</string>
+    <string name="settings_section_advanced_shell">高级</string>
     <!-- The settings screen's entry rows, one per section, since the five cards
          became five second-level pages. A summary rather than an inventory of
          the rows inside: an inventory would have to be kept in step with them
          and would be wrong the first time one moved. What these have to do is
          let a reader tell the five apart and know which one to open. -->
-    <string name="settings_page_connection">代理端口、规则源、上游出口与解析器</string>
+    <string name="settings_page_connection">规则源、上游出口与解析器</string>
+    <string name="settings_page_connection_proxy">代理端口、规则源与连接行为</string>
+    <string name="settings_page_connection_root">规则源（由模式固定）与连接行为</string>
     <string name="settings_page_logs">统计刷新间隔与日志归档</string>
     <string name="settings_page_appearance">主题、玻璃效果、壁纸与字体</string>
     <string name="settings_page_advanced">拨号、超时、流量上限与命令行</string>
+    <string name="settings_page_advanced_shell">开发者视图、内核库与命令行</string>
     <string name="settings_page_data">导出、导入与版本信息</string>
     <string name="settings_back">返回</string>
     <string name="settings_proxy_port">代理监听端口</string>
@@ -572,6 +588,8 @@
     <string name="about_update_channel_hint">测试版只查找预发布版本，不含稳定版</string>
     <string name="about_update_channel_stable">稳定版</string>
     <string name="about_update_channel_beta">测试版</string>
+    <string name="about_section_project">项目</string>
+    <string name="about_repo">项目仓库</string>
     <string name="update_dialog_title">有新版本</string>
     <string name="update_dialog_version">版本 %1$s</string>
     <string name="update_dialog_later">稍后</string>
