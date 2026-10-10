@@ -292,10 +292,17 @@ object RootHelper {
         //    failure, not an app-local one. The marker is kept for the next retry.
         "[ -f $STAGE/apex.mounted ] && umount $APEX_CACERTS",
         "mount | grep -q \" $APEX_CACERTS \" || { rm -rf $STAGE/apex; rm -f $STAGE/apex.mounted; }",
-        // 4. Remove the redirect, using the port it was added with.
-        "[ -f $STAGE/redirect.port ] && iptables -t nat -D OUTPUT -p tcp -d " +
-            "$REDIRECT_ADDRESS --dport $REDIRECT_PORT -j REDIRECT " +
-            "--to-ports \"\$(cat $STAGE/redirect.port)\"",
+        // 4. Remove **every** redirect of ours, not just the one the recorded port
+        //    names. A session that was killed rather than stopped — an install
+        //    over it, a crash, an emulator restart — leaves its rule behind, and
+        //    the next session binds a fresh port, so a delete keyed on the
+        //    *current* port never matches it. The old rule then sits **first** in
+        //    the chain and wins, sending every connection to a port nothing
+        //    listens on. Measured on a device: the chain held
+        //    `--to-ports 39347` above `--to-ports 45141`, the mode reported
+        //    itself `on`, and every request failed with `connections = 0` — a
+        //    tunnel that looks up and carries nothing.
+        purgeRedirect(),
         // 5. Forget the markers only once every undo above has been attempted.
         //    `apex.mounted` is deliberately absent here: the umount check above
         //    clears it, and listing it here would discard the marker a still-live
@@ -306,6 +313,32 @@ object RootHelper {
         //    place for the next run rather than hiding the unfinished work.
         "rmdir $STAGE 2>/dev/null",
     )
+
+    /**
+     * Delete every REDIRECT rule of ours from the OUTPUT chain, whatever port it
+     * points at.
+     *
+     * Keyed on the *destination* rather than on the port, because the port is the
+     * part that changes between sessions and the stale rule is precisely the one
+     * whose port no longer matches anything. `iptables -D` cannot wildcard
+     * `--to-ports`, so the ports are read out of `-S` and deleted one by one.
+     *
+     * Appears in two places on purpose. [undoCommands] uses it so that `restore`
+     * and [recoverStale] clean up after a session that was killed; the install
+     * command list uses it again immediately before adding its own rule, because
+     * the undo runs as a **separate `su` invocation whose result is not checked**
+     * — if that invocation lost the mount-namespace probe it wrote nothing, and
+     * only purging again in the invocation that installs the rule makes "exactly
+     * one rule, pointing at the live port" true by construction.
+     *
+     * Verified on the device before it was written here: two rules
+     * (`39347` above `45141`) → both deleted → one added for `45141`.
+     */
+    private fun purgeRedirect(): String =
+        "for p in \$(iptables -t nat -S OUTPUT | grep -F -- \"-d $REDIRECT_ADDRESS/32\" " +
+            "| sed -n 's/.*--to-ports \\([0-9][0-9]*\\).*/\\1/p'); do " +
+            "iptables -t nat -D OUTPUT -p tcp -d $REDIRECT_ADDRESS --dport $REDIRECT_PORT " +
+            "-j REDIRECT --to-ports \"\$p\"; done"
 
     // --- DER ------------------------------------------------------------------
 
@@ -419,6 +452,18 @@ object RootHelper {
 
             val commands = buildList {
                 add("mkdir -p $STAGE")
+                // Strip any block of ours that is still in the file **before**
+                // taking the backup, so the backup is the clean base by
+                // construction. The undo above is supposed to have removed it, but
+                // the undo and this command list are two separate `su`
+                // invocations, and the flag that makes writes land is probed once
+                // per `Su` instance: an undo that ran before the probe succeeded
+                // writes nothing (`Read-only file system`), and the backup would
+                // then capture a file that already carries our block — so the
+                // append below stacks a second one. Measured on a device:
+                // `/etc/hosts` came back with two `# detour-root-begin` blocks and
+                // 1692 redirect lines where 846 were expected.
+                add("sed -i '/$HOSTS_BEGIN/,/$HOSTS_END/d' $HOSTS")
                 // Back up the hosts file as found. It is the clean base the block
                 // is appended to, and the exact file restore puts back.
                 add("cp -f $HOSTS $STAGE/hosts.orig")
@@ -446,14 +491,16 @@ object RootHelper {
                 // The hosts entries, appended to the backup rather than to the
                 // live file, so a second install cannot stack two blocks.
                 add("cat $STAGE/hosts.orig ${block.absolutePath} > $HOSTS")
-                // The redirect. `-C` first so a rule left by a killed run that
-                // recovery missed is not added twice.
+                // Purge, then add. The undo above purged too, but its result is not
+                // checked and it is a separate `su` invocation — repeating the
+                // purge here is what makes "exactly one rule, pointing at the live
+                // port" hold even when that undo wrote nothing. A leftover rule
+                // from a killed session is not a cosmetic problem: it sits first in
+                // the chain and sends every connection to a dead port.
+                add(purgeRedirect())
                 add(
-                    "iptables -t nat -C OUTPUT -p tcp -d $REDIRECT_ADDRESS " +
-                        "--dport $REDIRECT_PORT -j REDIRECT --to-ports $redirectPort " +
-                        "2>/dev/null || iptables -t nat -A OUTPUT -p tcp -d " +
-                        "$REDIRECT_ADDRESS --dport $REDIRECT_PORT -j REDIRECT " +
-                        "--to-ports $redirectPort",
+                    "iptables -t nat -A OUTPUT -p tcp -d $REDIRECT_ADDRESS " +
+                        "--dport $REDIRECT_PORT -j REDIRECT --to-ports $redirectPort",
                 )
                 add("echo -n $redirectPort > $STAGE/redirect.port")
             }
