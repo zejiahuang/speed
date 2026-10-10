@@ -89,16 +89,16 @@ jobs:
       - name: 安装 Rust 与 Android target
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android,x86_64-linux-android
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
 
-      # 两个 ABI 在同一个 job 里编，然后交给 Gradle 的 ABI 拆分。
-      # 之所以不按 ABI 拆成两个并行 job：拆分的输入是 `jniLibs/` 里实际存在的
+      # 三个 ABI 在同一个 job 里编，然后交给 Gradle 的 ABI 拆分。
+      # 之所以不按 ABI 拆成三个并行 job：拆分的输入是 `jniLibs/` 里实际存在的
       # 库，只放一个 ABI 的库进去，另一个 ABI 的分包就可能因为「没有原生库」而
-      # 不被产出，或者产出一个空壳。让两个库都在，产出才是确定的。
-      - name: 编译内核（release，两个 ABI）
+      # 不被产出，或者产出一个空壳。让三个库都在，产出才是确定的。
+      - name: 编译内核（release，三个 ABI）
         env:
           PROFILE: release
-        run: bash scripts/app-native-build.sh aarch64-linux-android x86_64-linux-android
+        run: bash scripts/app-native-build.sh aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
 
       # 密钥以 base64 存进 secret，运行时才落盘，落盘位置在 runner 的临时目录里。
       # 仓库里没有密钥是刻意的：这个应用会安装 VPN，「谁能签出构建」就是它的信任
@@ -152,8 +152,8 @@ jobs:
           fi
 
           count="$(find "$APKDIR" -name '*.apk' | wc -l)"
-          if [ "$count" -ne 2 ]; then
-            echo "期望 arm64-v8a 与 x86_64 各一个包，实际 $count 个" >&2
+          if [ "$count" -ne 3 ]; then
+            echo "期望 arm64-v8a、armeabi-v7a 与 x86_64 各一个包，实际 $count 个" >&2
             ls -l "$APKDIR" >&2
             exit 1
           fi
@@ -207,7 +207,7 @@ jobs:
             cp "$f" "out/speed-${ver}-${abi}.apk"
           done
           ls -l out
-          test "$(find out -name '*.apk' | wc -l)" -eq 2
+          test "$(find out -name '*.apk' | wc -l)" -eq 3
 
       # Release 说明取自 CHANGELOG.md 里本版本那一节，而不是另写一份 —— 两份文案
       # 一定会漂移，而用户看到的应当是同一段话。
@@ -229,8 +229,9 @@ jobs:
               f                          { print }
             ' CHANGELOG.md
             printf '\n---\n\n'
-            printf '下载对应 ABI 的 APK 安装：`speed-%s-arm64-v8a.apk`（多数手机与平板）、' "$ver"
-            printf '`speed-%s-x86_64.apk`（模拟器）。两个包用同一个密钥签名。\n' "$ver"
+            printf '下载对应 ABI 的 APK 安装：`speed-%s-arm64-v8a.apk`（多数现代手机与平板）、' "$ver"
+            printf '`speed-%s-armeabi-v7a.apk`（较老的 32 位 ARM 设备）、' "$ver"
+            printf '`speed-%s-x86_64.apk`（模拟器）。三个包用同一个密钥签名。\n' "$ver"
           } > notes.md
 
           if ! grep -q '[^[:space:]]' notes.md; then

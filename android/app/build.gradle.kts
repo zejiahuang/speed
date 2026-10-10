@@ -22,8 +22,8 @@ val disclaimerResDir = layout.buildDirectory.dir("generated/disclaimer/res")
  * `defaultConfig` block reads those, so there is one literal per number rather
  * than two that can disagree.
  */
-val repoVersionName = "0.2.5"
-val repoVersionCode = 7
+val repoVersionName = "0.3.0"
+val repoVersionCode = 8
 
 /**
  * The version the build actually carries, overridable per invocation.
@@ -77,11 +77,11 @@ android {
             abi {
                 isEnable = true
                 reset()
-                // Only the two ABIs the kernel is built for. Listing them
+                // The three ABIs the kernel is built for. Listing them
                 // explicitly rather than taking every ABI keeps a future
-                // `armeabi-v7a` dependency from silently appearing in the
-                // release as an APK whose library does not exist.
-                include("arm64-v8a", "x86_64")
+                // dependency that ships some other ABI from silently appearing
+                // in the release as an APK whose kernel library does not exist.
+                include("arm64-v8a", "armeabi-v7a", "x86_64")
                 // No universal APK alongside the splits: it would be the same
                 // artifact the splits exist to avoid, and it invites a user to
                 // download the larger file by mistake.

@@ -167,12 +167,12 @@ jobs:
       - name: 安装 Rust 与 Android target
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android,x86_64-linux-android
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
 
-      - name: 编译内核（release，两个 ABI）
+      - name: 编译内核（release，三个 ABI）
         env:
           PROFILE: release
-        run: bash scripts/app-native-build.sh aarch64-linux-android x86_64-linux-android
+        run: bash scripts/app-native-build.sh aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
 
       - name: 落盘签名密钥
         env:
@@ -201,7 +201,7 @@ jobs:
           bash scripts/app-build.sh :app:testDebugUnitTest assembleRelease \
             -PabiSplits -PappVersionName="$BETA_VERSION"
 
-      # 与 `release.yml` 同样的校验：包内 versionName 必须等于标签，且两个 ABI 各一个包。
+      # 与 `release.yml` 同样的校验：包内 versionName 必须等于标签，且三个 ABI 各一个包。
       # 测试版这里尤其不能省 —— 版本号对不上的测试版装上去之后，更新检查会一直把
       # 它自己当成旧包反复提示。
       - name: 校验产物
@@ -213,8 +213,8 @@ jobs:
           APKDIR=android/app/build/outputs/apk/release
 
           count="$(find "$APKDIR" -name '*.apk' | wc -l)"
-          if [ "$count" -ne 2 ]; then
-            echo "期望 arm64-v8a 与 x86_64 各一个包，实际 $count 个" >&2
+          if [ "$count" -ne 3 ]; then
+            echo "期望 arm64-v8a、armeabi-v7a 与 x86_64 各一个包，实际 $count 个" >&2
             ls -l "$APKDIR" >&2
             exit 1
           fi
@@ -242,7 +242,7 @@ jobs:
               cp "$f" "out/speed-${BETA_VERSION}-${abi}.apk"
             done
           ls -l out
-          test "$(find out -name '*.apk' | wc -l)" -eq 2
+          test "$(find out -name '*.apk' | wc -l)" -eq 3
 
       - name: 生成发布说明
         env:
@@ -258,8 +258,9 @@ jobs:
             printf '%s\n' "$COMMITS"
             printf '\n---\n\n'
             printf '这是预发布版本，只出现在应用的「测试版」更新通道；默认的稳定通道不会收到它。\n\n'
-            printf '下载对应 ABI 的 APK 安装：`speed-%s-arm64-v8a.apk`（多数手机与平板）、' "$BETA_VERSION"
-            printf '`speed-%s-x86_64.apk`（模拟器）。两个包与正式版用同一个密钥签名，' "$BETA_VERSION"
+            printf '下载对应 ABI 的 APK 安装：`speed-%s-arm64-v8a.apk`（多数现代手机与平板）、' "$BETA_VERSION"
+            printf '`speed-%s-armeabi-v7a.apk`（较老的 32 位 ARM 设备）、' "$BETA_VERSION"
+            printf '`speed-%s-x86_64.apk`（模拟器）。三个包与正式版用同一个密钥签名，' "$BETA_VERSION"
             printf '可以直接覆盖安装，也可以直接装回正式版。\n'
           } > notes.md
           cat notes.md

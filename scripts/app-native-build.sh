@@ -2,7 +2,7 @@
 #
 # Build the kernel as a shared library and put it where the app expects it.
 #
-#   bash scripts/app-native-build.sh [ABI...]      (default: x86_64 arm64-v8a's arm64)
+#   bash scripts/app-native-build.sh [ABI...]      (default: x86_64-linux-android)
 #
 # The app loads `libwatt_ffi.so` from `android/app/src/main/jniLibs/<abi>/`, so
 # this script is the bridge between the cargo build and the Gradle build. It is

@@ -168,7 +168,8 @@ class Prefs private constructor(private val store: SharedPreferences) {
      * endpoint, reached through the `gh-proxy.com` mirror because the API host is
      * not reliably reachable from every network the app runs on. The Release body
      * is the matching section of `CHANGELOG.md`, and its assets are
-     * `speed-<ver>-arm64-v8a.apk` and `speed-<ver>-x86_64.apk`. So the honest
+     * `speed-<ver>-arm64-v8a.apk`, `speed-<ver>-armeabi-v7a.apk` and
+     * `speed-<ver>-x86_64.apk`. So the honest
      * starting state is "there is a source", not "there is none": an app that
      * ships its own releases but starts with checking switched off has an update
      * channel that exists only on paper.

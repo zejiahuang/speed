@@ -30,11 +30,24 @@ if [ ! -d "$NDK_DIR" ]; then
   exit 1
 fi
 
+# Cargo and the NDK spell one target differently, and only one. Cargo's target is
+# `armv7-linux-androideabi`; the NDK's clang wrapper is
+# `armv7a-linux-androideabi<api>-clang` — an extra `a` after `armv7`. Every other
+# Android target agrees between the two (aarch64, x86_64, i686), so this is the
+# only translation needed; without it the script looks for a compiler that does
+# not exist and blames the NDK for a file it never had. The prefix is used for
+# both the linker and the `cc` compiler variable, because a linker that does not
+# exist is the same failure reported under a different name.
+case "$ANDROID_ABI" in
+  armv7-linux-androideabi) NDK_ABI="armv7a-linux-androideabi" ;;
+  *)                       NDK_ABI="$ANDROID_ABI" ;;
+esac
+
 TOOLCHAIN="$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64"
-CC="$TOOLCHAIN/bin/${ANDROID_ABI}${ANDROID_API}-clang"
+CC="$TOOLCHAIN/bin/${NDK_ABI}${ANDROID_API}-clang"
 if [ ! -x "$CC" ]; then
   echo "android-build: no compiler at $CC" >&2
-  ls "$TOOLCHAIN/bin" | grep -E "^${ANDROID_ABI}[0-9]+-clang$" | head -5 >&2
+  ls "$TOOLCHAIN/bin" | grep -E "^${NDK_ABI}[0-9]+-clang$" | head -5 >&2
   exit 1
 fi
 
@@ -56,7 +69,7 @@ KEY="$(echo "$ANDROID_ABI" | tr '-' '_')"
 KEY_UP="$(echo "$ANDROID_ABI" | tr 'a-z-' 'A-Z_')"
 export "CARGO_TARGET_${KEY_UP}_LINKER=$CC"
 export "CC_${KEY}=$CC"
-export "CXX_${KEY}=$TOOLCHAIN/bin/${ANDROID_ABI}${ANDROID_API}-clang++"
+export "CXX_${KEY}=$TOOLCHAIN/bin/${NDK_ABI}${ANDROID_API}-clang++"
 export "AR_${KEY}=$TOOLCHAIN/bin/llvm-ar"
 # The bare names as well: some build scripts read `AR` before `AR_<target>`.
 export AR="$TOOLCHAIN/bin/llvm-ar"
