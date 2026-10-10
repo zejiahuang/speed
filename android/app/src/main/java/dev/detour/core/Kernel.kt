@@ -231,6 +231,39 @@ object Kernel {
          * that one is a rule-table question, this one is a network one.
          */
         val dialFailures: Long = 0,
+        /**
+         * Connections whose origin handshake presented a rule-supplied name in
+         * SNI instead of the name the client asked for.
+         *
+         * A rule may name a host rather than an address, and that host is the name
+         * the origin answers to — the address it resolved to is an alias for it.
+         * Measured: reaching a Steam Community address under the client's own name
+         * fails the handshake (`rc=35`), while the rule's name completes it.
+         *
+         * On a rule set built entirely from names this should track [served]. A
+         * zero here means every origin is still being asked for the client's name,
+         * which is the case that does not work — and nothing else on screen would
+         * distinguish it from a dead address.
+         */
+        val namedUpstreams: Long = 0,
+        /**
+         * Connections whose origin handshake sent *no* SNI at all.
+         *
+         * The third state, and the reason it is a counter of its own: [namedUpstreams]
+         * says a name was *substituted*, this says a name was *dropped*. Both mean
+         * the client's name was not used, but only one of them is fixed by editing
+         * the rule's upstream, so one number could not say which had happened.
+         *
+         * Set by a rule that wrote its address as `!<address>` — a source that has
+         * an address and no name for it. Measured over 13 such addresses: the
+         * client's name in SNI is refused by 11, while the same addresses with no
+         * SNI complete the handshake on 10.
+         *
+         * A zero here on a rule set that carries flagged addresses means the flag
+         * never reached the plan, which is the one failure that would otherwise be
+         * indistinguishable from "the origin is unreachable".
+         */
+        val noSniUpstreams: Long = 0,
         /** Plaintext bytes carried from the client towards the origin. */
         val bytesToUpstream: Long = 0,
         /** Plaintext bytes carried from the origin back to the client. */
@@ -763,8 +796,8 @@ object Kernel {
             if (nativeMitmStats(h, raw) != 0) return null
             return MitmStats(
                 connections = raw[0], handshakes = raw[1], served = raw[2],
-                refused = raw[3], dialFailures = raw[4],
-                bytesToUpstream = raw[5], bytesToClient = raw[6],
+                refused = raw[3], dialFailures = raw[4], namedUpstreams = raw[5],
+                noSniUpstreams = raw[6], bytesToUpstream = raw[7], bytesToClient = raw[8],
             )
         }
 
@@ -852,7 +885,7 @@ object Kernel {
      * by hand, so a mismatch does not fail — it silently shifts every field after
      * the gap. This is the one number to check when a proxy counter is added.
      */
-    private const val MITM_STATS_FIELDS = 7
+    private const val MITM_STATS_FIELDS = 9
 
     /**
      * How many `jlong`s [nativeProxyStats] writes.

@@ -57,6 +57,7 @@ import dev.detour.core.KernelState
 import dev.detour.core.DetourVpnService
 import dev.detour.core.Prefs
 import dev.detour.core.RuleIndex
+import dev.detour.core.RuleSource
 import dev.detour.core.RulesRepository
 import dev.detour.ui.components.DetourAlertDialog
 import dev.detour.ui.components.DetourCard
@@ -466,38 +467,61 @@ fun RulesScreen() {
             // now, so it can grow past the width of the screen, and a plain row
             // would push the button that adds sources off the edge — the control
             // that fixes an over-long list would be the first casualty of one.
-            Row(
-                modifier = Modifier
-                    .weight(1f)
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                prefs.ruleSources.forEach { source ->
-                    DetourFilterChip(
-                        selected = source.id == prefs.ruleSourceId,
-                        onClick = { selectSource(source.id) },
-                        label = source.labelRes?.let { stringResource(it) } ?: source.label,
-                        // `usable` is false for a source with neither an address
-                        // nor an imported copy — see RuleSource.usable. No
-                        // built-in is in that state since `s302` was deleted, and
-                        // an imported source never is, so this guard only ever
-                        // hides a row that could not load.
-                        enabled = source.usable,
+            //
+            // **Root mode has no chips**, and the reason is stronger here than on
+            // the settings screen: this row is the page's own answer to "which
+            // rules am I looking at", so a chip that cannot change the document
+            // would not merely fail to act, it would make the list below
+            // misattributed. What is drawn instead is the source that is in force
+            // — the same value the settings screen states — and no add or import
+            // entry point, since neither can take effect in this mode either.
+            if (status.mode == KernelState.Mode.ROOT) {
+                val pinned = RuleSource.forMode(status.mode, prefs.selectedSource)
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        pinned.labelRes?.let { stringResource(it) } ?: pinned.label,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Text(
+                        stringResource(R.string.rules_source_root_pinned),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-            }
-            // A labelled text button rather than a second icon. Two icon-only
-            // buttons would both have to be a plus: `material-icons-core` is the
-            // only icon artifact this app ships and it has no document glyph, so
-            // the pair would be indistinguishable on screen — the one place where
-            // reusing the plus, which is fine on the settings screen's labelled
-            // rows, stops being fine.
-            TextButton(onClick = { rulesImportPicker.launch(arrayOf("*/*")) }) {
-                Text(stringResource(R.string.rules_import_local))
-            }
-            IconButton(onClick = { showAddSource = true }) {
-                Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.rules_add_source))
+            } else {
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    prefs.ruleSources.forEach { source ->
+                        DetourFilterChip(
+                            selected = source.id == prefs.ruleSourceId,
+                            onClick = { selectSource(source.id) },
+                            label = source.labelRes?.let { stringResource(it) } ?: source.label,
+                            // `usable` is false for a source with neither an address
+                            // nor an imported copy — see RuleSource.usable. No
+                            // built-in is in that state since `s302` was deleted, and
+                            // an imported source never is, so this guard only ever
+                            // hides a row that could not load.
+                            enabled = source.usable,
+                        )
+                    }
+                }
+                // A labelled text button rather than a second icon. Two icon-only
+                // buttons would both have to be a plus: `material-icons-core` is the
+                // only icon artifact this app ships and it has no document glyph, so
+                // the pair would be indistinguishable on screen — the one place where
+                // reusing the plus, which is fine on the settings screen's labelled
+                // rows, stops being fine.
+                TextButton(onClick = { rulesImportPicker.launch(arrayOf("*/*")) }) {
+                    Text(stringResource(R.string.rules_import_local))
+                }
+                IconButton(onClick = { showAddSource = true }) {
+                    Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.rules_add_source))
+                }
             }
         }
 

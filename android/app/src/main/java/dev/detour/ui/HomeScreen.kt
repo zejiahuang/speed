@@ -54,6 +54,7 @@ import dev.detour.core.KernelState
 import dev.detour.core.Prefs
 import dev.detour.core.Rate
 import dev.detour.core.RootHelper
+import dev.detour.core.RuleSource
 import dev.detour.core.RulesRepository
 import dev.detour.ui.components.DetourAlertDialog
 import dev.detour.ui.components.DetourAssistChip
@@ -368,10 +369,15 @@ fun HomeScreen() {
         // blocklist" could only be answered by opening another screen. Read from
         // `Prefs`/the cache file rather than plumbed through the kernel: it is
         // local configuration, not tunnel state.
+        //
+        // `forMode`, not `selectedSource`: in root mode the two differ, and this
+        // card answers "which document is running", so showing the user's stored
+        // choice there would name a document that is not loaded.
         Spacer(Modifier.height(12.dp))
-        val sourceLabel = prefs.selectedSource.labelRes
+        val source = RuleSource.forMode(status.mode, prefs.selectedSource)
+        val sourceLabel = source.labelRes
             ?.let { stringResource(it) }
-            ?: prefs.selectedSource.label
+            ?: source.label
         val cache = RulesRepository.cacheFile(context)
         // The age label changes at minute granularity, so it gets its own slow
         // clock rather than riding the 500 ms stats tick. The fast tick is gated

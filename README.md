@@ -2,13 +2,13 @@
 
 # speed
 
-**免 Root 的 Android 网络绕行工具**
+**Android 网络绕行工具 · 默认免 Root**
 
 规则表里命中的域名，改从规则给出的地址拨号；其余流量原样直连。
 
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Android%208.0%2B%20(API%2026)-3ddc84.svg)](#下载)
-[![ABI](https://img.shields.io/badge/ABI-arm64--v8a%20%7C%20x86__64-lightgrey.svg)](#下载)
+[![ABI](https://img.shields.io/badge/ABI-arm64--v8a%20%7C%20armeabi--v7a%20%7C%20x86__64-lightgrey.svg)](#下载)
 [![Release](https://img.shields.io/github/v/release/zejiahuang/speed?label=release&color=3ddc84)](../../releases/latest)
 
 [下载](#下载) · [工作原理](#工作原理) · [设计取舍](#设计取舍) · [从源码构建](#从源码构建) · [免责声明](DISCLAIMER.md)
@@ -25,18 +25,22 @@
 `speed` 就是补上这一步：它带一份「域名 → 已知可用地址」的规则表，
 在系统把连接交出去之前截住它；域名在表里，就改从表里的地址拨号。
 
-不需要 Root，不需要安装证书，不需要框架。
+默认的两种模式不需要 Root，不需要安装证书，不需要框架。设备已有 Root 时，还可以选第三种
+模式——它走的是另一条路：需要 Root，且会在本机终结 TLS。
 
-接管方式有两种，同一个安装包，连接页上切换：
+接管方式有三种，同一个安装包，连接页上切换：
 
-| | VPN 模式 | 代理模式 |
-| --- | --- | --- |
-| 接管谁 | 公网流量全部，内网直连 | 只有把 HTTP 代理指过来的软件 |
-| 系统授权 | 需要一次 VPN 授权 | 不需要 |
-| 内核参数 | 设置页里的全部生效 | **不生效**，用内核固定的一套 |
-| 适合 | 手机、平板 | 模拟器、无法授权的环境、只想给个别软件加速 |
+| | VPN 模式 | 代理模式 | Root 模式 |
+| --- | --- | --- | --- |
+| 接管谁 | 公网流量全部，内网直连 | 只有把 HTTP 代理指过来的软件 | 只有规则表里的域名（改系统 hosts） |
+| 覆盖范围 | 全部 TCP + UDP | 只处理 TCP，且只对设了 HTTP 代理的软件 | 只处理 TCP **443** |
+| 系统授权 | 需要一次 VPN 授权 | 不需要 | 需要 Root |
+| 解密 TLS | 否 | 否 | **是**（本机签发证书，不校验上游） |
+| 内核参数 | 设置页里的全部生效 | **不生效**，用内核固定的一套 | **不生效**，用内核固定的一套 |
+| 适合 | 手机、平板 | 模拟器、无法授权的环境、只想给个别软件加速 | 有 Root，且需要覆盖「规则地址证书不匹配」的域名 |
 
-两种模式下，**规则未命中的域名都直连**——规则表回答的是「优先试哪个地址」，不是「允不允许出去」。
+**前两种模式下，规则未命中的域名都直连**——规则表回答的是「优先试哪个地址」，不是「允不允许出去」。
+Root 模式只接管规则表里的域名，表外流量完全不经过它。
 
 ## 工作原理
 
@@ -83,6 +87,34 @@
 
 **只处理 TCP。** UDP 流量（含 QUIC、DNS）不会被代理接管，这是 HTTP 代理这个形态本身的边界，
 不是配置问题；要覆盖 UDP 就用 VPN 模式。
+
+### Root 模式：终结 TLS 的那条路
+
+前两种模式都不解密 TLS，因此有一条硬边界：**规则给出的地址，其证书必须覆盖目标域名**，
+否则这个地址用不了。有些域名在所有已知地址上都不满足这一条，前两种模式就无能为力。
+
+Root 模式换掉了这个前提——它在本机以中间人身份终结 TLS：
+
+1. 连接页把模式切成 **Root 模式**，点连接（首次会弹一次说明，需要确认）。
+2. 应用用 `su` 自动做三件事：把规则表里的域名写进**系统 hosts**、把一张**自签 CA** 装进系统信任库、
+   加一条 **iptables 重定向**把发往 `127.0.0.2:443` 的流量转到本机代理端口。
+3. 客户端按 hosts 连到 `127.0.0.2:443`，本机代理用自签证书完成握手，再以普通客户端身份连真实服务器。
+
+**这三件事都不需要手工操作**——证书由内核现生成，装进信任库、改写 hosts、加防火墙规则全部自动完成，
+唯一的用户动作是那一次 Root 授权。**断开连接时三件事全部自动还原**：hosts 恢复成安装前的原文件，
+信任库里的那张 CA 被删除，iptables 规则按原样删除。
+
+代价必须说清楚：
+
+- **上游证书不再被校验。** 本机代理不检查真实服务器的证书，因此它能连上那些「证书不覆盖该域名」的
+  地址——这正是它存在的理由，也意味着**你与服务器之间的身份保证被移除了**。这条只在你主动选择
+  Root 模式时成立。
+- **只覆盖 TCP 443，且只覆盖规则表里的域名。** hosts 改写只对走系统解析器的应用生效；
+  启用 Private DNS（DoT）或自带 Secure DNS / DoH 的应用会自行解析、绕过 hosts。
+- **它改的是系统分区与信任库。** 这是与「免 Root」相对的另一端：一次真实的系统级改动，
+  而不是应用内的开关。断开时自动还原，但改动本身确实发生过。
+- 已在运行的应用可能要到**重启一次**之后才会读到新装的 CA。
+- Root 模式**不读设置页的内核参数**，与代理模式同理——它的 C ABI 入参同样只有「端口 + 规则 + CA 目录」。
 
 ## 两个关键机制
 
@@ -153,7 +185,8 @@
 
 四个页面：
 
-- **连接** —— 模式切换、总开关、实时上下行速率、本次会话流量与命中率、规则缓存新鲜度；
+- **连接** —— 模式切换（VPN / 代理 / Root，Root 只在设备有可用 `su` 时出现，首次进入需确认）、
+  总开关、实时上下行速率、本次会话流量与命中规则次数、规则缓存新鲜度；
   代理模式下还会出现代理地址卡片（含上面那条「内核参数不生效」的说明）。
 - **规则** —— 分组 → 域名 → 地址三级下钻，搜索覆盖域名 / 地址 / 分组名，分组级开关与全开 / 全关。
 - **日志** —— 实时事件流，按级别过滤，可导出与归档。
@@ -166,7 +199,7 @@
 ## 特性
 
 - **路由** —— 规则驱动改道 · 多候选并行竞速 · 证书预检 · 失败冷却与排序 · 命中时 DNS 本地应答 · UDP 流表满时淘汰最久未用 · 规则热替换
-- **两种接管** —— VPN 模式（`tun0` 全流量，需一次系统授权）与代理模式（本地 HTTP 代理，免授权，`CONNECT` 隧道 + 普通 HTTP 转发）
+- **三种接管** —— VPN 模式（`tun0` 全流量，需一次系统授权）· 代理模式（本地 HTTP 代理，免授权，`CONNECT` 隧道 + 普通 HTTP 转发）· Root 模式（改系统 hosts + 装自签 CA + iptables 重定向，本机终结 TLS，断开自动全部还原）
 - **规则** —— 三级下钻与搜索 · 分组开关 · 自定义规则源 · 缓存来源身份校验
 - **观测** —— 实时速率与命中率 · 实时 / 归档日志与过滤导出 · 开发者视图（候选地址、冷却、静默计数）· 内核命令行
 - **数据** —— 设置导出 / 导入（JSON 文档，导入前二次确认，来自更新版本的文档会被拒绝）
@@ -181,7 +214,7 @@
 
 ## 设计取舍
 
-**不解密 TLS。** 这是刻意的选择，不是缺失。应用不装证书、不做中间人，因此
+**默认不解密 TLS。** 这是刻意的选择，不是缺失。VPN 模式与代理模式都不装证书、不做中间人，因此
 「一个域名能不能走通」严格等于两件事同时成立：
 
 1. 规则给出的地址**可达**；
@@ -190,6 +223,11 @@
 第二条是架构边界。规则表里一个地址再快，只要证书不覆盖目标域名就用不了它，只能换地址。
 有些 CDN 的边缘证书覆盖范围很宽（例如 Akamai 边缘证书覆盖 `*.akamaihd.net`），这类域名可以正常走；
 覆盖范围窄的，就只能靠规则表给出正确的地址。
+
+**Root 模式是这条边界的唯一例外**，而且是有意为之：它把「证书覆盖域名」从「由上游保证」换成
+「由本机签发」，代价是不再校验上游。换来的正是上面那条走不通的路——对「所有已知地址的证书都不覆盖
+该域名」的处理能力。这不是默认模式的一次升级，而是一套完全不同的前提，所以它单独成一个模式、
+需要 Root、且必须由用户明确确认。
 
 **规则质量决定成败，但正确不等于可达。** 这套方案的实际瓶颈是规则表里地址的**正确性**，不是地址的数量。
 而即便地址是对的，它能不能从当前网络连上，仍取决于那条路径——规则源提供的是**地址**，不是**可达性**。
@@ -211,17 +249,23 @@
 从十之八九掉到十之一二，**连对照组一起掉**。所以任何「某域名通/不通」的结论都必须带上时间窗和对照组；
 单次结果不是判据。
 
-**不 Root。** 走 `VpnService` 而不是内核模块或 iptables，代价是接管点在内核之上、
+**默认不 Root。** VPN 模式走 `VpnService` 而不是内核模块或 iptables，代价是接管点在内核之上、
 拿不到原始套接字；换来的是不用刷机、不用 Root、不修改系统分区，卸载即完全还原。
+代理模式连 `VpnService` 都不用。Root 模式站在另一端：它明确用 `su` 改系统 hosts、信任库与
+iptables，换的是「规则地址证书不匹配」这类域名的处理能力——所以它需要用户明确确认，
+且断开时会把这三处全部还原。
 
 ### 已知限制
 
 - 规则表里地址过期时，对应域名会失败或直连——这是数据问题，不是内核问题。
 - 地址过期的一种具体表现：挂满超时之后报「候选耗尽」。若该条目只有一个地址，就没有第二条路可走。
 - 被按名字干扰的域名（TCP 通、TLS 第一个记录之后被静默）无法处理：换地址无效，放宽证书校验也无效。
-- 不解密 TLS 意味着无法处理「所有已知地址的证书都不覆盖该域名」的情况。
+- 不解密 TLS 意味着无法处理「所有已知地址的证书都不覆盖该域名」的情况——除非改用 Root 模式，那是这条的例外。
 - 代理模式只对能设置 HTTP 代理的软件生效，也不会替你捕获别的应用的流量。
 - 代理模式只处理 TCP：UDP 流量（含 QUIC）不被接管；且它不读设置页的内核参数，只用内核固定的一套。
+- Root 模式需要 Root，且**不校验上游证书**（身份保证被移除，见「设计取舍」）。
+- Root 模式只处理 **TCP 443**，且只对规则表里的域名生效；启用 Private DNS（DoT）或自带 Secure DNS / DoH 的应用自行解析，会绕过 hosts。
+- Root 模式改的是系统 hosts、系统信任库与 iptables——断开时自动全部还原，但它确实是一次系统级改动；已在运行的应用可能要重启后才读到新装的 CA。
 - 连通性在分钟尺度上抖动，通过率会随时间窗大幅变化。这不是内核状态，日志里的失败计数要连着时间窗一起看。
 - 最低 Android 8.0（API 26）。
 
@@ -232,9 +276,10 @@
 | 文件 | 适用设备 |
 | --- | --- |
 | `speed-<版本>-arm64-v8a.apk` | 绝大多数现代手机与平板 |
+| `speed-<版本>-armeabi-v7a.apk` | 较老的 32 位 ARM 手机与平板 |
 | `speed-<版本>-x86_64.apk` | 模拟器、少数 x86 平板 |
 
-两个包用**同一个发布密钥**签名。密钥不在仓库里——一个会安装 VPN 的应用，
+三个包用**同一个发布密钥**签名。密钥不在仓库里——一个会安装 VPN 的应用，
 「谁能签出构建」就是它的信任边界，所以密钥由维护者保管，经仓库 secret 交给 CI。
 若签名与你已装的版本不一致，Android 会拒绝覆盖安装；先卸载再装。
 
@@ -262,13 +307,13 @@
 
 ## 从源码构建
 
-需要：Rust（含 `aarch64-linux-android` 与 `x86_64-linux-android` target）、
+需要：Rust（含 `aarch64-linux-android`、`armv7-linux-androideabi` 与 `x86_64-linux-android` target）、
 Android NDK r30、Android SDK（platform 36 + build-tools 36.0.0）、JDK 17。
 
 两条命令就够了：
 
 ```bash
-PROFILE=release bash scripts/app-native-build.sh aarch64-linux-android x86_64-linux-android
+PROFILE=release bash scripts/app-native-build.sh aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
 SKIP_NATIVE=1 bash scripts/app-build.sh assembleRelease -PabiSplits
 ```
 
@@ -310,8 +355,25 @@ export AR=$TOOLCHAIN/bin/llvm-ar
 
 build_abi() {
   abi=$1; dir=$2
-  # 变量名里的 ABI 要全大写、`-` 换成 `_`，否则 cargo 读不到这个设置。
-  export "CARGO_TARGET_$(echo "$abi" | tr 'a-z-' 'A-Z_')_LINKER=$TOOLCHAIN/bin/${abi}${API}-clang"
+  # NDK 的 clang wrapper 与 cargo 的 target 名只有 32 位 ARM 不同：cargo 叫
+  # `armv7-linux-androideabi`，NDK 叫 `armv7a-linux-androideabi`（多一个 `a`）。
+  # 其余 target 两边同名，所以只在这里转一次，否则会去找一个不存在的编译器。
+  case "$abi" in
+    armv7-linux-androideabi) ndk_abi="armv7a-linux-androideabi" ;;
+    *)                       ndk_abi="$abi" ;;
+  esac
+  cc=$TOOLCHAIN/bin/${ndk_abi}${API}-clang
+
+  # 同一个 target 有两种拼法，而且两种都得导出，缺一个都编不过：
+  #   * cargo 的链接器变量：全大写、`-`→`_` —— CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER
+  #   * `cc` crate 的编译器变量：保留 target 原样、只把 `-`→`_` —— CC_aarch64_linux_android
+  # `ring`（藏在 rustls 后面）带 C 源码，要经 `cc` 去找一个 C 编译器。只导出上面那种时
+  # `cc` 读不到任何设置，会退化成裸名 `arm-linux-androideabi-clang` 去找一个根本不存在的
+  # 编译器 —— 报出来是「找不到编译器」，真正的缺口却是一个没导出的变量。
+  key=$(echo "$abi" | tr '-' '_')
+  export "CARGO_TARGET_$(echo "$abi" | tr 'a-z-' 'A-Z_')_LINKER=$cc"
+  export "CC_${key}=$cc"
+  export "CXX_${key}=$TOOLCHAIN/bin/${ndk_abi}${API}-clang++"
 
   # `--manifest-path` 不能省：仓库根目录没有 Cargo.toml，workspace 在 core-rs/ 下，
   # 而下面的 cp 目标又是相对仓库根的。这样两边都在同一个 cwd 里，不必来回 cd。
@@ -326,12 +388,13 @@ build_abi() {
 }
 
 build_abi aarch64-linux-android arm64-v8a
+build_abi armv7-linux-androideabi armeabi-v7a
 build_abi x86_64-linux-android  x86_64
 ```
 
-注意 cargo 的 target 名与 APK 的目录名不是一回事（`aarch64-linux-android` ↔ `arm64-v8a`）。
-弄错会得到一个编得出来、却永远不会被加载的库。`jniLibs/` 不入库——它必须来自
-它所挨着的那个提交，否则标签就不再描述二进制。
+注意 cargo 的 target 名与 APK 的目录名不是一回事（`aarch64-linux-android` ↔ `arm64-v8a`、
+`armv7-linux-androideabi` ↔ `armeabi-v7a`）。弄错会得到一个编得出来、却永远不会被加载的库。
+`jniLibs/` 不入库——它必须来自它所挨着的那个提交，否则标签就不再描述二进制。
 
 ### 2) 打包 APK
 
@@ -359,8 +422,8 @@ WATT_KEYSTORE  WATT_KEYSTORE_PASSWORD  WATT_KEY_ALIAS  WATT_KEY_PASSWORD
 
 [`.github/workflows/release.yml`](.github/workflows/release.yml)：推一个 `v*` 标签即触发。
 
-CI 从源码编 Rust（两个 ABI）→ `assembleRelease -PabiSplits` → 用仓库 secret 里的密钥签名 →
-校验签名与包信息 → 把两个 APK 连同 `CHANGELOG.md` 里对应版本的正文一起挂到 GitHub Release。
+CI 从源码编 Rust（三个 ABI）→ `assembleRelease -PabiSplits` → 用仓库 secret 里的密钥签名 →
+校验签名与包信息 → 把三个 APK 连同 `CHANGELOG.md` 里对应版本的正文一起挂到 GitHub Release。
 
 密钥以 base64 存进四个仓库 secret：`KEYSTORE_BASE64`、`KEYSTORE_PASSWORD`、`KEY_ALIAS`、`KEY_PASSWORD`。
 
@@ -371,6 +434,7 @@ core-rs/            内核（Rust workspace）
   crates/watt-rules   规则文档 → 路由表，含缓存与更新生命周期
   crates/watt-net     TUN 设备
   crates/watt-proxy   代理模式：CONNECT 隧道 + 普通 HTTP 转发（免 Root、不建隧道）
+  crates/watt-mitm    Root 模式：自签 CA 与本地终结 TLS 的反向代理
   crates/watt-stack   内核本体：engine / tcp / udp / dns / planner / upstream_proxy
   crates/watt-daemon  CLI 驱动
   crates/watt-ffi     C ABI 与 JNI 入口

@@ -101,10 +101,16 @@ class DetourVpnService : VpnService() {
 
         scope.launch {
             try {
-                val document = RulesRepository.load(this@DetourVpnService)
+                // The source follows the mode, and this is the one place that knows
+                // the mode as an argument rather than as state. Root mode is pinned
+                // to its own document — see [RuleSource.rootSource] for the
+                // measurement that forces it — so the rule set the proxy is built on
+                // is deliberately not the one the settings screen offers.
+                val source = RuleSource.forMode(mode, Prefs.of(this@DetourVpnService).selectedSource)
+                val document = RulesRepository.load(this@DetourVpnService, source = source)
                 KernelState.log(
                     KernelState.LogEntry.Level.INFO, TAG,
-                    "规则已加载 ${document.size / 1024} KiB",
+                    "规则已加载 ${document.size / 1024} KiB（来源 ${source.id}）",
                 )
 
                 when (mode) {
@@ -594,6 +600,12 @@ class DetourVpnService : VpnService() {
         if (tunnel == null && relay == null && root == null) return
         scope.launch {
             try {
+                // No source passed, deliberately: this reloads "the document the
+                // running mode uses", and [RulesRepository.load] derives that from
+                // the mode in [KernelState]. Naming one here would be a second copy
+                // of that rule, and the copy that mattered would be this one —
+                // reloading in root mode has to re-read root mode's document, not
+                // the one the settings screen has selected.
                 val document = RulesRepository.load(this@DetourVpnService, forceRefresh = false)
                 val applied = when {
                     tunnel != null -> tunnel.replaceRules(document)

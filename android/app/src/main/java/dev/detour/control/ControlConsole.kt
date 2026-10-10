@@ -246,6 +246,15 @@ object ControlConsole {
             .put("served", stats.served)
             .put("refused", stats.refused)
             .put("dial_failures", stats.dialFailures)
+            // The two origin-naming counters. They are here rather than only on
+            // the UI because they are the only evidence a check has that the
+            // naming decision went the way the rule asked: `named_upstreams` for
+            // a rule that named a substitute host, `no_sni_upstreams` for one
+            // that flagged a bare address. Without them, "the origin refused the
+            // handshake" and "the kernel never applied the flag" look identical
+            // from outside, and only the second is a bug in this app.
+            .put("named_upstreams", stats.namedUpstreams)
+            .put("no_sni_upstreams", stats.noSniUpstreams)
             .put("bytes_to_upstream", stats.bytesToUpstream)
             .put("bytes_to_client", stats.bytesToClient)
     }
@@ -571,6 +580,17 @@ object ControlConsole {
                 "rule_source_label",
                 prefs.selectedSource.labelRes?.let { context.getString(it) }
                     ?: prefs.selectedSource.label,
+            )
+            // Which document the running mode actually loads. Equal to `rule_source`
+            // in every mode but root, where the source is fixed by the mode — see
+            // `RuleSource.rootSource`. Both keys exist because neither is derivable
+            // from the other from outside the app: `rule_source` is the setting
+            // `set rule_source` writes and is *ignored* in root mode, while this is
+            // the document in force. A check that reads only the first would report
+            // a source change that did not happen.
+            .put(
+                "rule_source_effective",
+                RuleSource.forMode(KernelState.status.value.mode, prefs.selectedSource).id,
             )
             .put("rule_sources", sources)
             .put("refresh_hours", prefs.refreshHours)
