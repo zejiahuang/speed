@@ -773,4 +773,6 @@
     <string name="report_cache">规则缓存</string>
     <string name="report_settings">内核设置</string>
     <string name="report_logs">最近日志</string>
+    <string name="log_hosts_clobbered_repaired">hosts 文件被外部改写，规则块已重新写入</string>
+    <string name="log_hosts_clobbered_unrepaired">hosts 文件被外部改写，且重新写入失败——root 模式当前不拦截任何域名</string>
 </resources>

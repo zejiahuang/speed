@@ -425,6 +425,15 @@ object RootHelper {
         private var blockPath: File? = null
 
         /**
+         * The names in the block currently installed, or `null` before [apply].
+         *
+         * Kept so the block can be *rebuilt* without re-parsing the rule document,
+         * and so [hostsIntact] knows how many entries to expect. The list is the
+         * same one [hostsBlock] was given, so the two cannot disagree.
+         */
+        private var appliedNames: List<String>? = null
+
+        /**
          * Install the CA, the hosts entries and the redirect.
          *
          * @param caPem       the authority's certificate in PEM
@@ -513,14 +522,15 @@ object RootHelper {
                   } else {
                       context.getString(R.string.err_root_no_su_reply)
                   }
-                return context.getString(
-                      R.string.err_root_install_failed,
-                      step,
-                      result.output.takeLast(200).trim(),
-                  )
-            }
-            return null
-        }
+                  return context.getString(
+                        R.string.err_root_install_failed,
+                        step,
+                        result.output.takeLast(200).trim(),
+                    )
+              }
+              appliedNames = names
+              return null
+          }
 
         /**
          * Rewrite the hosts block for a new rule set, leaving everything else
@@ -539,7 +549,56 @@ object RootHelper {
                 listOf("cat $STAGE/hosts.orig ${block.absolutePath} > $HOSTS"),
                 TIMEOUT_MS,
             )
+            if (result.ok) appliedNames = names
             return result.ok
+        }
+
+        /**
+         * Whether the block this session wrote is still in `/etc/hosts`, whole.
+         *
+         * **Readable without root** — the file is world-readable — so this is cheap
+         * enough to poll. The *repair* is what needs `su`, which is why detection
+         * and repair are two calls.
+         *
+         * Markers plus a count, not a byte comparison: another app may rewrite the
+         * file as long as our block survives, and comparing bytes would then report
+         * a clobber that never happened. Two begin markers count as broken too — a
+         * block that got duplicated is one the resolver may read in either order.
+         *
+         * Before [apply] there is nothing to keep, so this answers `true`.
+         */
+        fun hostsIntact(): Boolean {
+            val names = appliedNames ?: return true
+            return runCatching {
+                val text = File(HOSTS).readText()
+                val begin = text.indexOf(HOSTS_BEGIN)
+                val end = text.indexOf(HOSTS_END)
+                if (begin < 0 || end <= begin) return@runCatching false
+                if (text.indexOf(HOSTS_BEGIN, begin + 1) >= 0) return@runCatching false
+                text.substring(begin, end)
+                    .lineSequence()
+                    .count { it.startsWith("$REDIRECT_ADDRESS ") } == names.size
+            }.getOrDefault(false)
+        }
+
+        /**
+         * Put the block back if someone else took it out.
+         *
+         * This is the answer to the one failure root mode could not report: the
+         * hosts file is a shared, world-writable-by-root resource, so a cleanup
+         * tool, another proxy app or a ROM "optimiser" can rewrite it while the
+         * tunnel is up. The mode then keeps reporting itself connected while
+         * hijacking nothing — every domain resolves to its real address and goes
+         * straight out. Nothing in the app could tell, because nothing was
+         * watching.
+         *
+         * @return true when the file was rewritten. A `false` with the block still
+         *         missing means the repair itself failed, which the caller reports.
+         */
+        fun reapplyHostsIfClobbered(): Boolean {
+            if (hostsIntact()) return false
+            val names = appliedNames ?: return false
+            return setNames(names)
         }
 
         /** Undo the install. Idempotent; safe to call on a lease that never applied. */

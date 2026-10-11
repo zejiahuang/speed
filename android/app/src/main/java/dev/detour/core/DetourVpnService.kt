@@ -492,6 +492,7 @@ class DetourVpnService : VpnService() {
         loop = scope.launch {
             var lastRateSample = 0L
             var lastReport = 0L
+            var lastHostsCheck = 0L
             var previous = Kernel.MitmStats()
             var previousAt = System.currentTimeMillis()
 
@@ -505,6 +506,29 @@ class DetourVpnService : VpnService() {
                     Prefs.of(this@DetourVpnService).statsIntervalSeconds.coerceIn(1, 60) * 1000L
 
                 val now = System.currentTimeMillis()
+
+                // Ahead of the early `continue` below, and on its own cadence: a
+                // clobbered hosts file has to be noticed even when neither the rate
+                // nor the report is due. Root mode's one silent failure — the block
+                // removed by another app, the mode still reporting itself connected
+                // while hijacking nothing — is what this looks for; see
+                // `RootHelper.Session.reapplyHostsIfClobbered`.
+                if (now - lastHostsCheck >= HOSTS_CHECK_INTERVAL_MS) {
+                    lastHostsCheck = now
+                    val session = rootSession
+                    if (session != null && !session.hostsIntact()) {
+                        val repaired = session.reapplyHostsIfClobbered()
+                        KernelState.log(
+                            this@DetourVpnService,
+                            if (repaired) KernelState.LogEntry.Level.WARN
+                            else KernelState.LogEntry.Level.ERROR,
+                            TAG,
+                            if (repaired) R.string.log_hosts_clobbered_repaired
+                            else R.string.log_hosts_clobbered_unrepaired,
+                        )
+                    }
+                }
+
                 val rateDue = now - lastRateSample >= RATE_SAMPLE_INTERVAL_MS
                 val reportDue = now - lastReport >= reportIntervalMs
                 if (!rateDue && !reportDue) {
@@ -915,6 +939,17 @@ class DetourVpnService : VpnService() {
          * they would spin a core for no information.
          */
         private const val PROXY_POLL_INTERVAL_MS = 200L
+
+        /**
+         * How often root mode checks that its `/etc/hosts` block is still there.
+         *
+         * The read itself is free — the file is world-readable, so no `su` is
+         * involved — which is what makes polling the right shape here. The repair
+         * behind it costs one `su`, and a rewrite by another app is not a race
+         * against anything, so five seconds is well inside the time it takes a user
+         * to notice a page not loading.
+         */
+        private const val HOSTS_CHECK_INTERVAL_MS = 5_000L
 
         /**
          * How long the teardown waits for the step loop to leave `step()`.

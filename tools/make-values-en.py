@@ -547,6 +547,8 @@ EN: dict[str, str] = {
     "report_cache": "Rule cache",
     "report_settings": "Kernel settings",
     "report_logs": "Recent log",
+    "log_hosts_clobbered_repaired": "The hosts file was rewritten by something else; the rule block has been put back",
+    "log_hosts_clobbered_unrepaired": "The hosts file was rewritten by something else and putting the block back failed — root mode is hijacking nothing right now",
 }
 
 

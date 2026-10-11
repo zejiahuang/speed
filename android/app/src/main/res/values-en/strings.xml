@@ -773,4 +773,6 @@
     <string name="report_cache">Rule cache</string>
     <string name="report_settings">Kernel settings</string>
     <string name="report_logs">Recent log</string>
+    <string name="log_hosts_clobbered_repaired">The hosts file was rewritten by something else; the rule block has been put back</string>
+    <string name="log_hosts_clobbered_unrepaired">The hosts file was rewritten by something else and putting the block back failed — root mode is hijacking nothing right now</string>
 </resources>
