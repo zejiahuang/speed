@@ -100,7 +100,13 @@ class DetourVpnService : VpnService() {
             return
         }
         KernelState.setStatus {
-            it.copy(phase = KernelState.Phase.STARTING, mode = mode, message = null)
+            it.copy(
+                phase = KernelState.Phase.STARTING,
+                mode = mode,
+                message = null,
+                failure = null,
+                reportPath = null,
+            )
         }
         startForeground(NOTIFICATION_ID, notification(getString(R.string.home_state_connecting)))
 
@@ -128,7 +134,10 @@ class DetourVpnService : VpnService() {
                     KernelState.Mode.ROOT -> startRoot(document)
                 }
             } catch (err: Throwable) {
-                fail(err.message ?: err.javaClass.simpleName)
+                fail(
+                    err.message ?: err.javaClass.simpleName,
+                    ErrorReport.Reason.RULES,
+                )
             }
         }
     }
@@ -201,7 +210,7 @@ class DetourVpnService : VpnService() {
         val mtu = prefs.mtu
 
         val descriptor = establish(mtu)
-            ?: run { fail(getString(R.string.home_no_permission)); return }
+            ?: run { fail(getString(R.string.home_no_permission), ErrorReport.Reason.PERMISSION); return }
 
         // Without this the settings screen is a list of switches that change
         // nothing: the engine was built on `StackConfig::default()` and no
@@ -275,7 +284,7 @@ class DetourVpnService : VpnService() {
      */
     private suspend fun startRoot(document: ByteArray) {
         val session = RootHelper.open(this)
-            ?: run { fail(getString(R.string.root_unavailable)); return }
+            ?: run { fail(getString(R.string.root_unavailable), ErrorReport.Reason.ROOT_UNAVAILABLE); return }
         rootSession = session
 
         val caDir = File(filesDir, MITM_CA_DIR).apply { mkdirs() }
@@ -285,21 +294,21 @@ class DetourVpnService : VpnService() {
             // only ever be a second way to collide.
             Kernel.startMitm(0, document, caDir.absolutePath)
         } catch (err: Throwable) {
-            fail(err.message ?: err.javaClass.simpleName)
+            fail(err.message ?: err.javaClass.simpleName, ErrorReport.Reason.MITM)
             return
         }
         mitm = started
 
         val caPem = started.caPem()
         if (caPem == null) {
-            fail(getString(R.string.root_ca_failed))
+            fail(getString(R.string.root_ca_failed), ErrorReport.Reason.ROOT_INSTALL)
             return
         }
 
         val names = RootHelper.domainsOf(this@DetourVpnService, document)
         val error = session.apply(caPem, names, started.port)
         if (error != null) {
-            fail(error)
+            fail(error, ErrorReport.Reason.ROOT_INSTALL)
             return
         }
 
@@ -425,7 +434,7 @@ class DetourVpnService : VpnService() {
             while (isActive) {
                 val current = engine ?: break
                 if (current.step() < 0) {
-                    fail(Kernel.lastError() ?: getString(R.string.err_kernel_error))
+                    fail(Kernel.lastError() ?: getString(R.string.err_kernel_error), ErrorReport.Reason.KERNEL)
                     break
                 }
 
@@ -780,8 +789,28 @@ class DetourVpnService : VpnService() {
         stopForeground(STOP_FOREGROUND_REMOVE)
     }
 
-    private fun fail(message: String) {
-        KernelState.setStatus { it.copy(phase = KernelState.Phase.ERROR, message = message) }
+    /**
+     * The one exit for a start that did not work.
+     *
+     * The report is written **before** the status changes: it reads the state the
+     * failure happened in, and the status write is what makes the home screen offer
+     * the export, so writing afterwards would race the screen that offers it. A
+     * failed write costs the file, not the failure — `write` returns null and the
+     * suggestion is shown anyway.
+     */
+    private fun fail(
+        message: String,
+        reason: ErrorReport.Reason = ErrorReport.Reason.UNKNOWN,
+    ) {
+        val report = ErrorReport.write(this, KernelState.status.value.mode, message, reason)
+        KernelState.setStatus {
+            it.copy(
+                phase = KernelState.Phase.ERROR,
+                message = message,
+                failure = reason,
+                reportPath = report?.absolutePath,
+            )
+        }
         KernelState.log(KernelState.LogEntry.Level.ERROR, TAG, message)
         // `fail` is called *from* the run loop, so it must not join it — joining
         // the coroutine that is calling you is a deadlock. Cancelling is right

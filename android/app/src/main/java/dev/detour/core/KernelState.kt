@@ -52,6 +52,20 @@ object KernelState {
         val mode: Mode = Mode.PROXY,
         /** Populated in [Phase.ERROR]; shown verbatim because it comes from the kernel. */
         val message: String? = null,
+        /**
+         * Why the last start failed, while [phase] is [Phase.ERROR].
+         *
+         * Carried on the status rather than looked up from [message]: the message
+         * is a kernel or system string, and choosing advice by matching its text
+         * would break the moment either was translated.
+         */
+        val failure: ErrorReport.Reason? = null,
+        /**
+         * Absolute path of the report written for that failure, when the write
+         * succeeded. `null` means only that the file is not there — the suggestion
+         * is shown either way.
+         */
+        val reportPath: String? = null,
         /** `System.currentTimeMillis()` when the tunnel came up. */
         val sinceMillis: Long = 0L,
         /** The port the proxy is listening on, in [Mode.PROXY]. */

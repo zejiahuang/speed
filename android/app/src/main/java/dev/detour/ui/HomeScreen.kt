@@ -23,8 +23,11 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.PlayArrow
 import android.content.ClipData
+import android.content.Context
 import android.content.ClipboardManager
+import android.content.Intent
 import android.widget.Toast
+import androidx.core.content.FileProvider
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -38,6 +41,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -56,6 +60,7 @@ import dev.detour.core.Rate
 import dev.detour.core.RootHelper
 import dev.detour.core.RuleSource
 import dev.detour.core.RulesRepository
+import dev.detour.core.ErrorReport
 import dev.detour.ui.components.DetourAlertDialog
 import dev.detour.ui.components.DetourAssistChip
 import dev.detour.ui.components.DetourCard
@@ -68,6 +73,8 @@ import dev.detour.ui.icons.DetourIcons
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
+import java.io.File
 
 /**
  * The hero screen: one control, and what it is doing.
@@ -91,14 +98,17 @@ fun HomeScreen() {
     val prefs = Prefs.of(context)
     val developerView = prefs.developerView
 
-    // Whether root mode is offered at all. Probed off the main thread — it spawns
-    // a process and may raise a consent prompt the first time — and never assumed:
-    // a mode that is on screen but cannot start is the "control that does nothing"
-    // this app refuses to ship, so without root the entry is not drawn.
-    var rootAvailable by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        rootAvailable = withContext(Dispatchers.IO) { RootHelper.isAvailable(context) }
-    }
+        // Root mode is asked for at the moment it is chosen, not guessed at launch.
+        //
+        // It used to be probed once on entry and the picker's row was hidden when
+        // that probe came back empty — which meant a device where `su` needed a
+        // grant the app had never requested showed no way to ask for one. The
+        // request is the point: selecting the mode runs `su -c id`, the system
+        // raises its own prompt if it wants to, and a refusal is answered with a
+        // refusal rather than by silently leaving the mode where it was.
+        var rootAsking by remember { mutableStateOf(false) }
+        var rootRefused by remember { mutableStateOf(false) }
+        val uiScope = rememberCoroutineScope()
 
     // How much room the floating glass bar takes at the bottom of this screen.
     // Read once, in composition, for the trailing `Spacer` inside the scroll
@@ -240,21 +250,39 @@ fun HomeScreen() {
         if (showModePicker) {
             ModePicker(
                 current = status.mode,
-                rootAvailable = rootAvailable,
+                asking = rootAsking,
                 onDismiss = { showModePicker = false },
                 onPick = { picked ->
                     showModePicker = false
-                    // Root mode asks first. The other two are reversible by
-                    // tapping again; this one changes what the device trusts, so
-                    // the cost is stated before it is paid rather than after.
-                    if (picked == KernelState.Mode.ROOT && !prefs.rootConsent) {
-                        showRootConsent = true
-                    } else {
+                    // Root mode asks first — for the permission, and then for the
+                    // acknowledgement. The other two are reversible by tapping
+                    // again; this one changes what the device trusts, so the cost
+                    // is stated before it is paid rather than after.
+                    if (picked != KernelState.Mode.ROOT) {
                         // Stored as well as shown: the holder is a process
                         // singleton, so a choice that only lived there would be
                         // forgotten the next time the app was killed.
                         prefs.updateMode(picked.name.lowercase())
                         KernelState.setStatus { it.copy(mode = picked) }
+                    } else {
+                        rootAsking = true
+                        uiScope.launch {
+                            // Off the main thread: this spawns `su`, and on a device
+                            // that has never granted it the call blocks on a system
+                            // prompt until the user answers.
+                            val granted = withContext(Dispatchers.IO) {
+                                RootHelper.isAvailable(context)
+                            }
+                            rootAsking = false
+                            when {
+                                !granted -> rootRefused = true
+                                !prefs.rootConsent -> showRootConsent = true
+                                else -> {
+                                    prefs.updateMode(KernelState.Mode.ROOT.name.lowercase())
+                                    KernelState.setStatus { it.copy(mode = KernelState.Mode.ROOT) }
+                                }
+                            }
+                        }
                     }
                 },
             )
@@ -296,14 +324,28 @@ fun HomeScreen() {
                 textAlign = TextAlign.Center,
             )
             // The kernel's message is precise and assumes a reader who knows what
-            // a rule document is. This is the sentence for everyone else.
+            // a rule document is. The line under it is the sentence for everyone
+            // else — and it is chosen by the cause the service recorded, not by
+            // matching that message, so translating either one cannot break it.
             Spacer(Modifier.height(4.dp))
             Text(
-                text = stringResource(R.string.home_error_hint),
+                text = stringResource(
+                    status.failure?.let { ErrorReport.suggestionRes(it) } ?: R.string.home_error_hint,
+                ),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
             )
+            // Only when a report was actually written. A button that opened
+            // nothing would be the same "control that does nothing" the mode
+            // picker's root row used to be.
+            val report = status.reportPath
+            if (report != null) {
+                Spacer(Modifier.height(4.dp))
+                TextButton(onClick = { shareErrorReport(context, report) }) {
+                    Text(stringResource(R.string.error_report_share))
+                }
+            }
         }
 
         Spacer(Modifier.height(24.dp))
@@ -539,6 +581,10 @@ fun HomeScreen() {
             },
         )
     }
+
+    if (rootRefused) {
+        RootRefused(onDismiss = { rootRefused = false })
+    }
 }
 
 /**
@@ -763,7 +809,7 @@ private fun ProxyAddressCard(port: Int) {
 @Composable
 private fun ModePicker(
     current: KernelState.Mode,
-    rootAvailable: Boolean,
+    asking: Boolean,
     onDismiss: () -> Unit,
     onPick: (KernelState.Mode) -> Unit,
 ) {
@@ -785,18 +831,21 @@ private fun ModePicker(
                     selected = current == KernelState.Mode.VPN,
                     onClick = { onPick(KernelState.Mode.VPN) },
                 )
-                // Only drawn when a usable `su` is present. A row that is on
-                // screen but cannot start is the defect this app keeps removing,
-                // and there is no partial version of root mode to offer instead.
-                if (rootAvailable) {
-                    Spacer(Modifier.height(8.dp))
-                    ModeRow(
-                        title = stringResource(R.string.home_mode_root),
-                        detail = stringResource(R.string.home_mode_root_desc),
-                        selected = current == KernelState.Mode.ROOT,
-                        onClick = { onPick(KernelState.Mode.ROOT) },
-                    )
-                }
+                Spacer(Modifier.height(8.dp))
+                // Always drawn, and that is the change: the row used to appear only
+                // when a probe taken at launch had already found a usable `su`,
+                // which hid the request from the devices that had not been asked
+                // yet. Tapping it is what asks — and a refusal comes back as a
+                // refusal dialog, not as a row that silently does nothing.
+                ModeRow(
+                    title = stringResource(R.string.home_mode_root),
+                    detail = stringResource(
+                        if (asking) R.string.home_mode_root_asking else R.string.home_mode_root_desc,
+                    ),
+                    selected = current == KernelState.Mode.ROOT,
+                    enabled = !asking,
+                    onClick = { onPick(KernelState.Mode.ROOT) },
+                )
             }
         },
         confirmButton = {
@@ -805,8 +854,73 @@ private fun ModePicker(
     )
 }
 
+/**
+ * The answer to a root request that came back empty.
+ *
+ * A refusal rather than a retry loop: the picker's row is still there, so the user
+ * who fixes the grant in their root manager can tap it again, and one that says
+ * "try again" without saying what to change is noise. The body names the place the
+ * grant lives, because "no root" from an app the user just installed is otherwise
+ * indistinguishable from a device that has none.
+ */
 @Composable
-private fun ModeRow(title: String, detail: String, selected: Boolean, onClick: () -> Unit) {
+private fun RootRefused(onDismiss: () -> Unit) {
+    DetourAlertDialog(
+        onDismissRequest = onDismiss,
+        title = stringResource(R.string.root_refused_title),
+        text = { Text(stringResource(R.string.root_refused_text)) },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.common_confirm))
+            }
+        },
+    )
+}
+
+/**
+ * Hand the error report to a share target.
+ *
+ * A FileProvider URI rather than the path: the report is written under `files/`,
+ * which no other app may read, and `res/xml/file_paths.xml` exposes exactly the
+ * one directory it lands in — so this cannot be used to hand out anything else.
+ * The failure path is a toast rather than a crash, because a device with no share
+ * target is not a reason to take down the screen that is already reporting a
+ * failure.
+ */
+private fun shareErrorReport(context: Context, path: String) {
+    runCatching {
+        val uri = FileProvider.getUriForFile(
+            context,
+            context.packageName + ".fileprovider",
+            File(path),
+        )
+        val send = Intent(Intent.ACTION_SEND)
+            .setType("text/plain")
+            .putExtra(Intent.EXTRA_STREAM, uri)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        context.startActivity(
+            Intent.createChooser(send, context.getString(R.string.error_report_share_title)),
+        )
+    }.onFailure {
+        Toast.makeText(
+            context,
+            context.getString(
+                R.string.error_report_share_failed,
+                it.message ?: context.getString(R.string.common_unknown),
+            ),
+            Toast.LENGTH_SHORT,
+        ).show()
+    }
+}
+
+@Composable
+private fun ModeRow(
+    title: String,
+    detail: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+) {
     // Filled on purpose — do not "finish the job" by moving this to Glass. This
     // row only ever renders inside `ModePicker`, which is a `Dialog`, and a
     // Compose `Dialog` is a separate window: it has no access to the page's
@@ -817,7 +931,10 @@ private fun ModeRow(title: String, detail: String, selected: Boolean, onClick: (
     // the whole signal this row carries, and they need an opaque surface to read
     // against.
     DetourCard(
-        onClick = onClick,
+        // `null` rather than a disabled-looking card: the row is only inert while
+        // the root request is in flight, and dimming it would read as
+        // "unavailable", which is the thing being tested.
+        onClick = if (enabled) onClick else null,
         style = DetourCardStyle.Filled,
         colors = CardDefaults.cardColors(
             containerColor = if (selected) {

@@ -763,33 +763,12 @@ fun SettingsScreen(
 
         // --- root mode --------------------------------------------------------
 
-        // The root-mode cost, stated here rather than only in the mode picker.
-        // It is the one consequence this app cannot show once the mode is running:
-        // the proxy presents its own certificate, so the client stops verifying
-        // the real one. A row of its own — always present, matched by search — so
-        // it is findable whether or not the mode is selected, which a hint on a
-        // mode-only control would not be.
-        // Deliberately **not** mode-scoped, unlike every other row in this card.
-        // It is a notice about a mode rather than a setting of one, and the row's
-        // own comment above says why it stays: it is the one consequence the app
-        // cannot show once the mode is running. Scoping it to root mode would hide
-        // the cost from exactly the people who have not chosen the mode yet —
-        // which is the only moment the warning can still change a decision.
-        val rootRiskTitle = stringResource(R.string.settings_root_risk_title)
-        val rootRiskBody = stringResource(R.string.settings_root_risk_body)
-        add(
-            SettingsRow(SettingsPage.CONNECTION, listOf(rootRiskTitle, rootRiskBody)) {
-                Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-                    Text(rootRiskTitle, style = MaterialTheme.typography.bodyLarge)
-                    Text(
-                        rootRiskBody,
-                        modifier = Modifier.padding(top = 4.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            },
-        )
+        // The root-mode cost used to be a row here, deliberately not mode-scoped so
+        // it stayed findable before the mode was chosen. It is gone by request: the
+        // same disclosure is made by the consent dialog the picker raises when root
+        // mode is selected, which is the moment it can still change the decision,
+        // and having it in two places meant the settings copy was the one nobody
+        // read.
 
         // --- the upstream exit ------------------------------------------------
 

@@ -171,8 +171,6 @@
          the settings screen, not only in the README: it is a privacy property of
          the mode — the connection is no longer end-to-end verified — and it is
          the reason this mode is offered last. -->
-    <string name="settings_root_risk_title">关于 Root 模式</string>
-    <string name="settings_root_risk_body">Root 模式会在本机终结 TLS：App 自己签发证书、以中间人身份连接真实服务器。因此客户端看到的证书由本 App 签发，上游（真实服务器）的证书不再被校验。这需要 Root 权限，会改写系统 hosts 文件并向系统信任库安装一张自签 CA；断开连接时会全部还原。已在运行的应用可能要到重启一次之后才会读取到新装的 CA。注意：改写 hosts 只对走系统解析器的应用生效；启用 Private DNS（DoT）或浏览器自带 Secure DNS/DoH 的应用会自行解析、绕过 hosts，因此该模式并不覆盖全部流量。</string>
     <string name="settings_rules_url">规则源地址</string>
     <string name="settings_refresh_interval">刷新间隔</string>
     <string name="settings_offline">离线模式</string>
@@ -742,4 +740,37 @@
     <string name="err_update_missing_fields">缺少 versionCode 或 url</string>
     <string name="err_update_version_fallback">版本 %1$d</string>
     <string name="err_update_version_unparsable">版本号无法解析：%1$s</string>
+    <!-- Root mode's permission request. The picker's row is always drawn now and
+         asking is what tapping it does, so a refusal needs its own answer rather
+         than a row that silently does nothing. -->
+    <string name="root_refused_title">无法使用 Root 模式</string>
+    <string name="root_refused_text">没有拿到 root 权限，模式没有切换。请在系统的 root 管理应用里允许 speed，然后重新选择 Root 模式。</string>
+    <string name="home_mode_root_asking">正在请求 root 权限…</string>
+
+    <!-- Connection failures: the suggestion shown under the error, and the report
+         the app writes for it. One suggestion per cause — the service records the
+         cause, so the advice does not depend on matching the error's wording. -->
+    <string name="error_hint_rules">规则没准备好：在规则页刷新一次；一直失败就换一个数据源。</string>
+    <string name="error_hint_permission">缺 VPN 授权：点上面的按钮，在系统弹窗里允许。</string>
+    <string name="error_hint_root_unavailable">拿不到 root 权限：在 root 管理应用里允许 speed，再选一次 Root 模式。</string>
+    <string name="error_hint_root_install">root 接管没装成：报告里记着失败在第几步。hosts 不可写、或被拒绝的命令，都会是这个样子。</string>
+    <string name="error_hint_mitm">本地反代没起来：断开后重试一次。端口被占用时也是这个现象。</string>
+    <string name="error_hint_kernel">内核启动后立刻报错：把下面这份报告发出去，内核的错误原文在里面。</string>
+    <string name="error_hint_unknown">把下面这份报告发出去：里面有模式、规则状态与最近的日志。</string>
+    <string name="error_report_share">导出错误报告</string>
+    <string name="error_report_share_title">错误报告</string>
+    <string name="error_report_share_failed">导出失败：%1$s</string>
+
+    <!-- The report file itself. Written to files/error-reports/ on every failed
+         start; the labels are localised because the user is the one who reads it
+         before sending it on. -->
+    <string name="report_title">错误报告</string>
+    <string name="report_time">时间</string>
+    <string name="report_mode">模式</string>
+    <string name="report_reason">原因</string>
+    <string name="report_error">错误</string>
+    <string name="report_rules">规则</string>
+    <string name="report_cache">规则缓存</string>
+    <string name="report_settings">内核设置</string>
+    <string name="report_logs">最近日志</string>
 </resources>

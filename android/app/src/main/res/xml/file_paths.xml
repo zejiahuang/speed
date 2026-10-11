@@ -1,7 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
-    <!-- Only the cache directory: the export file is written there and nowhere
+    <!-- Only the cache directory: the log export is written there and nowhere
          else, so the provider cannot be used to read anything the app did not
          deliberately hand out. -->
     <cache-path name="logs" path="." />
+
+    <!-- The error reports, and only that one directory under `files/`. They go to
+         `files/` rather than the cache because a report the system may evict is
+         the failure mode they exist to prevent; naming the subdirectory here
+         keeps the rest of `files/` — the rule cache, the wallpaper, the imported
+         sources — unreachable from a share intent. -->
+    <files-path name="reports" path="error-reports/" />
 </paths>

@@ -171,8 +171,6 @@
          the settings screen, not only in the README: it is a privacy property of
          the mode — the connection is no longer end-to-end verified — and it is
          the reason this mode is offered last. -->
-    <string name="settings_root_risk_title">About root mode</string>
-    <string name="settings_root_risk_body">Root mode terminates TLS on this device: the app issues its own certificate and connects to the real server as a man in the middle. The certificate the client sees is therefore issued by this app, and the upstream (real server) certificate is no longer validated. This needs root, rewrites the system hosts file and installs a self-signed CA into the system trust store; disconnecting reverts all of it. An app that is already running may not see the newly installed CA until it is restarted once. Note that the hosts rewrite affects only apps that go through the system resolver; apps with Private DNS (DoT) or a browser\'s own Secure DNS / DoH resolve by themselves and bypass hosts, so this mode does not cover all traffic.</string>
     <string name="settings_rules_url">Rule source address</string>
     <string name="settings_refresh_interval">Refresh interval</string>
     <string name="settings_offline">Offline mode</string>
@@ -742,4 +740,37 @@
     <string name="err_update_missing_fields">Missing versionCode or url</string>
     <string name="err_update_version_fallback">version %1$d</string>
     <string name="err_update_version_unparsable">Cannot parse the version number: %1$s</string>
+    <!-- Root mode's permission request. The picker's row is always drawn now and
+         asking is what tapping it does, so a refusal needs its own answer rather
+         than a row that silently does nothing. -->
+    <string name="root_refused_title">Root mode is unavailable</string>
+    <string name="root_refused_text">Root access was not granted, so the mode was not switched. Allow speed in your system root manager, then pick Root mode again.</string>
+    <string name="home_mode_root_asking">Requesting root access…</string>
+
+    <!-- Connection failures: the suggestion shown under the error, and the report
+         the app writes for it. One suggestion per cause — the service records the
+         cause, so the advice does not depend on matching the error's wording. -->
+    <string name="error_hint_rules">The rules are not ready: refresh them on the Rules page, and switch to another source if that keeps failing.</string>
+    <string name="error_hint_permission">VPN authorisation is missing: tap the button above and allow it in the system dialog.</string>
+    <string name="error_hint_root_unavailable">Root access was refused: allow speed in your root manager and pick Root mode again.</string>
+    <string name="error_hint_root_install">The root takeover did not install: the report names the step that failed. An unwritable hosts file and a refused command both look like this.</string>
+    <string name="error_hint_mitm">The local reverse proxy did not come up: disconnect and try again. A busy port looks the same.</string>
+    <string name="error_hint_kernel">The kernel started and then failed: send the report below, it carries the kernel\'s own error.</string>
+    <string name="error_hint_unknown">Send the report below: it carries the mode, the rule state and the recent log.</string>
+    <string name="error_report_share">Export error report</string>
+    <string name="error_report_share_title">Error report</string>
+    <string name="error_report_share_failed">Export failed: %1$s</string>
+
+    <!-- The report file itself. Written to files/error-reports/ on every failed
+         start; the labels are localised because the user is the one who reads it
+         before sending it on. -->
+    <string name="report_title">Error report</string>
+    <string name="report_time">Time</string>
+    <string name="report_mode">Mode</string>
+    <string name="report_reason">Reason</string>
+    <string name="report_error">Error</string>
+    <string name="report_rules">Rules</string>
+    <string name="report_cache">Rule cache</string>
+    <string name="report_settings">Kernel settings</string>
+    <string name="report_logs">Recent log</string>
 </resources>
