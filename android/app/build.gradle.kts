@@ -22,8 +22,8 @@ val disclaimerResDir = layout.buildDirectory.dir("generated/disclaimer/res")
  * `defaultConfig` block reads those, so there is one literal per number rather
  * than two that can disagree.
  */
-val repoVersionName = "0.3.0"
-val repoVersionCode = 8
+val repoVersionName = "0.3.1"
+val repoVersionCode = 9
 
 /**
  * The version the build actually carries, overridable per invocation.
