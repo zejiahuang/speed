@@ -408,18 +408,23 @@ fun SettingsScreen(
                 // main-thread write would ANR before it returned.
                 val outcome = withContext(Dispatchers.IO) {
                     runCatching {
-                        context.contentResolver.openOutputStream(uri)?.use { stream ->
-                            stream.write(SettingsBackup.export(context).toByteArray())
-                        } ?: throw IOException("无法打开输出流")
+                          context.contentResolver.openOutputStream(uri)?.use { stream ->
+                              stream.write(SettingsBackup.export(context).toByteArray())
+                          } ?: throw IOException(
+                              context.getString(R.string.settings_export_stream_failed),
+                          )
                     }
                 }
                 // `stringResource` is not callable from a click handler, so the
                 // toast text comes from the context directly.
                 val message = outcome.fold(
                     onSuccess = { context.getString(R.string.settings_export_done) },
-                    onFailure = {
-                        context.getString(R.string.settings_export_failed, it.message ?: "未知错误")
-                    },
+                      onFailure = {
+                          context.getString(
+                              R.string.settings_export_failed,
+                              it.message ?: context.getString(R.string.common_unknown),
+                          )
+                      },
                 )
                 Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
             }
@@ -440,9 +445,11 @@ fun SettingsScreen(
                         // provider would otherwise block the main thread long enough to ANR.
                         val outcome = withContext(Dispatchers.IO) {
                             runCatching {
-                                context.contentResolver.openInputStream(uri)?.use { stream ->
-                                    stream.bufferedReader().readText()
-                                } ?: throw IOException("无法打开输入流")
+                                  context.contentResolver.openInputStream(uri)?.use { stream ->
+                                      stream.bufferedReader().readText()
+                                  } ?: throw IOException(
+                                      context.getString(R.string.settings_import_stream_failed),
+                                  )
                             }
                         }
                         val message = outcome.fold(
@@ -475,9 +482,12 @@ fun SettingsScreen(
                                     }
                                 }
                             },
-                            onFailure = {
-                                context.getString(R.string.settings_import_read_failed, it.message ?: "未知错误")
-                            },
+                              onFailure = {
+                                  context.getString(
+                                      R.string.settings_import_read_failed,
+                                      it.message ?: context.getString(R.string.common_unknown),
+                                  )
+                              },
                         )
                         Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
                     }

@@ -1,8 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  All user-visible text lives here rather than in the Kotlin, so that adding a
-  second language later is a `values-en/` directory and nothing else. The app is
-  Chinese-only for now, but nothing in the code assumes it.
+  All user-visible text lives in these resources rather than in the Kotlin, so a
+  second language is a `values-en/` directory and nothing else.
+
+  `values/strings.xml` (Simplified Chinese) is the source of truth; the English
+  file is generated from it by `tools/make-values-en.py`, which copies every
+  element and comment verbatim, replaces only the text, and refuses to write if
+  the two disagree about a name or a format specifier. Edit the Chinese file and
+  re-run the script; do not edit the generated one.
 -->
 <resources>
     <string name="app_name">speed</string>
@@ -307,7 +312,6 @@
     <string name="settings_home_show_rate_hint">关掉可省电，速率每 0.5 秒刷新一次</string>
     <string name="settings_confirm_disconnect">断开前二次确认</string>
     <string name="settings_confirm_disconnect_hint">避免误触把正在跑的下载掐掉</string>
-    <string name="settings_unknown">未知</string>
 
     <!-- Control (adb) -->
     <string name="control_unavailable">此构建不开放 adb 控制</string>
@@ -464,6 +468,10 @@
          now exactly one "取消". -->
     <string name="common_cancel">取消</string>
     <string name="common_confirm">确定</string>
+    <!-- The fallback when an exception carries no message of its own. It was
+         `settings_unknown`, which no screen ever read; the export and import
+         paths both need it, so it is a shared string now. -->
+    <string name="common_unknown">未知错误</string>
 
     <!-- The numeric-entry dialog that every slider opens (`DetourSliderRow`).
          Every slider in the app has it, not only the glass ones: a drag alone
@@ -529,6 +537,12 @@
     <string name="settings_export">导出数据</string>
     <string name="settings_export_hint">把设置存成一个 JSON 文件（不含壁纸图片）</string>
     <string name="settings_export_action">导出</string>
+    <!-- The two stream failures. The message is the detail inside
+         `settings_export_failed` / `settings_import_read_failed`, and it used to
+         be a Chinese literal in the Kotlin — invisible to translation, and shown
+         to the user inside an otherwise translated sentence. -->
+    <string name="settings_export_stream_failed">无法打开输出流</string>
+    <string name="settings_import_stream_failed">无法打开输入流</string>
     <string name="settings_import">导入数据</string>
     <string name="settings_import_hint">从 JSON 文件恢复设置，会覆盖当前设置</string>
     <string name="settings_import_action">导入</string>

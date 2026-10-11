@@ -284,14 +284,14 @@ fun LogsScreen() {
                             // The format argument is only known here, at failure
                             // time, so `getString` rather than a captured
                             // `stringResource`.
-                            Toast.makeText(
-                                context,
-                                context.getString(
-                                    R.string.logs_export_failed,
-                                    it.message ?: "未知错误",
-                                ),
-                                Toast.LENGTH_SHORT,
-                            ).show()
+                              Toast.makeText(
+                                  context,
+                                  context.getString(
+                                      R.string.logs_export_failed,
+                                      it.message ?: context.getString(R.string.common_unknown),
+                                  ),
+                                  Toast.LENGTH_SHORT,
+                              ).show()
                         }
                     },
                 ) {

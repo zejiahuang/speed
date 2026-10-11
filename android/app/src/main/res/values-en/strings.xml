@@ -1,0 +1,645 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  All user-visible text lives in these resources rather than in the Kotlin, so a
+  second language is a `values-en/` directory and nothing else.
+
+  `values/strings.xml` (Simplified Chinese) is the source of truth; the English
+  file is generated from it by `tools/make-values-en.py`, which copies every
+  element and comment verbatim, replaces only the text, and refuses to write if
+  the two disagree about a name or a format specifier. Edit the Chinese file and
+  re-run the script; do not edit the generated one.
+-->
+<resources>
+    <string name="app_name">speed</string>
+
+    <!-- Bottom navigation -->
+    <string name="nav_home">Connect</string>
+    <string name="nav_rules">Rules</string>
+    <string name="nav_logs">Log</string>
+    <string name="nav_settings">Settings</string>
+
+    <!-- Home -->
+    <string name="home_state_off">Not connected</string>
+    <string name="home_state_connecting">Connecting…</string>
+    <string name="home_state_on">Connected</string>
+    <string name="home_state_error">Connection failed</string>
+    <string name="home_action_connect">Connect</string>
+    <string name="home_action_disconnect">Disconnect</string>
+    <string name="home_mode_proxy">Proxy mode</string>
+    <string name="home_mode_vpn">VPN mode</string>
+    <string name="home_uptime">Up for %1$s</string>
+    <string name="home_speed_down">Down</string>
+    <string name="home_speed_up">Up</string>
+    <string name="home_total">This session</string>
+    <string name="home_domains_saved">Rules hit %1$d times this session</string>
+    <string name="home_no_permission">VPN mode needs system authorisation</string>
+    <string name="home_grant">Grant</string>
+    <string name="home_switch_mode">Switch mode</string>
+    <string name="home_proxy_address">Proxy address</string>
+    <string name="home_copy">Copy</string>
+    <string name="home_copied">Copied</string>
+    <string name="home_proxy_how">Put this address into the app that should use the proxy</string>
+    <!-- The proxy mode reads no kernel settings document — `watt_proxy_start`
+         takes rules and nothing else — so the rows under 高级：内核参数 are
+         tunnel-only. Said on the card rather than only in the README: an
+         upstream exit that is configured and silently not applied is a privacy
+         surprise, and the card is where the user of this mode is looking. -->
+    <string name="home_proxy_limits">Timeouts, upstream egress and the upstream resolver apply to VPN mode only</string>
+    <string name="home_mode_pick">Choose a mode</string>
+    <string name="home_mode_root">Root mode</string>
+    <string name="home_mode_proxy_desc">Root-free, no system authorisation. Affects only apps that can be pointed at an HTTP proxy.</string>
+    <string name="home_mode_vpn_desc">Takes over public traffic and needs system VPN authorisation. The full feature set.</string>
+    <string name="home_mode_root_desc">No VPN authorisation: rewrites the system hosts file and redirects traffic to a local proxy with iptables. Needs root, and no longer validates upstream certificates.</string>
+    <string name="home_error_hint">Connection failed. Check whether the rules have been downloaded, or try another mode.</string>
+    <string name="home_disconnect_confirm_title">Disconnect?</string>
+    <string name="home_disconnect_confirm_text">Data in flight is cut off immediately.</string>
+    <string name="home_disconnect_confirm_ok">Disconnect</string>
+
+    <!-- Root mode. The picker omits the Root row entirely when no usable su was
+         found, so a mode the device cannot run is never offered; these strings
+         cover the consent it asks for first and the two ways its install fails. -->
+    <string name="root_consent_title">Enter root mode?</string>
+    <string name="root_consent_text">Root mode terminates TLS on this device and connects to the real server as a man in the middle: the certificate the client sees is issued by this app, and upstream certificates are no longer validated. Enabling it needs root, rewrites the system hosts file and installs a self-signed CA into the system trust store; disconnecting reverts all of it.</string>
+    <string name="root_consent_ok">I understand, continue</string>
+    <string name="root_unavailable">No usable root access</string>
+    <string name="root_ca_failed">Cannot read the device CA certificate</string>
+
+    <!-- Rules -->
+    <string name="rules_title">Rules</string>
+    <string name="rules_search_hint">Search domains, addresses or groups</string>
+    <string name="rules_enabled_summary">%1$d of %2$d groups enabled</string>
+    <string name="rules_refresh">Refresh rules</string>
+    <string name="rules_source">Source</string>
+    <!-- The rule sources are a list now (see RuleSource), not a fixed pair of
+         option values. Built-ins take their name from here; a custom source
+         carries its own label. -->
+    <!-- Named, not numbered. These read as bare "1" / "2" for a while, which
+         told the user nothing about which document was loaded — on the rules
+         chips and on the home screen's source row both. The name is the one the
+         design docs and the repository use. The default is expressed by the
+         order of RuleSource.defaults() and the selected radio, not by a "默认"
+         suffix on the label. -->
+    <string name="rules_source_github_hosts">github-hosts</string>
+    <!-- The default document, 521xueweihan/GitHub520 served by HelloGitHub.
+         It is a different document from github-hosts, so the name has to say
+         which one: "HelloGitHub" alone would not tell the two apart. -->
+    <string name="rules_source_hellogithub">HelloGitHub (GitHub520)</string>
+    <!-- Root mode's fixed source. It is not offered as a choice, so this name is
+         only ever a label: the settings row that replaces the source picker in
+         root mode, and the "which document am I running" line on the home and
+         about screens. The wording names the *shape* of the document (a list of
+         substitute upstreams) rather than its publisher, because the publisher is
+         this deployment's own host and a name that says "s302" alone would read
+         like the retired hosts document that every address of is 127.0.0.1. -->
+    <string name="rules_source_s302_upstream">s302 substitute upstreams</string>
+    <!-- Shown in root mode in place of the source picker. States the fact and the
+         way out: the mode is what fixes the source, so switching modes is the
+         only thing that changes it. -->
+    <string name="rules_source_root_pinned">Root mode is pinned to this source; switch to VPN or proxy mode to choose another</string>
+    <string name="rules_add_source">Add a custom source</string>
+    <string name="rules_source_name">Name (optional)</string>
+    <string name="rules_source_url">Address</string>
+    <string name="rules_source_add_ok">Add</string>
+    <string name="rules_source_delete">Delete</string>
+    <string name="rules_source_unavailable">Unavailable</string>
+    <string name="rules_source_invalid_url">Enter an address starting with http(s)://</string>
+    <!-- The import entry point. "本地文件" rather than "hosts 文件": the content
+         is validated as a rule document, and the kernel's own JSON is accepted
+         too, so naming hosts would describe one of the two shapes it takes. -->
+    <string name="rules_import_local">Import a local file</string>
+    <!-- The subtitle of an imported source's row. The stored copy's name is a
+         SHA-256 and says nothing to a reader, so the row says what the source
+         *is*; the file's own name is the row's title, and the copy is in `dump`. -->
+    <string name="rules_source_local">Local file</string>
+    <string name="rules_import_done">Imported %1$s</string>
+    <string name="rules_import_already">The contents of %1$s had already been imported; switched to it</string>
+    <string name="rules_import_failed">Import failed: %1$s</string>
+    <string name="rules_count_domains">%1$d domains</string>
+    <string name="rules_count_addresses">%1$d addresses</string>
+    <string name="rules_expand">Expand</string>
+    <string name="rules_collapse">Collapse</string>
+    <string name="rules_empty">No matching entries</string>
+    <string name="rules_level_group">Group</string>
+    <string name="rules_level_domain">Domain</string>
+    <string name="rules_level_address">Address</string>
+    <string name="rules_disabled_hint">Rules that are off never reach the kernel</string>
+    <string name="rules_enable_all">Enable all</string>
+    <string name="rules_disable_all">Disable all</string>
+    <string name="rules_cache_info">Cached %1$d KiB · %2$s</string>
+    <string name="rules_switches_applied">%1$d switches applied</string>
+
+    <!-- Logs -->
+    <string name="logs_title">Log</string>
+    <string name="logs_tab_live">Live</string>
+    <string name="logs_tab_archive">Archive</string>
+    <string name="logs_pause">Pause</string>
+    <string name="logs_resume">Resume</string>
+    <string name="logs_clear">Clear</string>
+    <string name="logs_export">Export</string>
+    <string name="logs_empty">No log entries yet</string>
+    <string name="logs_filter_all">All</string>
+    <string name="logs_filter_session">Session</string>
+    <string name="logs_filter_error">Errors</string>
+    <string name="logs_filter_dns">DNS</string>
+    <string name="logs_archived_days">%1$d days archived</string>
+    <string name="logs_no_archive">Nothing archived yet</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_section_connection">Connection and sources</string>
+    <string name="settings_section_logs">Log and diagnostics</string>
+    <string name="settings_section_appearance">Appearance</string>
+    <string name="settings_section_advanced">Advanced: kernel parameters</string>
+    <string name="settings_section_advanced_shell">Advanced</string>
+    <!-- The settings screen's entry rows, one per section, since the five cards
+         became five second-level pages. A summary rather than an inventory of
+         the rows inside: an inventory would have to be kept in step with them
+         and would be wrong the first time one moved. What these have to do is
+         let a reader tell the five apart and know which one to open. -->
+    <string name="settings_page_connection">Rule source, upstream egress and resolver</string>
+    <string name="settings_page_connection_proxy">Proxy port, rule source and connection behaviour</string>
+    <string name="settings_page_connection_root">Rule source (fixed by the mode) and connection behaviour</string>
+    <string name="settings_page_logs">Stats interval and log archiving</string>
+    <string name="settings_page_appearance">Theme, glass effect, wallpaper and fonts</string>
+    <string name="settings_page_advanced">Dialling, timeouts, flow limits and the console</string>
+    <string name="settings_page_advanced_shell">Developer view, kernel library and console</string>
+    <string name="settings_page_data">Export, import and version info</string>
+    <string name="settings_back">Back</string>
+    <string name="settings_proxy_port">Proxy listening port</string>
+    <string name="settings_proxy_port_hint">Point the app HTTP proxy at 127.0.0.1:%1$d</string>
+    <!-- The one thing a user must be told before choosing Root mode. Stated on
+         the settings screen, not only in the README: it is a privacy property of
+         the mode — the connection is no longer end-to-end verified — and it is
+         the reason this mode is offered last. -->
+    <string name="settings_root_risk_title">About root mode</string>
+    <string name="settings_root_risk_body">Root mode terminates TLS on this device: the app issues its own certificate and connects to the real server as a man in the middle. The certificate the client sees is therefore issued by this app, and the upstream (real server) certificate is no longer validated. This needs root, rewrites the system hosts file and installs a self-signed CA into the system trust store; disconnecting reverts all of it. An app that is already running may not see the newly installed CA until it is restarted once. Note that the hosts rewrite affects only apps that go through the system resolver; apps with Private DNS (DoT) or a browser\'s own Secure DNS / DoH resolve by themselves and bypass hosts, so this mode does not cover all traffic.</string>
+    <string name="settings_rules_url">Rule source address</string>
+    <string name="settings_refresh_interval">Refresh interval</string>
+    <string name="settings_offline">Offline mode</string>
+    <string name="settings_offline_hint">Use only downloaded rules; no network access</string>
+    <string name="settings_stats_interval">Stats interval</string>
+    <string name="settings_log_level">Log level</string>
+    <string name="settings_log_archive">Archive by day</string>
+    <string name="settings_log_archive_hint">Keep the last 7 days of logs</string>
+    <string name="settings_clear_logs">Clear all logs</string>
+    <string name="settings_dynamic_color">Colours from the wallpaper</string>
+    <string name="settings_dynamic_color_hint">Available on Android 12 and above</string>
+    <string name="settings_dark_mode">Dark mode</string>
+    <string name="settings_dark_follow">Follow system</string>
+    <string name="settings_dark_always">Always dark</string>
+    <string name="settings_dark_never">Always light</string>
+    <string name="settings_developer_view">Developer view</string>
+    <string name="settings_developer_view_hint">Show kernel details such as candidates, cooldowns and silent counters, and unlock the kernel console</string>
+    <string name="settings_failure_cooldown">Failure cooldown</string>
+    <string name="settings_max_candidates">Max candidates per connection</string>
+    <string name="settings_connect_stagger">Stagger interval</string>
+    <string name="settings_dial_names">Use dial names</string>
+    <string name="settings_dial_names_hint">Domains in the rules are re-resolved on refresh</string>
+    <string name="settings_kernel_version">Kernel version</string>
+    <!-- The in-app command console, shown under 内核版本 only when 开发者视图 is on. -->
+    <string name="settings_console">Kernel console</string>
+    <string name="settings_console_hint">The same commands as the adb control plane: status, set mtu 1400, dump, help</string>
+    <string name="settings_console_placeholder">Type a command</string>
+    <string name="settings_console_run">Run</string>
+    <string name="settings_console_clear">Clear</string>
+    <string name="settings_console_empty">No commands run yet</string>
+    <string name="settings_console_running">Running…</string>
+    <string name="settings_console_prompt">›</string>
+
+    <!-- Advanced: the knobs that reach the kernel's own config -->
+    <string name="settings_mtu">Tunnel MTU</string>
+    <string name="settings_mtu_hint">Lower values mean fewer fragments, at the cost of throughput</string>
+    <string name="settings_connect_timeout">Per-connection timeout</string>
+    <string name="settings_tcp_idle">TCP idle reaping</string>
+    <string name="settings_udp_idle">UDP idle reaping</string>
+    <string name="settings_udp_idle_hint">Also decides how long a silent UDP flow holds a descriptor</string>
+    <string name="settings_max_tcp_flows">TCP flow limit</string>
+    <string name="settings_max_udp_flows">UDP flow limit</string>
+    <string name="settings_answer_dns">Answer DNS locally</string>
+    <string name="settings_answer_dns_hint">When a rule matches, the kernel answers directly instead of forwarding</string>
+    <string name="settings_certificate_check">Validate certificates of rule addresses</string>
+    <string name="settings_certificate_check_hint">Confirm before dialling that the certificate this address presents covers the target domain. Turning it off is faster, but may connect to an address with the wrong certificate</string>
+    <string name="settings_observe_dns">Learn addresses from answers</string>
+    <string name="settings_observe_dns_hint">Record forwarded answers to extend the domain-to-address mapping</string>
+    <string name="settings_race_width">Race width</string>
+    <string name="settings_race_width_hint">How many candidates one connection dials at once. 1 disables racing and tries them one at a time</string>
+    <string name="settings_race_launch">Race launch interval</string>
+    <string name="settings_max_dialing">Global dialling limit</string>
+    <string name="settings_max_dialing_hint">Cap on upstream sockets handshaking at once across all connections, so descriptors cannot run out</string>
+    <!-- The upstream exit: hand TCP flows to a proxy and let it open the
+         connection from somewhere else. It changes the path and nothing else —
+         no TLS is terminated and nothing is decrypted. -->
+    <string name="settings_upstream_proxy">Upstream egress</string>
+    <string name="settings_upstream_proxy_hint">Hand public TCP to a proxy to forward. TLS is neither touched nor decrypted; only the egress changes</string>
+    <string name="settings_upstream_proxy_address">Address</string>
+    <string name="settings_upstream_proxy_address_invalid">Use IP:port, for example 203.0.113.7:1080. Literal addresses only, no host names</string>
+    <string name="settings_upstream_proxy_kind">Protocol</string>
+    <string name="settings_upstream_proxy_kind_socks5">SOCKS5</string>
+    <string name="settings_upstream_proxy_kind_http">HTTP CONNECT</string>
+    <string name="settings_upstream_proxy_username">Username</string>
+    <string name="settings_upstream_proxy_password">Password</string>
+    <string name="settings_upstream_proxy_enable">Enable upstream egress</string>
+    <string name="settings_upstream_proxy_enable_hint">Public TCP only; UDP, LAN and loopback addresses still connect directly</string>
+    <!-- The upstream resolver: who answers names the rule set does not own. A
+         selection, not a switch — the transport (DoH) is an implementation
+         detail, and the thing being chosen is the resolver. -->
+    <string name="settings_dns_upstream">Upstream resolver</string>
+    <string name="settings_dns_upstream_hint">Names outside the rule table go to this resolver. Names inside it are unaffected and are still answered locally</string>
+    <string name="settings_dns_upstream_none">Current resolver</string>
+    <string name="settings_dns_upstream_ali">AliDNS</string>
+    <string name="settings_dns_upstream_tx">DNSPod</string>
+    <string name="settings_dns_upstream_cf">1.1.1.1</string>
+    <string name="settings_dns_upstream_url">Custom endpoint</string>
+    <string name="settings_dns_upstream_url_hint">A DoH address starting with https://, for example https://1.1.1.1/dns-query</string>
+    <string name="settings_dns_upstream_url_invalid">The kernel cannot resolve this endpoint, so it will not be enabled</string>
+    <string name="settings_dns_upstream_address">Bootstrap address</string>
+    <string name="settings_dns_upstream_address_hint">Required when the endpoint is a host name: a resolver cannot resolve itself. Use its IP, for example 223.5.5.5</string>
+    <string name="settings_kernel_pending_title">Kernel parameters changed</string>
+    <string name="settings_kernel_pending_body">The tunnel is still using the old parameters; the change takes effect only once the kernel is rebuilt.</string>
+    <string name="settings_kernel_pending_action">Apply and reconnect</string>
+
+    <!-- Appearance, second batch -->
+    <string name="settings_theme_color">Accent colour</string>
+    <string name="settings_theme_color_dynamic">From wallpaper</string>
+    <string name="settings_theme_color_brand">Brand blue</string>
+    <string name="settings_theme_color_green">Teal</string>
+    <string name="settings_theme_color_orange">Warm orange</string>
+    <string name="settings_theme_color_violet">Violet</string>
+    <string name="settings_corner_style">Corner radius</string>
+    <string name="settings_corner_small">Compact</string>
+    <string name="settings_corner_medium">Standard</string>
+    <string name="settings_corner_large">Rounded</string>
+    <!-- The glass section. One master switch, **off by default** (the owner's
+         call, 2026-09-27): a fresh install draws flat cards and the user opts
+         into the effect. It replaced the old five-tier chip row
+         (自动/关闭/低/高/自定义) — the tiers were a second and redundant way to
+         say what the switch says directly, and "自动" (device-decided) was the
+         one tier that made the section unreadable: the user could not tell what
+         they were looking at without knowing their own device's RAM and core
+         count.
+
+         It was **two** switches (液态玻璃 / 磨砂材质) until 2026-10-01, when the
+         owner merged them. The two halves of the material are unchanged — 磨砂
+         is the *blur* (`DetourGlass.blurRadius`), 液态 is the *refraction*
+         (`lensHeight`/`lensAmount`) plus the highlight and the lit edge — but one
+         switch now turns on both, so refraction without blur is no longer
+         reachable and every glass-on user pays for the blur.
+         `resolveDetourGlass` records that trade-off. The two old labels survive
+         only inside this comment: keeping either as a string would leave a name
+         for something the UI no longer offers. -->
+    <string name="settings_glass">Glass effect</string>
+    <!-- Both halves' hints, in one line. The Android 13 caveat stays in the hint
+         rather than being hidden, because below API 33 `lens` has no
+         `RuntimeShader` to run in and the liquid half would look broken on an
+         older phone — see the API-level ladder in `LiquidGlass`. The blur is
+         named as the expensive half because the merge made it unavoidable, so it
+         is the one thing a user cannot turn off once glass is on. -->
+    <string name="settings_glass_hint">Refraction, highlight and rim, with the content behind blurred (needs Android 13; the blur is the expensive part)</string>
+    <string name="settings_glass_blur">Blur strength</string>
+    <string name="settings_glass_tint">Tint density</string>
+    <string name="settings_glass_lens">Refraction strength</string>
+    <string name="settings_glass_highlight">Highlight</string>
+    <string name="settings_glass_border">Rim</string>
+    <string name="settings_wallpaper">Background wallpaper</string>
+    <string name="settings_wallpaper_hint">A custom app background, which the glass effect refracts</string>
+    <string name="settings_wallpaper_pick">Choose an image</string>
+    <string name="settings_wallpaper_change">Replace</string>
+    <string name="settings_wallpaper_clear">Clear</string>
+    <string name="settings_wallpaper_scrim">Wallpaper scrim</string>
+    <string name="settings_wallpaper_failed">The image cannot be read; try another one</string>
+    <string name="settings_font_scale">Font size</string>
+    <string name="settings_home_show_rate">Show live rates on the home page</string>
+    <string name="settings_home_show_rate_hint">Turn it off to save power; rates refresh every 0.5 s</string>
+    <string name="settings_confirm_disconnect">Confirm before disconnecting</string>
+    <string name="settings_confirm_disconnect_hint">Avoids cutting a running download with a stray tap</string>
+
+    <!-- Control (adb) -->
+    <string name="control_unavailable">adb control is not exposed in this build</string>
+
+    <!-- Relative ages, shared by the home rule card and the rules screen's
+         per-address verdicts. One set rather than two, so "3 分钟前" cannot come
+         to mean two different things on two screens. -->
+    <string name="age_just_now">just now</string>
+    <string name="age_seconds">%1$d s ago</string>
+    <string name="age_minutes">%1$d min ago</string>
+    <string name="age_hours">%1$d h ago</string>
+    <string name="age_days">%1$d d ago</string>
+
+    <!-- Home, second batch. The screen used to answer only "is it up"; these are
+         the two questions that come next: "which rules is it running, and how
+         old are they" and "is the rule set actually being used". -->
+    <string name="home_rule_card_title">Rule status</string>
+    <string name="home_rule_source_label">Rule source</string>
+    <string name="home_rule_cache_label">Cache</string>
+    <string name="home_rule_cache_none">Not cached yet</string>
+    <string name="home_rule_cache_fresh">Fresh</string>
+    <string name="home_rule_cache_stale">Stale</string>
+    <string name="home_rule_cache_detail">%1$s · %2$s</string>
+    <string name="home_hits_title">Rule hit statistics</string>
+    <string name="home_hits_matched">Rule hits</string>
+    <string name="home_hits_direct">Direct</string>
+    <string name="home_hits_live">Live flows</string>
+    <string name="home_hits_unnamed">Unnamed traffic</string>
+    <string name="home_hits_named_by_sni">of which named at handshake</string>
+    <string name="home_hits_named_under_ech">of which rerouted under ECH</string>
+    <string name="home_hits_hellos_unnamed">Handshakes left unnamed</string>
+    <string name="home_hits_ratio">Hit rate %1$s</string>
+    <string name="home_hits_none">No traffic through the tunnel yet</string>
+
+    <!-- Developer rows, lifted out of HomeScreen.kt where they were eight
+         string literals in a list. -->
+    <string name="dev_tcp_open_close">TCP open/close</string>
+    <string name="dev_tcp_failures">TCP failures</string>
+    <string name="dev_tcp_rejected">TCP rejected</string>
+    <string name="dev_udp_open_evict">UDP open/evicted</string>
+    <string name="dev_dns_local">DNS answered locally</string>
+    <string name="dev_dns_trimmed">DNS trimmed</string>
+    <!-- Answered over queries, the same shape as `dev_dns_local` above. Both
+         counters are zero while no upstream resolver is configured, which is
+         what makes this row the answer to "is the resolver in use". -->
+    <string name="dev_dns_upstream">DNS resolved upstream</string>
+    <string name="dev_live_flows">Live flows</string>
+    <string name="dev_packets">Packets in/out</string>
+
+    <!-- Logs, second batch. The archive file had no way in from the UI at all. -->
+    <string name="logs_copy">Copy</string>
+    <string name="logs_copied">Copied</string>
+    <string name="logs_export_all">Export all logs</string>
+    <string name="logs_export_share_title">Export logs</string>
+    <string name="logs_export_empty">No logs to export yet</string>
+    <string name="logs_export_done">Logs exported</string>
+    <string name="logs_export_failed">Export failed: %1$s</string>
+
+    <!-- Settings, second batch. -->
+    <string name="settings_search_hint">Search settings</string>
+    <string name="settings_search_empty">No matching settings</string>
+    <string name="settings_advanced_expand">Show advanced settings</string>
+    <string name="settings_advanced_collapse">Hide advanced settings</string>
+    <string name="settings_auto_connect">Connect automatically at launch</string>
+    <string name="settings_auto_connect_hint">When the app opens and VPN authorisation is already granted, bring the tunnel up</string>
+    <string name="settings_restore_defaults">Restore default settings</string>
+    <string name="settings_restore_defaults_hint">Added rule sources are cleared as well</string>
+    <string name="settings_restore_confirm_title">Restore default settings?</string>
+    <string name="settings_restore_confirm_text">Every setting returns to its initial state, including added rule sources and custom switches. The current connection is not dropped, but reconnecting is needed to use the new parameters.</string>
+    <!-- One string for one action rather than two copies of 恢复: this is the
+         label on the row's button and on the dialog's confirm button, and a
+         reader comparing the two should not be able to find a difference. -->
+    <string name="settings_restore_action">Restore</string>
+    <string name="settings_restore_done">Default settings restored</string>
+    <string name="settings_dynamic_color_unsupported">Not supported on this device (needs Android 12 or above)</string>
+
+    <!-- Rules, second batch: the per-address verdicts. Two sources feed these —
+         the certificate probe ("will this address present a certificate for the
+         domain") and the selector's byte history ("did this address actually
+         work"). They answer different questions and both are shown. -->
+    <string name="rules_group_counts">%1$d domains · %2$d addresses</string>
+    <string name="rules_verdict_label">Last verdict</string>
+    <string name="rules_verdict_cert">Certificate</string>
+    <string name="rules_verdict_selector">Selection</string>
+    <string name="rules_verdict_ok">Usable</string>
+    <string name="rules_verdict_wrong_cert">Certificate mismatch</string>
+    <string name="rules_verdict_unreachable">Unreachable</string>
+    <string name="rules_verdict_in_flight">Probing</string>
+    <string name="rules_verdict_silent">Connected, no data</string>
+    <string name="rules_verdict_failed">Failed before</string>
+    <string name="rules_verdict_unprobed">Not probed</string>
+    <string name="rules_verdict_rtt">%1$d ms</string>
+    <!-- Only shown when at least one address is known-bad, so a healthy domain
+         stays uncluttered. Both numbers are counts of addresses. -->
+    <string name="rules_verdict_domain_bad">%1$d of %2$d addresses unusable</string>
+    <string name="rules_verdict_domain_all_bad">All %1$d addresses unusable</string>
+    <!-- The same shape as the domain rollup, named separately on purpose: a
+         translator may want different wording for a whole group than for one
+         domain, and the two lines appear at different levels of the tree. -->
+    <string name="rules_verdict_group_bad">%1$d of %2$d addresses unusable</string>
+    <string name="rules_disable_all_confirm_title">Disable every group?</string>
+    <string name="rules_disable_all_confirm_text">This keeps %1$d groups out of the kernel; their traffic will connect directly instead.</string>
+    <string name="rules_disable_all_confirm_ok">Disable all</string>
+
+    <!-- Pages, third batch: the "other pages" pass. Shared page chrome plus the
+         per-screen additions. Strings only; the code that reads them lands in
+         the same batch. -->
+
+    <!-- Home. The mode chip is disabled while the tunnel is up, and nothing on
+         screen said why — this is that sentence. -->
+    <string name="home_mode_locked">Disconnect to switch</string>
+
+    <!-- Home: 「规则状态」 and 「命中规则统计」 merged into one card. They answered
+         the same question ("are the rules doing anything") from two cards, so
+         the answer had to be assembled by scrolling. -->
+    <string name="home_traffic_title">Rules and splitting</string>
+    <string name="home_traffic_ratio_label">Rule hit share</string>
+    <string name="home_traffic_flows_label">Hits / direct / live flows</string>
+    <!-- Shown in place of the split when the tunnel is down: the source and
+         cache rows stay (they are configuration, true either way), but a
+         traffic ratio with no traffic would read as a broken tunnel. -->
+    <string name="home_traffic_idle">Splitting stats appear once connected</string>
+
+    <!-- Logs. The list could be read but not searched, and a single line could
+         be copied but not the set. -->
+    <string name="logs_search_hint">Search content or tag</string>
+    <string name="logs_copy_all">Copy all</string>
+    <string name="logs_copied_all">Copied %1$d lines</string>
+    <string name="logs_back_to_latest">Back to latest</string>
+    <!-- The empty state's second line. The title reuses `logs_empty`. -->
+    <string name="logs_empty_detail">Connect once and kernel events will appear here</string>
+
+    <!-- The header's count. The unit cannot live in Kotlin: it is Chinese, and a
+         bare number as a subtitle reads as a bug rather than as a count. -->
+    <string name="logs_count">%1$d lines</string>
+
+    <!-- Shown when there *are* logs but the search or the filter chips hid them
+         all. `logs_empty` ("还没有日志") is a lie in that case — the user has
+         hundreds of lines and the app is telling them the kernel never spoke.
+         The detail names both ways out, because the user may have forgotten
+         which of the two they set. -->
+    <string name="logs_no_match">No matching log entries</string>
+    <string name="logs_no_match_detail">Try another keyword, or clear the filters</string>
+
+    <!-- The clear-log dialog. The action deletes the session's log buffer and
+         there is no undo, so the body says so rather than relying on the title
+         alone. -->
+    <string name="logs_clear_confirm_detail">This cannot be undone</string>
+
+    <!-- A generic dismiss. The log dialog used to borrow `rules_source_cancel`,
+         which made a log screen depend on a rule string — the same "one thing
+         written several times" this batch exists to stop. The add-source dialog
+         was the last holder of that string and has folded in too, so there is
+         now exactly one "取消". -->
+    <string name="common_cancel">Cancel</string>
+    <string name="common_confirm">OK</string>
+    <!-- The fallback when an exception carries no message of its own. It was
+         `settings_unknown`, which no screen ever read; the export and import
+         paths both need it, so it is a shared string now. -->
+    <string name="common_unknown">Unknown error</string>
+
+    <!-- The numeric-entry dialog that every slider opens (`DetourSliderRow`).
+         Every slider in the app has it, not only the glass ones: a drag alone
+         cannot express a value the thumb cannot land on, and the wider the range
+         the worse that gets. -->
+    <string name="slider_input_title">Enter a value</string>
+    <string name="slider_input_range">Range %1$s to %2$s</string>
+
+    <!-- The third reason the list can be empty, and the only one that is not a
+         property of the data: the user paused while the buffer was still empty,
+         so the snapshot being shown is empty while logs have since arrived.
+         Neither `logs_empty` ("还没有日志") nor `logs_no_match` ("换个关键词") is
+         true here — the logs exist and nothing is filtered. The detail names the
+         one action that helps, which is to resume. -->
+    <string name="logs_paused_empty">Paused</string>
+    <string name="logs_paused_empty_detail">Resume to show new entries</string>
+
+    <!-- Rules. -->
+    <string name="rules_filter_all">All</string>
+    <!-- The page's most practical question is "why does this one site not
+         work", which is answered by the addresses the kernel has already judged
+         bad. This filter brings them to the top level. -->
+    <string name="rules_filter_problems">Problems only</string>
+    <!-- The verdict columns are a snapshot taken while the tunnel runs, so they
+         are absent when it is down. A placeholder says "not yet" instead of
+         leaving the user to read the absence as "this does not exist". -->
+    <string name="rules_verdict_offline">Connect to see address verdicts</string>
+    <!-- The empty state's second line. The title reuses `rules_empty`. -->
+    <string name="rules_empty_detail">Switch to another source, or add a custom one in settings</string>
+
+    <!-- Shown when the "只看有问题的" filter is on and nothing matches. This
+         cannot reuse `rules_empty_detail` ("换一个数据源…"), because the filter
+         hides entries the user *does* have — the fix is to turn the filter off,
+         not to change the data source. The detail line states the counting rule
+         on purpose: `UNPROBED` and in-flight addresses are deliberately not
+         counted as problems, so a user who sees "no problems" while most
+         addresses are unjudged is not being lied to. -->
+    <string name="rules_filter_problems_empty">No entries with an abnormal verdict</string>
+    <string name="rules_filter_problems_empty_detail">Only judged addresses count; unjudged and in-flight ones are not abnormal</string>
+
+    <!-- Data portability: export / import, plus the About entry.
+
+         The export is deliberately a *settings* document, not a backup. It
+         excludes the wallpaper image — a multi-megabyte photo the user already
+         has in their gallery, and the one thing here that cannot be carried in
+         a chat message — it excludes every piece of runtime state (the engine's
+         applied settings, the cache-dirty repair flag, the schema version), and
+         it excludes imported rule sources, whose content is a file on the device
+         rather than a value that can be written down. What is left is a few KB of
+         JSON that can be pasted into any chat app, which is the whole point: a
+         backup nobody can move is not a backup.
+
+         The imported sources are excluded in both directions and that is one
+         decision, not two: dropping them on export keeps the file free of a name
+         that means nothing on another device, and skipping them on import is what
+         stops a restore from deleting the copies this device already has.
+
+         Import applies each value through the same setter the corresponding
+         settings row uses, so a setting cannot be exported without also being
+         importable. That property is what keeps the two directions from
+         drifting apart. -->
+    <string name="settings_section_data">Data and about</string>
+    <string name="settings_export">Export data</string>
+    <string name="settings_export_hint">Save the settings as a JSON file (wallpaper image excluded)</string>
+    <string name="settings_export_action">Export</string>
+    <!-- The two stream failures. The message is the detail inside
+         `settings_export_failed` / `settings_import_read_failed`, and it used to
+         be a Chinese literal in the Kotlin — invisible to translation, and shown
+         to the user inside an otherwise translated sentence. -->
+    <string name="settings_export_stream_failed">Cannot open the output stream</string>
+    <string name="settings_import_stream_failed">Cannot open the input stream</string>
+    <string name="settings_import">Import data</string>
+    <string name="settings_import_hint">Restore settings from a JSON file; this overwrites the current ones</string>
+    <string name="settings_import_action">Import</string>
+    <string name="settings_about">About</string>
+    <string name="settings_about_hint">Version, environment and updates</string>
+
+    <string name="settings_export_done">Settings exported</string>
+    <string name="settings_export_failed">Export failed: %1$s</string>
+    <string name="settings_import_confirm_title">Import settings?</string>
+    <!-- The parenthetical is not a nicety. The sentence says the file overwrites
+         the added rule sources, which is true of the *network* ones — the
+         imported ones are deliberately kept, because their content is not in
+         the file and dropping them would delete a document the user still has
+         on the device. Without it the copy would tell a user with an imported
+         file that importing is about to remove it. -->
+    <string name="settings_import_confirm_text">Importing overwrites the current settings with the file values, including added rule sources and custom switches (rule files imported on this device are kept). The current connection is not dropped, but reconnecting is needed to use the new parameters.</string>
+    <string name="settings_import_confirm_ok">Import</string>
+    <string name="settings_import_done">Imported %1$d settings</string>
+    <string name="settings_import_done_ignored">Imported %1$d settings, ignored %2$d unrecognised ones</string>
+    <string name="settings_import_bad_json">This file is not valid JSON</string>
+    <string name="settings_import_not_ours">This is not a settings file exported by this app</string>
+    <string name="settings_import_too_new">This file comes from a newer version; update the app first</string>
+    <string name="settings_import_read_failed">Could not read the file: %1$s</string>
+
+    <!-- About.
+
+         "内核库" reports whether the native library loaded, and deliberately
+         does not report a version number. The FFI header exports no version
+         symbol, so the only number available is the app's own — and printing
+         that next to the word "内核" produces a value that changes when the
+         shell changes and never when the kernel does. The load error, when
+         there is one, is the honest answer instead. -->
+    <string name="about_title">About</string>
+    <string name="about_section_version">Version</string>
+    <string name="about_app_version">App version</string>
+    <string name="about_build_type">Build type</string>
+    <string name="about_build_debug">Debug</string>
+    <string name="about_build_release">Release</string>
+    <string name="about_kernel">Kernel library</string>
+    <string name="about_kernel_ok">Loaded</string>
+    <string name="about_environment">Environment</string>
+    <string name="about_device">Device</string>
+    <string name="about_section_rules">Sources</string>
+    <string name="about_rule_source">Current rule source</string>
+    <string name="about_rule_scale">Rule set size</string>
+    <string name="about_section_update">Updates</string>
+    <string name="about_update_check">Check for updates</string>
+    <string name="about_update_checking">Checking…</string>
+    <string name="about_update_latest">Up to date</string>
+    <string name="about_update_available">Version %1$s is available</string>
+    <string name="about_update_notes">Release notes</string>
+    <string name="about_update_download">Go to download</string>
+    <string name="about_update_failed">Check failed: %1$s</string>
+    <string name="about_update_auto_check">Check automatically at launch</string>
+    <string name="about_update_auto_check_hint">At most once a day, and only when there is an update</string>
+    <string name="about_update_channel">Update channel</string>
+    <string name="about_update_channel_hint">The beta channel looks for pre-releases only, never stable ones</string>
+    <string name="about_update_channel_stable">Stable</string>
+    <string name="about_update_channel_beta">Beta</string>
+    <string name="about_section_project">Project</string>
+    <string name="about_repo">Project repository</string>
+    <string name="update_dialog_title">New version available</string>
+    <string name="update_dialog_version">Version %1$s</string>
+    <string name="update_dialog_later">Later</string>
+    <string name="about_close">Close</string>
+
+    <!-- First-launch disclaimer. The body is not here: it is DISCLAIMER.md at the
+         repository root, copied into res/raw at build time, so the app shows
+         exactly what the repository publishes. Only the frame around it lives
+         here.
+
+         `disclaimer_title` is a fallback, not the title in normal use: the dialog
+         takes its title from the document's own opening heading (see
+         `Disclaimer.titleAndBody`), so the heading is not drawn twice and the
+         window cannot announce a heading the document no longer has. This string
+         is what shows if the document ever opens with something else. -->
+    <string name="disclaimer_title">Disclaimer</string>
+    <string name="disclaimer_intro">Please read the notice below before use. This app provides no network egress of any kind, does not decrypt TLS by default, and makes no guarantee about how you use it; continuing means you accept all of its terms.</string>
+    <string name="disclaimer_accept">I have read and agree</string>
+    <!-- %1$d is the seconds left; see DISCLAIMER_LOCK_SECONDS. -->
+    <string name="disclaimer_accept_locked">I have read and agree (%1$d)</string>
+    <string name="disclaimer_decline">Disagree and exit</string>
+
+    <!-- Battery-optimization reminder. Shown on every launch while the app is not
+         exempt, and deliberately not recorded anywhere: the exemption can be
+         revoked — by the user, by a ROM cleanup tool, or by the system after an
+         update — so a stored "already told them" would go on being true after the
+         condition it described had become false again. See `BatteryPolicy`.
+
+         The body names the symptom rather than the setting, because "省电策略" is
+         not a term the user has had to learn; what they can recognise is a
+         connection that reports itself up while nothing loads. The hint exists so
+         the window does not over-promise: only the exemption has an API, so the
+         OEM-only 自启动 / 后台运行 switches are handed to the user rather than
+         implied to have been checked. -->
+    <string name="battery_title">Battery policy is not set to unrestricted</string>
+    <string name="battery_body">The system may reap the tunnel while you are not using it, which shows up as a connection that reports itself up while nothing moves. Set speed\'s battery policy to \"Unrestricted\", otherwise background survival cannot be guaranteed.</string>
+    <string name="battery_oem_hint">Some systems also need \"Autostart\" and \"Background running\" enabled separately. Neither has a standard entry point and this app cannot read them, so please confirm them in the system settings yourself.</string>
+    <string name="battery_open_settings">Open battery settings</string>
+</resources>
