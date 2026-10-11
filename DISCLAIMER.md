@@ -15,11 +15,12 @@
 
 ## 二、软件性质与定位
 
-1. 本项目是一个**免 Root 的用户态网络工具**。它在设备本地建立一个 VPN 隧道，按规则表为每个连接选择网络出口**地址**。
+1. 本项目是一个**用户态网络工具**，提供三种接管方式：**VPN 模式**（免 Root，在设备本地建立一个 VPN 隧道）、**代理模式**（免 Root，在本地开一个 HTTP 代理端口）、**Root 模式**（需要设备已 Root，改写系统 hosts、把一张自签证书装进系统信任库、并添加一条 iptables 规则）。三种方式都按规则表为每个连接选择网络出口**地址**。
 2. 本项目**不是** VPN 服务提供者，**不是**代理服务商，**不运营任何服务器**，**不销售任何网络服务**，也**不提供任何网络出口**。
 3. 本项目**不改变你所处的网络环境**。它换的是"连到哪个地址"，不是"从哪个国家出去"。
-4. 本项目**不解密 TLS**。它不代理、不记录、不修改任何加密内容，也无法读取你的任何加密流量。
-5. 本项目**不做任何"翻墙"承诺**，也不保证能够访问任何被限制的资源。能否访问某个站点，取决于该站点地址是否可达、以及该地址的证书是否覆盖该域名——这两件事都不在本项目的控制之内。
+4. 本项目**默认不解密 TLS**：VPN 模式与代理模式都不安装证书、不做中间人，不代理、不记录、不修改任何加密内容，也无法读取你的任何加密流量。
+5. **Root 模式是第 4 条的例外，且只在你主动选择该模式时成立。** 它会在本机签发证书、以中间人身份终结 TLS（这正是它能够处理"证书不覆盖该域名"的地址的原因），并且**不校验上游服务器的证书**——你与服务器之间的身份保证因此被移除。该模式对系统的改动（hosts、系统信任库、iptables）在断开连接时自动还原，但改动本身确实发生过；已在运行的应用可能要到重启一次之后才会读到新装的证书。
+6. 本项目**不做任何"翻墙"承诺**，也不保证能够访问任何被限制的资源。能否访问某个站点，取决于该站点地址是否可达、以及该地址的证书是否覆盖该域名——这两件事都不在本项目的控制之内。
 
 ## 三、无担保：本项目按"现状"提供
 
@@ -47,7 +48,7 @@
 2. **地址会过期。** 上游服务的 IP 随时变更。过期地址的典型表现是**挂满超时之后报"候选耗尽"**；若该条目只有一个地址，就没有第二条路可走。
 3. **存在按名字的干扰。** 有些域名 TCP 能连通、TLS 握手之后即被静默（连上但零字节返回）。对这类域名，**换地址无效，放宽证书校验也无效**——只有换一个网络出口才行，而**本项目不提供出口**。
 4. **连通性在分钟尺度上抖动。** 任何"某域名通/不通"的结论都必须带上时间窗；单次结果不构成判据。
-5. **不解密 TLS 的后果**：当所有已知地址的证书都不覆盖目标域名时，本项目**无法处理**（这是本项目与"本地中间人解密"类方案的根本区别）。
+5. **默认不解密 TLS 的后果**：当所有已知地址的证书都不覆盖目标域名时，VPN 模式与代理模式**无法处理**。Root 模式是为此存在的例外——它终结 TLS，因此不受这一条限制，代价见第二节第 5 条。
 6. **应用自身流量被刻意排除在隧道之外**（防止自环），因此应用自己的联网请求——例如**检查更新**——走的是**裸网络**。
 7. **冷启动存在首包延迟**（数秒量级），这是设计行为而非故障。
 
@@ -157,11 +158,12 @@
 
 ## 2. What the Project is, and what it is not
 
-1. The Project is a **root-free userspace networking tool**. It creates a local VPN tunnel on your device and selects an egress **address** per connection according to a rule table.
+1. The Project is a **userspace networking tool** with three takeover modes: **VPN mode** (root-free; it creates a local VPN tunnel on your device), **proxy mode** (root-free; it opens a local HTTP proxy port), and **root mode** (requires the device to be rooted; it rewrites the system hosts file, installs a self-signed certificate into the system trust store, and adds an iptables rule). All three select an egress **address** per connection according to a rule table.
 2. The Project is **not** a VPN provider, **not** a proxy service, **operates no servers**, **sells no network service**, and **provides no network egress of any kind**.
 3. The Project **does not change the network you are on**. It changes *which address* a connection is sent to, not *which country it leaves from*.
-4. The Project **does not decrypt TLS**. It does not proxy, log or modify encrypted content, and it cannot read your encrypted traffic.
-5. The Project makes **no promise of circumventing anything**, and does not guarantee access to any restricted resource. Whether a site is reachable depends on whether its addresses are reachable and whether the certificate on those addresses covers the name — neither of which the Project controls.
+4. The Project **does not decrypt TLS by default**: neither VPN mode nor proxy mode installs a certificate or acts as a man in the middle, and neither proxies, logs or modifies encrypted content, nor can it read your encrypted traffic.
+5. **Root mode is the exception to clause 4, and only when you choose it deliberately.** It mints a certificate on the device and terminates TLS as a man in the middle — which is precisely why it can handle addresses whose certificate does not cover the name — and it **does not validate the upstream server's certificate**, so the identity guarantee between you and the server is removed. Its changes to the system (hosts, system trust store, iptables) are reverted automatically when you disconnect, but they did happen; already-running apps may need a restart before they see the new certificate.
+6. The Project makes **no promise of circumventing anything**, and does not guarantee access to any restricted resource. Whether a site is reachable depends on whether its addresses are reachable and whether the certificate on those addresses covers the name — neither of which the Project controls.
 
 ## 3. No warranty: provided "as is"
 
@@ -189,7 +191,7 @@ This section explains why "it installed, but some sites do not load" is a **desi
 2. **Addresses go stale.** Upstream IPs change without notice. The typical symptom is **hanging until a timeout, then reporting "candidates exhausted"**; if the entry has only one address, there is no second path.
 3. **Per-name interference exists.** Some domains complete a TCP handshake and are then silently dropped after the TLS handshake (connected, zero bytes back). For these, **changing the address does not help and relaxing certificate validation does not help** — only a different egress would, and **the Project provides no egress**.
 4. **Connectivity fluctuates on a minute scale.** Any "this domain works / does not work" conclusion carries a time window; a single sample is not evidence.
-5. **Because TLS is not decrypted**, the Project **cannot** handle the case where no known address carries a certificate covering the target name. This is the fundamental difference from local man-in-the-middle designs.
+5. **Because TLS is not decrypted by default**, VPN mode and proxy mode **cannot** handle the case where no known address carries a certificate covering the target name. Root mode exists as the exception: it terminates TLS, so this limit does not apply to it — see section 2, clause 5 for the cost.
 6. **The app's own traffic is deliberately excluded from its tunnel** (to prevent loops), so the app's own requests — such as **the update check** — use the **raw network**.
 7. **A cold start carries a first-packet delay** (on the order of seconds). This is by design, not a fault.
 

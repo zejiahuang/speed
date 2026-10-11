@@ -2,6 +2,8 @@
 
 # speed
 
+[**简体中文**](README.md) · [English](README.en.md)
+
 **Android 网络绕行工具 · 默认免 Root**
 
 规则表里命中的域名，改从规则给出的地址拨号；其余流量原样直连。
@@ -11,7 +13,7 @@
 [![ABI](https://img.shields.io/badge/ABI-arm64--v8a%20%7C%20armeabi--v7a%20%7C%20x86__64-lightgrey.svg)](#下载)
 [![Release](https://img.shields.io/github/v/release/zejiahuang/speed?label=release&color=3ddc84)](../../releases/latest)
 
-[下载](#下载) · [工作原理](#工作原理) · [设计取舍](#设计取舍) · [从源码构建](#从源码构建) · [免责声明](DISCLAIMER.md)
+[下载](#下载) · [工作原理](#工作原理) · [从源码构建](#从源码构建) · [免责声明](DISCLAIMER.md)
 
 </div>
 
@@ -44,10 +46,12 @@ Root 模式只接管规则表里的域名，表外流量完全不经过它。
 
 ## 工作原理
 
+三种接管方式共用同一套内核与规则表，区别在于**流量从哪个入口进来**、以及**要不要终结 TLS**：
+
 <div align="center">
 <picture>
 <source media="(prefers-color-scheme: dark)" srcset="assets/flow-dark.svg">
-<img src="assets/flow-light.svg" alt="speed 的流量路径：应用 → 接管点 → 内核 → 命中规则则改道、未命中则直连 → 上游服务器" width="900">
+<img src="assets/flow-light.svg" alt="三种接管方式的流量路径：VPN 模式经 tun0、代理模式经本地 HTTP 代理端口、Root 模式经 hosts + 系统 CA + iptables 到本地反代；前两者不终结 TLS，Root 模式终结；命中规则改从规则地址拨号，未命中直连；三条路都通到上游服务器" width="900">
 </picture>
 </div>
 
@@ -61,7 +65,7 @@ Root 模式只接管规则表里的域名，表外流量完全不经过它。
    - **未命中** → 按系统 DNS 的结果原样直连，不参与拨号。
 5. 两条路都通到上游服务器，区别只在于**连的是哪个地址**。
 
-整个内核跑在应用进程里，不加载内核模块，不修改系统分区——这是「免 Root」的全部含义。
+整个内核跑在应用进程里，不加载内核模块，不修改系统分区——这是前两种模式「免 Root」的全部含义。
 
 ### 代理模式：不建隧道的那条路
 
@@ -70,7 +74,7 @@ Root 模式只接管规则表里的域名，表外流量完全不经过它。
 
 1. 连接页把模式切成**代理模式**，点连接。页面出现一个 `127.0.0.1:<端口>` 的地址，一键复制。
 2. 把它填进目标软件（浏览器、终端、包管理器）的 HTTP 代理设置。
-3. 这个软件的请求就进了内核——和 VPN 模式同一套规则、同一个路由表、同一套拨号逻辑。
+3. 这个软件的请求就进了内核——读同一份规则表，走同一套「命中改道 / 未命中直连」策略。
 
 它同时处理两类请求：
 
@@ -83,7 +87,7 @@ Root 模式只接管规则表里的域名，表外流量完全不经过它。
 
 一个例外值得单独说：**证书预检在代理模式里是开着的**，只是设置页的开关管不到它。
 它是「规则给的地址是不是真的能服务这个域名」的唯一判据，关掉它等于把规则表的正确性当成默认成立——
-所以这个模式不给这个选项。VPN 模式下可以关（会快一些，代价见上一节）。
+所以这个模式不给这个选项。VPN 模式下可以关（会快一些，代价见「证书预检」）。
 
 **只处理 TCP。** UDP 流量（含 QUIC、DNS）不会被代理接管，这是 HTTP 代理这个形态本身的边界，
 不是配置问题；要覆盖 UDP 就用 VPN 模式。
@@ -164,34 +168,49 @@ Root 模式换掉了这个前提——它在本机以中间人身份终结 TLS�
 </picture>
 </div>
 
-- 默认源是 `HelloGitHub（GitHub520）`（[`521xueweihan/GitHub520`](https://github.com/521xueweihan/GitHub520) 的 hosts 文件），
-  40 个域名，主地址 `raw.hellogithub.com` 在香港，实测延迟最低（0.10–0.12s）。
-  两个风险用户必须知道：**服务器将于 2026-12-31 到期**，**许可为 CC BY-NC-ND 4.0（禁商用、禁演绎）**。
-  镜像取的是同一份上游文档的另一个端点，所以主地址失效后文档仍取得到，但届时需要换掉主地址——镜像只是把
-  「立刻不可用」降级成「降速可用」。应用只按 URL 在运行时引用该文档，不打包进安装包。
-- 第二个可选源是 `github-hosts`（[`maxiaof/github-hosts`](https://github.com/maxiaof/github-hosts) 的 hosts 文件），
-  经国内可达的镜像获取：GitHub 的 IPv4 在大陆不可达，而 Android 的 `HttpURLConnection` 不会回落 IPv6，
-  直连对国内用户必然失败。主地址走反代，另有 jsDelivr 与上游直连两个备选依次回退。
-- 默认源在你的网络下不可达时，在规则页切换其他源或添加自定义源即可。
-- 三级下钻：**分组 → 域名 → 地址**；搜索覆盖域名、地址与分组名。
-- 分组级开关，以及全部开启 / 全部关闭；被关掉的规则不会进入内核。
-- 规则热替换不打断正在传输的连接。
+规则文档就是一份「域名 → 已知可用地址」的清单。内置两个可选源，Root 模式另有一份固定文档，你也可以添加自己的：
 
-**缓存记录的是「它是哪一套规则」，不只是「它有多旧」。**
-缓存此前只按时间判有效，于是换了数据源或升级应用之后，一套形状完全不同的旧规则会被继续使用——
-界面显示规则正常，实际所有站点都在直连。现在缓存同时记下来源身份，身份不符即视为未命中并重新拉取。
+| 来源 | 形态 | 规模 | 谁在用 |
+| --- | --- | --- | --- |
+| `HelloGitHub（GitHub520）` —— **默认** | hosts | 40 个域名 | VPN / 代理模式 |
+| `github-hosts` —— 第二源 | hosts | 37 个域名 | VPN / 代理模式 |
+| `s302 替代上游` —— 内置但不可选 | `<拨号名> <TAB> <原域名>` | 846 个域名 | **仅 Root 模式**，固定加载 |
+| 自定义源 / 本地文件 | 任意 | 你导入的 | VPN / 代理模式 |
+
+**默认源有三个事实要先说：** 主地址 `raw.hellogithub.com` 在香港，实测延迟最低（0.10–0.12s）；
+**服务器 2026-12-31 到期**——镜像取的是同一份上游文档的另一个端点，能把「立刻不可用」降级成「降速可用」，
+但到期前需要换掉主地址；**许可为 CC BY-NC-ND 4.0**（禁商用、禁演绎）。应用只按 URL 在运行时引用该文档，
+不打包进安装包。
+
+**第二个源走反代，不是图方便。** GitHub 的 IPv4 在大陆不可达，而 Android 的 `HttpURLConnection`
+不会在 A 记录不通时回落 IPv6 ⇒ 直连对国内用户是确定性失败。反代提供逐字节相同的文档，换的是传输，不是内容。
+
+**Root 模式固定用它自己的那份文档，而且不出现在可选列表里。** 原因是它必须逐域名说清「这条连接该去哪里」：
+root 模式把域名劫持到本机终结 TLS 的代理，代理要**重新发起**每一条连接。同一套规则的 hosts 形态做不到
+这件事——862 个域名全部指向 `127.0.0.1`，那是 s302 自己机器上的监听地址，而手机上 443 端口没有进程在监听。
+应用加载的是 `<拨号名> <TAB> <原域名>` 形态：第一个字段是名字，代理因此拿到一个能从当前网络解析的地址；
+`!<地址>` 则表示「拨这个地址、一个 SNI 都不发」。
+
+其余是管理面：三级下钻（**分组 → 域名 → 地址**）、搜索覆盖域名 / 地址 / 分组名、分组级开关与全开 / 全关、
+规则热替换不打断正在传输的连接。**缓存记录的是「它是哪一套规则」，不只是「它有多旧」**——换了数据源或
+升级应用之后，来源身份不符即视为未命中并重新拉取，而不是继续用一套形状完全不同的旧规则（那样界面显示
+规则正常，实际所有站点都在直连）。
 
 ## 界面
 
 四个页面：
 
 - **连接** —— 模式切换（VPN / 代理 / Root，Root 只在设备有可用 `su` 时出现，首次进入需确认）、
-  总开关、实时上下行速率、本次会话流量与命中规则次数、规则缓存新鲜度；
-  代理模式下还会出现代理地址卡片（含上面那条「内核参数不生效」的说明）。
+  总开关、实时上下行速率、本次会话流量与命中规则次数、规则缓存新鲜度；代理模式下出现代理地址卡片
+  （含上面那条「内核参数不生效」的说明），Root 模式下显示固定的规则来源。
 - **规则** —— 分组 → 域名 → 地址三级下钻，搜索覆盖域名 / 地址 / 分组名，分组级开关与全开 / 全关。
 - **日志** —— 实时事件流，按级别过滤，可导出与归档。
-- **设置** —— 内核参数、规则源、上游出口与解析器、外观（玻璃材质 / 主题色 / 深色模式 / 圆角 / 字号）、
-  数据导出导入、关于与更新检查。
+- **设置** —— **按当前模式分栏**：TUN 模式显示内核参数（MTU、连接与空闲超时、候选数、拨号名）与
+  上游出口 / 上游解析器，代理模式显示代理端口，Root 模式两者都不显示——另外两个模式的内核入口
+  根本不接收这些设置文档。另有外观（玻璃材质 / 主题色 / 深色模式 / 圆角 / 字号）、数据导出导入、
+  关于与更新检查。
+
+界面语言跟随系统：简体中文 / English。
 
 界面截图不随仓库分发：它们会随本机的壁纸、规则规模与语言设置变化，
 放一张在仓库里，除了过时没有别的前途。
@@ -200,11 +219,12 @@ Root 模式换掉了这个前提——它在本机以中间人身份终结 TLS�
 
 - **路由** —— 规则驱动改道 · 多候选并行竞速 · 证书预检 · 失败冷却与排序 · 命中时 DNS 本地应答 · UDP 流表满时淘汰最久未用 · 规则热替换
 - **三种接管** —— VPN 模式（`tun0` 全流量，需一次系统授权）· 代理模式（本地 HTTP 代理，免授权，`CONNECT` 隧道 + 普通 HTTP 转发）· Root 模式（改系统 hosts + 装自签 CA + iptables 重定向，本机终结 TLS，断开自动全部还原）
-- **规则** —— 三级下钻与搜索 · 分组开关 · 自定义规则源 · 缓存来源身份校验
+- **规则** —— 三级下钻与搜索 · 分组开关 · 自定义规则源与本地文件导入 · 缓存来源身份校验
+- **模式感知** —— 设置页按当前模式分栏，只显示这个模式真正生效的设置项；首页的「命中规则」按模式读对应的计数器
 - **观测** —— 实时速率与命中率 · 实时 / 归档日志与过滤导出 · 开发者视图（候选地址、冷却、静默计数）· 内核命令行
 - **数据** —— 设置导出 / 导入（JSON 文档，导入前二次确认，来自更新版本的文档会被拒绝）
 - **更新** —— 默认指向本仓库 Releases（经 `gh-proxy.com` 反代，因为应用自身流量不走自己的隧道）· 启动时静默检查，每天最多一次且可关 · 有新版弹窗并内联更新日志 · 按设备 ABI 挑下载包
-- **外观** —— 玻璃材质（折射与模糊合并为一个开关）与自定义壁纸 · 主题色 / 深色模式 / 圆角 / 字号
+- **外观** —— 玻璃材质（折射与模糊合并为一个开关）与自定义壁纸 · 主题色 / 深色模式 / 圆角 / 字号 · 界面语言跟随系统（简体中文 / English）
 
 几个值得单独说的点：
 
@@ -212,50 +232,7 @@ Root 模式换掉了这个前提——它在本机以中间人身份终结 TLS�
 - **超时按语义拆分**：没有备选地址时给足预算，有备选地址时用一个短窗口快速试错。一个死候选等于一次必然失败，因为预算是客户端给的。
 - **内核命令行**：与 adb 控制面同一套命令（`status`、`set mtu 1400`、`dump`、`help`），直接在手机上驱动内核，不必连电脑。
 
-## 设计取舍
-
-**默认不解密 TLS。** 这是刻意的选择，不是缺失。VPN 模式与代理模式都不装证书、不做中间人，因此
-「一个域名能不能走通」严格等于两件事同时成立：
-
-1. 规则给出的地址**可达**；
-2. 该地址出示的证书**覆盖这个域名**。
-
-第二条是架构边界。规则表里一个地址再快，只要证书不覆盖目标域名就用不了它，只能换地址。
-有些 CDN 的边缘证书覆盖范围很宽（例如 Akamai 边缘证书覆盖 `*.akamaihd.net`），这类域名可以正常走；
-覆盖范围窄的，就只能靠规则表给出正确的地址。
-
-**Root 模式是这条边界的唯一例外**，而且是有意为之：它把「证书覆盖域名」从「由上游保证」换成
-「由本机签发」，代价是不再校验上游。换来的正是上面那条走不通的路——对「所有已知地址的证书都不覆盖
-该域名」的处理能力。这不是默认模式的一次升级，而是一套完全不同的前提，所以它单独成一个模式、
-需要 Root、且必须由用户明确确认。
-
-**规则质量决定成败，但正确不等于可达。** 这套方案的实际瓶颈是规则表里地址的**正确性**，不是地址的数量。
-而即便地址是对的，它能不能从当前网络连上，仍取决于那条路径——规则源提供的是**地址**，不是**可达性**。
-把 IP 写进规则只跳过 DNS 解析，完全不改变这个 IP 通不通。
-
-这一点最容易被误判成「规则源不可靠」。实测中默认源给 `github.com` 的地址与权威 DNS 的答案一字不差，
-在隧道里稳定返回 200；而同一份文档里 `gist.github.com` 与 `github.global.ssl.fastly.net` 两条的地址
-是死的，表现是**挂满超时之后再报「候选耗尽」**。这属于数据过期——换个源可能就好了，但它既不是
-「权威源不可信」，也不是内核的缺陷。
-
-**另有一类失败与地址无关：按名字的干扰。** 有些域名 TCP 能建连，TLS 却在客户端发出第一个记录之后
-被静默——内核日志里表现为「上游已连接」紧跟零字节返回，而同一时刻同一地址上的其他十几个域名都正常。
-实测 `raw.githubusercontent.com` 就是这样：两个内置源给的地址都试过，这一轮五十余次尝试里只成功了
-两次，而它们指向的同一台服务器上，别的名字在同样几秒内 200/301 正常返回。**换地址救不了它，放宽证书校验
-也救不了它**（去掉证书校验后失败形态一模一样），只有换一个出口才行。应用没有远端出口，这是定位，
-不是缺口。
-
-**连通性本身在分钟尺度上抖动。** 同一台设备、同一个域名、同一个地址，一组测量里通过率能在一刻钟内
-从十之八九掉到十之一二，**连对照组一起掉**。所以任何「某域名通/不通」的结论都必须带上时间窗和对照组；
-单次结果不是判据。
-
-**默认不 Root。** VPN 模式走 `VpnService` 而不是内核模块或 iptables，代价是接管点在内核之上、
-拿不到原始套接字；换来的是不用刷机、不用 Root、不修改系统分区，卸载即完全还原。
-代理模式连 `VpnService` 都不用。Root 模式站在另一端：它明确用 `su` 改系统 hosts、信任库与
-iptables，换的是「规则地址证书不匹配」这类域名的处理能力——所以它需要用户明确确认，
-且断开时会把这三处全部还原。
-
-### 已知限制
+## 已知限制
 
 - 规则表里地址过期时，对应域名会失败或直连——这是数据问题，不是内核问题。
 - 地址过期的一种具体表现：挂满超时之后报「候选耗尽」。若该条目只有一个地址，就没有第二条路可走。
@@ -263,7 +240,7 @@ iptables，换的是「规则地址证书不匹配」这类域名的处理能力
 - 不解密 TLS 意味着无法处理「所有已知地址的证书都不覆盖该域名」的情况——除非改用 Root 模式，那是这条的例外。
 - 代理模式只对能设置 HTTP 代理的软件生效，也不会替你捕获别的应用的流量。
 - 代理模式只处理 TCP：UDP 流量（含 QUIC）不被接管；且它不读设置页的内核参数，只用内核固定的一套。
-- Root 模式需要 Root，且**不校验上游证书**（身份保证被移除，见「设计取舍」）。
+- Root 模式需要 Root，且**不校验上游证书**——本机代理不检查真实服务器的证书，这正是它能连上「证书不覆盖该域名」的地址的原因，也意味着你与服务器之间的身份保证被移除了。
 - Root 模式只处理 **TCP 443**，且只对规则表里的域名生效；启用 Private DNS（DoT）或自带 Secure DNS / DoH 的应用自行解析，会绕过 hosts。
 - Root 模式改的是系统 hosts、系统信任库与 iptables——断开时自动全部还原，但它确实是一次系统级改动；已在运行的应用可能要重启后才读到新装的 CA。
 - 连通性在分钟尺度上抖动，通过率会随时间窗大幅变化。这不是内核状态，日志里的失败计数要连着时间窗一起看。
@@ -279,144 +256,49 @@ iptables，换的是「规则地址证书不匹配」这类域名的处理能力
 | `speed-<版本>-armeabi-v7a.apk` | 较老的 32 位 ARM 手机与平板 |
 | `speed-<版本>-x86_64.apk` | 模拟器、少数 x86 平板 |
 
-三个包用**同一个发布密钥**签名。密钥不在仓库里——一个会安装 VPN 的应用，
-「谁能签出构建」就是它的信任边界，所以密钥由维护者保管，经仓库 secret 交给 CI。
-若签名与你已装的版本不一致，Android 会拒绝覆盖安装；先卸载再装。
+三个包用**同一个发布密钥**签名。密钥不在仓库里——一个会安装 VPN 的应用，「谁能签出构建」就是它的信任边界，
+所以密钥由维护者保管，经仓库 secret 交给 CI。若签名与你已装的版本不一致，Android 会拒绝覆盖安装；先卸载再装。
 
-应用启动时会自己查一次有没有新版（每天最多一次，可在关于页关掉），有新版会弹出窗口并附上
-这个版本的更新日志，并直接给你对应 ABI 的下载链接——不必盯着 Releases 页面。
+应用启动时会自己查一次更新（每天最多一次，可在关于页关掉），有新版会弹出窗口、附上这个版本的更新日志，
+并直接给出对应 ABI 的下载链接。
 
-**更新检查与 APK 下载都经 `gh-proxy.com` 这一第三方镜像中转，不走直连。** 这不是偏好，
-是可达性要求：应用自身流量被刻意排除在隧道之外（`addDisallowedApplication`，防自环），
-所以更新走的是裸网络，而 GitHub 在部分网络环境下直连不可达。
-
-**下载这一跳也走镜像，理由是「少一跳」，不是「否则下不下来」。** 与查版本不同，下载要经过一次重定向：
-`github.com/.../releases/download/...` 返回 **302** 到 `release-assets.githubusercontent.com`。
-这个名字**不在规则文档里**（表里只有**旧的** `objects.githubusercontent.com`），所以隧道对它的处置是
-**直连**（见「设计取舍」）——即下载能否成功取决于该域名当前解析到的**真实地址**在当前网络是否可达，
-而不取决于规则表。经镜像后整条重定向链在代理侧被消化，客户端只连镜像一个域名。
-
-**实测（设备、经 tun0）：两条路当前都通，各取回 64 KB（`206` + `application/vnd.android.package-archive`），
-同一窗口背靠背 4 轮无失败，耗时差落在噪声内**——对照域名自身在 0.37–6.70s 之间波动，相差 18 倍，
-所以「镜像更快」这一条**测不出来，不作为理由**。改动的实际依据是：少一次重定向、少一个对第三方
-解析地址可达性的依赖、以及和查版本保持同一套语义。
-
-中转意味着**你的下载请求会经过第三方**。完整性由 **APK 签名**兜底——被改过的包装不上，
-但这不保证第三方不记录下载行为。不接受第三方中转的话，请从源码自行构建（见下一节）。
-若 Releases 页面本身也打不开，用 `https://gh-proxy.com/https://github.com/zejiahuang/speed/releases`。
+**更新检查与 APK 下载都经 `gh-proxy.com` 这一第三方镜像中转**：应用自身流量被刻意排除在隧道之外
+（`addDisallowedApplication`，防自环），走的是裸网络，而 GitHub 在部分网络环境下直连不可达。中转意味着
+**你的下载请求会经过第三方**，完整性由 **APK 签名**兜底——被改过的包装不上，但这不保证第三方不记录下载行为。
+不接受的话，请从源码自行构建（见下一节）。Releases 页面本身打不开时，用
+`https://gh-proxy.com/https://github.com/zejiahuang/speed/releases`。
 
 ## 从源码构建
 
 需要：Rust（含 `aarch64-linux-android`、`armv7-linux-androideabi` 与 `x86_64-linux-android` target）、
 Android NDK r30、Android SDK（platform 36 + build-tools 36.0.0）、JDK 17。
 
-两条命令就够了：
+两条命令就够了（在仓库根目录执行）：
 
 ```bash
 PROFILE=release bash scripts/app-native-build.sh aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
 SKIP_NATIVE=1 bash scripts/app-build.sh assembleRelease -PabiSplits
 ```
 
-`PROFILE=release` 不能省。`app-native-build.sh` 默认编 `debug` profile，产物功能一样但大二十多倍
-（每个 ABI 约 51 MB 对 1.9 MB），打出来的包会是 60 MB 而不是 13 MB。CI 里也是显式设了这个变量
-（见 `.github/workflows/release.yml`），本地配方跟着它走。
+`PROFILE=release` 不能省：脚本默认编 `debug` profile，产物功能一样但大二十多倍，打出来的包会是 60 MB
+而不是 13 MB。CI 用的就是这两个脚本（`.github/workflows/release.yml`），本地配方跟着它走。
 
-这两个脚本是薄封装，CI 用的就是它们。下面把脚本里做的事摊开写一遍——出问题时
-（NDK 链接器选错、`--manifest-path` 漏了、ABI 与目录名对不上、Gradle 从哪来）
-才知道该动哪一层，不想跑脚本的人也可以逐步核对。
+脚本是薄封装，大部分坑它们已经填好。下面这些是出问题时要知道的：
 
-**仓库里没有 Gradle wrapper，也没有 `gradlew`。** 一个仓库里放一份没人能重新生成的二进制
-比一次下载更糟，所以 Gradle 发行包自己取（`scripts/app-build.sh` 首次运行也会取到同一个地方）：
+- **Cargo 对 Android target 没有默认链接器**，脚本会指到 NDK 的 clang。32 位 ARM 的目标名两边不一样
+  （Cargo 叫 `armv7-linux-androideabi`，NDK 的 clang wrapper 叫 `armv7a-linux-androideabi`，多一个 `a`），
+  脚本里转一次。弄错会得到一个编得出来、却永远不会被加载的库。
+- **`--manifest-path core-rs/Cargo.toml` 不能省**：仓库根目录没有 `Cargo.toml`，workspace 在 `core-rs/` 下。
+- **`--features jni-bridge` 不能省**：少了它 `System.loadLibrary` 照样成功，但每次调用都抛
+  `UnsatisfiedLinkError`。
+- **仓库里没有 Gradle wrapper**：一份没人能重新生成的二进制比一次下载更糟，发行包由脚本取到
+  `~/.cache/gradle-8.14.3`。
+- **签名完全由环境驱动，仓库里没有任何密钥**：设好 `WATT_KEYSTORE`、`WATT_KEYSTORE_PASSWORD`、
+  `WATT_KEY_ALIAS`、`WATT_KEY_PASSWORD` 后产出已签名包；不设则停在未签名状态——这是刻意的停止点，
+  不是遗漏。
+- `-PabiSplits` 可选：不加产出单个 universal APK（会带一份设备永远用不到的库）。产物在
+  `android/app/build/outputs/apk/release/`；只调 UI 时把 `assembleRelease` 换成 `assembleDebug`。
 
-```bash
-GRADLE_VERSION=8.14.3
-curl -fsSL -o /tmp/gradle.zip \
-  "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip"
-unzip -q /tmp/gradle.zip -d ~/.cache                      # -> ~/.cache/gradle-8.14.3
-export PATH="$HOME/.cache/gradle-${GRADLE_VERSION}/bin:$PATH"
-```
-
-### 1) 编译内核：Rust → `.so`
-
-Cargo 对 Android target 没有默认链接器，必须显式指到 NDK 的 clang。
-只给 `--target` 会用主机的 `cc` 去链接，在 arm64 上报 `Relocations in generic ELF (EM: 183)`。
-
-下面两段都在**仓库根目录**执行：
-
-```bash
-NDK=$HOME/android/android-ndk-r30
-TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
-API=34                       # NDK 的 clang wrapper 按 API 级别分档
-export CARGO_TARGET_DIR=$HOME/.cache/watt-target
-
-# `watt-ffi` 的 crate-type 含 `staticlib`，归档静态库时会调 ar。指到 NDK 那一份，
-# 免得用主机的 GNU ar 去归档 Android 的目标文件（通常能过，但那是运气不是保证）。
-export AR=$TOOLCHAIN/bin/llvm-ar
-
-build_abi() {
-  abi=$1; dir=$2
-  # NDK 的 clang wrapper 与 cargo 的 target 名只有 32 位 ARM 不同：cargo 叫
-  # `armv7-linux-androideabi`，NDK 叫 `armv7a-linux-androideabi`（多一个 `a`）。
-  # 其余 target 两边同名，所以只在这里转一次，否则会去找一个不存在的编译器。
-  case "$abi" in
-    armv7-linux-androideabi) ndk_abi="armv7a-linux-androideabi" ;;
-    *)                       ndk_abi="$abi" ;;
-  esac
-  cc=$TOOLCHAIN/bin/${ndk_abi}${API}-clang
-
-  # 同一个 target 有两种拼法，而且两种都得导出，缺一个都编不过：
-  #   * cargo 的链接器变量：全大写、`-`→`_` —— CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER
-  #   * `cc` crate 的编译器变量：保留 target 原样、只把 `-`→`_` —— CC_aarch64_linux_android
-  # `ring`（藏在 rustls 后面）带 C 源码，要经 `cc` 去找一个 C 编译器。只导出上面那种时
-  # `cc` 读不到任何设置，会退化成裸名 `arm-linux-androideabi-clang` 去找一个根本不存在的
-  # 编译器 —— 报出来是「找不到编译器」，真正的缺口却是一个没导出的变量。
-  key=$(echo "$abi" | tr '-' '_')
-  export "CARGO_TARGET_$(echo "$abi" | tr 'a-z-' 'A-Z_')_LINKER=$cc"
-  export "CC_${key}=$cc"
-  export "CXX_${key}=$TOOLCHAIN/bin/${ndk_abi}${API}-clang++"
-
-  # `--manifest-path` 不能省：仓库根目录没有 Cargo.toml，workspace 在 core-rs/ 下，
-  # 而下面的 cp 目标又是相对仓库根的。这样两边都在同一个 cwd 里，不必来回 cd。
-  #
-  # `jni-bridge` 才生成 JNI 入口点（Java_dev_detour_core_Kernel_*）。
-  # 少了它 System.loadLibrary 照样成功，但每次调用都抛 UnsatisfiedLinkError。
-  cargo build -p watt-ffi --features jni-bridge --release \
-    --target "$abi" --manifest-path core-rs/Cargo.toml
-
-  mkdir -p "android/app/src/main/jniLibs/$dir"
-  cp "$CARGO_TARGET_DIR/$abi/release/libwatt_ffi.so" "android/app/src/main/jniLibs/$dir/"
-}
-
-build_abi aarch64-linux-android arm64-v8a
-build_abi armv7-linux-androideabi armeabi-v7a
-build_abi x86_64-linux-android  x86_64
-```
-
-注意 cargo 的 target 名与 APK 的目录名不是一回事（`aarch64-linux-android` ↔ `arm64-v8a`、
-`armv7-linux-androideabi` ↔ `armeabi-v7a`）。弄错会得到一个编得出来、却永远不会被加载的库。
-`jniLibs/` 不入库——它必须来自它所挨着的那个提交，否则标签就不再描述二进制。
-
-### 2) 打包 APK
-
-```bash
-export ANDROID_HOME=$HOME/android-sdk       # 也可以写进 android/local.properties
-export ANDROID_SDK_ROOT=$ANDROID_HOME
-gradle -p android --no-daemon --console=plain -PabiSplits assembleRelease
-```
-
-`gradle` 自己从 `JAVA_HOME` 找 JDK（要 17）。非登录 shell 里它可能没设，那就先 `export JAVA_HOME=<jdk17 的路径>`。
-
-产物在 `android/app/build/outputs/apk/release/`。只调 UI 时把 `assembleRelease` 换成 `assembleDebug`。
-
-**签名完全由环境驱动，仓库里没有任何密钥。** 设好下面四个变量后 `assembleRelease`
-产出已签名包；不设则停在未签名状态——这是刻意的停止点，不是遗漏：
-
-```
-WATT_KEYSTORE  WATT_KEYSTORE_PASSWORD  WATT_KEY_ALIAS  WATT_KEY_PASSWORD
-```
-
-`-PabiSplits` 同样是可选的。不加它产出单个 universal APK；加上它按 ABI 拆分。
-发布用的是拆分包，因为内核每个 ABI 约 1.9 MB，universal 包会带一份设备永远用不到的库。
 
 ## 发布流程
 
@@ -440,13 +322,21 @@ core-rs/            内核（Rust workspace）
   crates/watt-ffi     C ABI 与 JNI 入口
 android/            Android 壳层（Kotlin + Jetpack Compose）
 scripts/            构建入口：编内核 `.so` 与打包 APK 的两个脚本
-assets/             README 里的示意图
-tools/              DoH 探针：同一个解析器问两次（明文 UDP/53 与 DoH），对比两次的答案
+assets/             README 里的示意图（`flow-*` 由 `tools/readme-diagrams.py` 生成，其余三张手写）
+tools/              `readme-diagrams.py`（生成 README 示意图）；`make-values-en.py`（从中文
+                    `values/` 生成英文 `values-en/`）；DoH 探针：同一个解析器问两次
+                    （明文 UDP/53 与 DoH），对比两次的答案
 ```
 
 `assets/` 里每张图都有浅色与深色两套（`*-light.svg` / `*-dark.svg`），README 用
 `<picture>` + `prefers-color-scheme` 切换。**GitHub 不会给 `<img>` 里的 SVG 重新上色**，
-所以深色模式必须自带一份深色文件——这是唯一手段。它们是手写的 SVG，改图直接改文件。
+所以深色模式必须自带一份深色文件——这是唯一手段。`flow-*` 那对改
+`tools/readme-diagrams.py`（一次描述、两个配色）；`cert-*` / `race-*` / `rules-*` 三对手写，
+改图直接改文件。
+
+界面文字同理只有一份源头：`android/app/src/main/res/values/strings.xml`（简体中文）。
+英文版由 `tools/make-values-en.py` 从它生成——元素与注释原样拷贝、只换文字，名字或格式
+占位符对不上时**拒绝写出**。改中文那份，再跑一次脚本。
 
 ## 测试
 
@@ -476,9 +366,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 GNU General Public License v3.0，见 [LICENSE](LICENSE)。
 
 **使用前请先读 [DISCLAIMER.md](DISCLAIMER.md)（免责声明）。** 它把 GPL-3.0 第 15、16 条的免责条款
-具体化到本项目的实际情况：不提供任何网络出口、不解密 TLS、更新经第三方镜像中转、规则源另有其许可、
-不收集数据、无技术支持与 SLA，以及一份明确列出的、由你自担的风险清单。
-下载、安装或使用本项目，即视为接受该声明。
+具体化到本项目的实际情况：不提供任何网络出口、默认不解密 TLS（Root 模式是例外，且代价写明了）、
+更新经第三方镜像中转、规则源另有其许可、不收集数据、无技术支持与 SLA，以及一份明确列出的、
+由你自担的风险清单。下载、安装或使用本项目，即视为接受该声明。
 
 ## 致谢
 
