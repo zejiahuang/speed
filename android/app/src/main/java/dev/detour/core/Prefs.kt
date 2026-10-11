@@ -653,8 +653,10 @@ class Prefs private constructor(private val store: SharedPreferences) {
      * is wrong, and refusing them would make the field impossible to type into.
      * Whether it is a resolver the kernel can dial is [dnsUpstreamConfigured].
      */
-    var dnsUpstreamUrl by mutableStateOf(store.getString(KEY_DNS_UPSTREAM_URL, "").orEmpty())
-        private set
+      var dnsUpstreamUrl by mutableStateOf(
+          store.getString(KEY_DNS_UPSTREAM_URL, DEFAULT_DNS_UPSTREAM.url).orEmpty(),
+      )
+          private set
 
     /**
      * The address to reach [dnsUpstreamUrl] by, when that URL names a host
@@ -667,8 +669,10 @@ class Prefs private constructor(private val store: SharedPreferences) {
      * An address-shaped URL such as `https://1.1.1.1/dns-query` needs none, and
      * this stays blank for it.
      */
-    var dnsUpstreamAddress by mutableStateOf(store.getString(KEY_DNS_UPSTREAM_ADDRESS, "").orEmpty())
-        private set
+      var dnsUpstreamAddress by mutableStateOf(
+          store.getString(KEY_DNS_UPSTREAM_ADDRESS, DEFAULT_DNS_UPSTREAM.address).orEmpty(),
+      )
+          private set
 
     /**
      * Whether the resolver as typed is one the kernel can dial.
@@ -1714,8 +1718,37 @@ class Prefs private constructor(private val store: SharedPreferences) {
             ),
         )
 
-        /**
-         * The character set a literal IPv6 address is written in.
+          /**
+           * The resolver a fresh install starts on.
+           *
+           * It used to be "whatever the system resolver is", i.e. the empty
+           * value, and the upstream was something a user had to go and find. The
+           * default is now the same resolver **Watt Toolkit** uses: its
+           * `IDnsAnalysisService` hardcodes `223.5.5.5` (AliDNS) as
+           * `PrimaryDNS_Ali` and calls it from `AnalysisDomainIpByAliDns` on the
+           * path that re-originates a proxied request, precisely because the
+           * system resolver cannot be used there — with its hosts entries in
+           * place, resolving the proxy through the system would resolve it to
+           * itself and loop. The reason does not transfer (this app's tunnel does
+           * not rewrite names in the two root-free modes), but the choice does:
+           * it is a resolver measured to answer from the networks this app is for.
+           *
+           * Two things about the shape of this default:
+           *
+           * * **It is the absent-key value, not a migration.** An install that has
+           *   never touched the setting picks this up; one that explicitly chose
+           *   "the client's own resolver" wrote `""` and keeps it, because the key
+           *   is present. That is the whole difference between a default and an
+           *   override.
+           * * **It is a resolver, not an encryption setting.** The same measurement
+           *   that made this a resolver choice (see [dnsUpstreamUrl]'s note) holds
+           *   here: what is chosen is *who answers*, and DoH is only how they are
+           *   reached.
+           */
+          val DEFAULT_DNS_UPSTREAM: DnsUpstreamPreset = DNS_UPSTREAM_PRESETS.first { it.id == "ali" }
+
+          /**
+           * The character set a literal IPv6 address is written in.
          *
          * Hoisted out of [isProxyEndpoint] because that function runs from
          * composition, once per keystroke, and compiling a regex on every one of
