@@ -12,6 +12,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
 import org.json.JSONObject
+import dev.detour.R
 
 /**
  * Where the rule document comes from.
@@ -262,8 +263,10 @@ object RulesRepository {
         if (prefs.consumeRulesCacheDirty()) {
             discardCache(context)
             KernelState.log(
-                KernelState.LogEntry.Level.INFO, TAG,
-                "规则缓存来自旧版本，已丢弃并重新拉取",
+                context,
+                KernelState.LogEntry.Level.INFO,
+                TAG,
+                R.string.log_cache_from_older_version,
             )
         }
 
@@ -321,7 +324,7 @@ object RulesRepository {
                     // and there is nothing downloaded to fall back on. Returning
                     // an empty document would start a tunnel that relays nothing,
                     // which looks like a working tunnel that drops every packet.
-                    throw IllegalStateException("离线模式，且本地还没有已下载的规则")
+                    throw IllegalStateException(context.getString(R.string.err_offline_no_cache))
                 }
                 if (cachedSource != null && cachedSource != stamp) {
                     // **A known mismatch is refused, not served.** The document's
@@ -347,13 +350,15 @@ object RulesRepository {
                     // `status.message` when `phase == ERROR`, and this path leaves
                     // `phase` at `ON`, so nobody would ever see it.
                     KernelState.log(
-                        KernelState.LogEntry.Level.ERROR, TAG,
-                        "离线模式：缓存来自 $cachedSource，与当前来源 $stamp 不符，拒绝使用" +
-                            "（该文档必然不是所选规则集，用它只会得到一个不转发任何流量的隧道）",
+                        context,
+                        KernelState.LogEntry.Level.ERROR,
+                        TAG,
+                        R.string.log_offline_stamp_mismatch,
+                        cachedSource,
+                        stamp,
                     )
                     throw IllegalStateException(
-                        "离线模式：已下载的规则属于 $cachedSource，与当前选择的 $stamp 不符；" +
-                            "请联网重新下载，或切回 $cachedSource",
+                        context.getString(R.string.err_offline_source_mismatch, cachedSource, stamp),
                     )
                 }
                 if (!identityMatches) {
@@ -364,11 +369,18 @@ object RulesRepository {
                     // work is the better bet here, which is the case the old comment
                     // was actually about.
                     KernelState.log(
-                        KernelState.LogEntry.Level.WARN, TAG,
-                        "离线模式：缓存无来源标记，无法校验，仍按离线要求使用",
+                        context,
+                        KernelState.LogEntry.Level.WARN,
+                        TAG,
+                        R.string.log_offline_no_stamp,
                     )
                 }
-                KernelState.log(KernelState.LogEntry.Level.INFO, TAG, "离线模式：使用已下载的规则")
+                KernelState.log(
+                    context,
+                    KernelState.LogEntry.Level.INFO,
+                    TAG,
+                    R.string.log_offline_using_cache,
+                )
                 cached.readBytes()
             }
             forceRefresh || stale || !identityMatches -> fetchInto(context, cached, source)
@@ -421,14 +433,22 @@ object RulesRepository {
             cached.writeBytes(fetched)
             writeStamp(context, source)
             KernelState.log(
-                KernelState.LogEntry.Level.INFO, TAG,
-                "规则已更新（${fetched.size / 1024} KiB，来源 ${sourceStamp(source)}）",
+                context,
+                KernelState.LogEntry.Level.INFO,
+                TAG,
+                R.string.log_rules_updated,
+                fetched.size / 1024,
+                sourceStamp(source),
             )
             fetched
         } catch (err: Throwable) {
             Log.w(TAG, "fetch failed", err)
             KernelState.log(
-                KernelState.LogEntry.Level.WARN, TAG, "拉取规则失败：${err.message}",
+                context,
+                KernelState.LogEntry.Level.WARN,
+                TAG,
+                R.string.log_fetch_failed,
+                err.message,
             )
             val identityMatches = sourceStamp(source) == readStamp(context)
             // The fallback only exists for a cache that still describes a document
@@ -437,13 +457,15 @@ object RulesRepository {
             // tunnel the very document the stamp had just rejected — so a mismatched
             // cache is re-thrown as a failure instead of quietly used.
             if (cached.isFile && cached.length() > 0 && identityMatches) {
-                KernelState.log(KernelState.LogEntry.Level.INFO, TAG, "使用缓存的规则")
+                KernelState.log(context, KernelState.LogEntry.Level.INFO, TAG, R.string.log_using_cache)
                 cached.readBytes()
             } else {
                 if (cached.isFile && cached.length() > 0) {
                     KernelState.log(
-                        KernelState.LogEntry.Level.WARN, TAG,
-                        "缓存来源与当前不符，拉取又失败，不能使用",
+                        context,
+                        KernelState.LogEntry.Level.WARN,
+                        TAG,
+                        R.string.log_cache_mismatch_and_fetch_failed,
                     )
                 }
                 throw err
@@ -492,9 +514,13 @@ object RulesRepository {
         return try {
             val filtered = Kernel.filter(document, disabled)
             KernelState.log(
-                KernelState.LogEntry.Level.INFO, TAG,
-                "已按 ${disabled.size} 个开关过滤规则：" +
-                    "${document.size / 1024} KiB → ${filtered.size / 1024} KiB",
+                context,
+                KernelState.LogEntry.Level.INFO,
+                TAG,
+                R.string.log_rules_filtered,
+                disabled.size,
+                document.size / 1024,
+                filtered.size / 1024,
             )
             filtered
         } catch (err: Throwable) {
@@ -502,8 +528,11 @@ object RulesRepository {
             // the user switched something off and it stays on. Saying so is the
             // only honest option, and it is still better than refusing to start.
             KernelState.log(
-                KernelState.LogEntry.Level.ERROR, TAG,
-                "过滤规则失败，本次使用未过滤的规则：${err.message}",
+                context,
+                KernelState.LogEntry.Level.ERROR,
+                TAG,
+                R.string.log_filter_failed,
+                err.message,
             )
             document
         }
@@ -533,7 +562,7 @@ object RulesRepository {
             // Reachable only if something selected a source whose `usable` later
             // became false — the UI will not offer one. Refusing loudly beats
             // opening a connection to an empty URL.
-            throw IllegalStateException("规则源「${source.id}」暂不可用")
+            throw IllegalStateException(context.getString(R.string.err_source_unavailable, source.id))
         }
 
         // Branched on before the loop rather than inside it: a local source has no
@@ -550,17 +579,29 @@ object RulesRepository {
             // log otherwise, and "which endpoint is actually carrying this
             // install" is the question the mirrors exist to make answerable.
             KernelState.log(
-                KernelState.LogEntry.Level.INFO, TAG,
-                "拉取规则：${source.id}（候选 ${index + 1}/${urls.size}，$url）",
+                context,
+                KernelState.LogEntry.Level.INFO,
+                TAG,
+                R.string.log_fetching,
+                source.id,
+                index + 1,
+                urls.size,
+                url,
             )
             try {
                 val text = fetchText(url)
-                return parseDocument(text, builtin = source.builtin, origin = url)
+                return parseDocument(context, text, builtin = source.builtin, origin = url)
             } catch (err: Throwable) {
                 failures += "$url → ${err.message}"
                 KernelState.log(
-                    KernelState.LogEntry.Level.WARN, TAG,
-                    "候选 ${index + 1}/${urls.size} 失败：$url（${err.message}）",
+                    context,
+                    KernelState.LogEntry.Level.WARN,
+                    TAG,
+                    R.string.log_candidate_failed,
+                    index + 1,
+                    urls.size,
+                    url,
+                    err.message,
                 )
             }
         }
@@ -570,7 +611,9 @@ object RulesRepository {
         // of them fail" — and it hides whether one endpoint returned HTML while
         // the rest were unreachable.
         throw IllegalStateException(
-            "规则源「${source.id}」的 ${urls.size} 个地址全部失败：" + failures.joinToString("；"),
+            context.getString(
+                R.string.err_all_candidates_failed, source.id, urls.size, failures.joinToString("; "),
+            ),
         )
     }
 
@@ -590,14 +633,19 @@ object RulesRepository {
         val file = importedFile(context, fileName)
         if (!file.isFile || file.length() == 0L) {
             throw IllegalStateException(
-                "本地规则文件已丢失，请重新导入「${source.label.ifBlank { fileName }}」",
+                context.getString(R.string.err_local_file_missing, source.label.ifBlank { fileName }),
             )
         }
         KernelState.log(
-            KernelState.LogEntry.Level.INFO, TAG,
-            "读取本地规则文件：${source.label.ifBlank { fileName }}（${file.length() / 1024} KiB）",
+            context,
+            KernelState.LogEntry.Level.INFO,
+            TAG,
+            R.string.log_reading_local,
+            source.label.ifBlank { fileName },
+            file.length() / 1024,
         )
         return parseDocument(
+            context,
             String(file.readBytes(), Charsets.UTF_8),
             builtin = false,
             origin = source.label.ifBlank { fileName },
@@ -693,12 +741,17 @@ object RulesRepository {
      * and an error naming an address that was never contacted sends the reader to
      * the wrong endpoint.
      */
-    private fun parseDocument(text: String, builtin: Boolean, origin: String): ByteArray {
+    private fun parseDocument(
+        context: Context,
+        text: String,
+        builtin: Boolean,
+        origin: String,
+    ): ByteArray {
         // A 200 can still not be a rule document — see [looksLikeHtml] — and this
         // check runs before the shape sniff so an HTML page is never fed to either
         // parser.
         if (looksLikeHtml(text)) {
-            throw IOException("内容是一份 HTML 页面，不是规则文档")
+            throw IOException(context.getString(R.string.err_not_a_rule_document))
         }
         // A source may publish the kernel's own JSON rather than hosts text, so
         // the shape is sniffed before the hosts conversion is applied. Converting
@@ -710,7 +763,7 @@ object RulesRepository {
         val floor = if (builtin) BUILTIN_MIN_ENTRIES else 1
         if (count < floor) {
             throw IllegalStateException(
-                "规则源「$origin」解析出的条目过少：实测 $count 条，至少需要 $floor 条",
+                context.getString(R.string.err_too_few_entries, origin, count, floor),
             )
         }
         return document
@@ -835,9 +888,14 @@ object RulesRepository {
         val bytes = try {
             readUri(context, uri)
         } catch (err: Throwable) {
-            return LocalImport.Failed("读取文件失败：${err.message ?: "未知错误"}")
+            return LocalImport.Failed(
+                  context.getString(
+                      R.string.err_import_read_failed,
+                      err.message ?: context.getString(R.string.common_unknown),
+                  ),
+              )
         } ?: return LocalImport.Failed(
-            "文件超过 ${MAX_LOCAL_BYTES / (1024 * 1024)} MiB，不像是规则文件",
+            context.getString(R.string.err_import_too_large, MAX_LOCAL_BYTES / (1024 * 1024)),
         )
         return importLocalBytes(context, displayName(context, uri), bytes)
     }
@@ -851,8 +909,8 @@ object RulesRepository {
      * is where all the decisions are.
      */
     fun importLocalBytes(context: Context, displayName: String, bytes: ByteArray): LocalImport {
-        val label = displayName.trim().ifEmpty { "本地规则" }
-        if (bytes.isEmpty()) return LocalImport.Failed("文件是空的")
+        val label = displayName.trim().ifEmpty { context.getString(R.string.rules_local_default_label) }
+        if (bytes.isEmpty()) return LocalImport.Failed(context.getString(R.string.err_import_empty))
 
         // Validated **before** anything is written. The point of the check is that
         // a file which cannot serve as a rule document never becomes a source at
@@ -860,9 +918,9 @@ object RulesRepository {
         // source that fails on every connect, and a delete button as the only way
         // out.
         try {
-            parseDocument(String(bytes, Charsets.UTF_8), builtin = false, origin = label)
+            parseDocument(context, String(bytes, Charsets.UTF_8), builtin = false, origin = label)
         } catch (err: Throwable) {
-            return LocalImport.Failed(err.message ?: "内容不是规则文档")
+            return LocalImport.Failed(err.message ?: context.getString(R.string.err_import_not_a_document))
         }
 
         val fileName = sha256(bytes) + IMPORTED_SUFFIX
@@ -871,7 +929,12 @@ object RulesRepository {
             file.parentFile?.mkdirs()
             file.writeBytes(bytes)
         } catch (err: Throwable) {
-            return LocalImport.Failed("写入本地副本失败：${err.message ?: "未知错误"}")
+            return LocalImport.Failed(
+                  context.getString(
+                      R.string.err_import_write_failed,
+                      err.message ?: context.getString(R.string.common_unknown),
+                  ),
+              )
         }
 
         val prefs = Prefs.of(context)
@@ -881,8 +944,13 @@ object RulesRepository {
         if (existing == null) {
             prefs.addRuleSource(source)
             KernelState.log(
-                KernelState.LogEntry.Level.INFO, TAG,
-                "已导入本地规则：$label（${bytes.size / 1024} KiB，副本 $fileName）",
+                context,
+                KernelState.LogEntry.Level.INFO,
+                TAG,
+                R.string.log_local_imported,
+                label,
+                bytes.size / 1024,
+                fileName,
             )
         }
         // Selected as well as stored, and on both paths: a source that is added
@@ -948,7 +1016,7 @@ object RulesRepository {
      */
     private fun readUri(context: Context, uri: Uri): ByteArray? {
         val stream = context.contentResolver.openInputStream(uri)
-            ?: throw IOException("无法打开输入流")
+            ?: throw IOException(context.getString(R.string.common_input_stream_failed))
         return stream.use { readBounded(it, MAX_LOCAL_BYTES) }
     }
 
@@ -963,7 +1031,7 @@ object RulesRepository {
      */
     private fun displayName(context: Context, uri: Uri): String {
         val fallback = uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
-            ?: "本地规则"
+            ?: context.getString(R.string.rules_local_default_label)
         return runCatching {
             context.contentResolver
                 .query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)

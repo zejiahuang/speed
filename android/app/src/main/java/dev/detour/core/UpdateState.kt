@@ -5,6 +5,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.detour.BuildConfig
+import dev.detour.R
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -209,13 +210,14 @@ object UpdateState {
             withContext(Dispatchers.IO) {
                 runCatching {
                     UpdateChecker.check(
+                        context,
                         url,
                         BuildConfig.VERSION_CODE,
                         BuildConfig.VERSION_NAME,
                         channel,
                     )
                 }.getOrElse { error ->
-                    UpdateChecker.Result.Failed(error.message ?: "未知错误")
+                    UpdateChecker.Result.Failed(error.message ?: context.getString(R.string.common_unknown))
                 }
             }
         } finally {
@@ -242,25 +244,37 @@ object UpdateState {
         // claim from the same sentence on the stable channel; and this line is the
         // only record of which endpoint a given check asked, since the About screen
         // shows the channel only until the user changes it.
-        val channelTag = if (channel == UpdateChecker.Channel.BETA) "测试版" else "稳定版"
+        val channelTag = if (channel == UpdateChecker.Channel.BETA) {
+              context.getString(R.string.about_update_channel_beta)
+          } else {
+              context.getString(R.string.about_update_channel_stable)
+          }
         when (outcome) {
             is UpdateChecker.Result.Available -> KernelState.log(
-                KernelState.LogEntry.Level.INFO,
-                "Update",
-                "发现新版本 ${outcome.release.versionName}（$channelTag 通道）",
-            )
+                                                     context,
+                                                     KernelState.LogEntry.Level.INFO,
+                                                     "Update",
+                                                     R.string.log_update_available,
+                                                     outcome.release.versionName,
+                                                     channelTag,
+                                                 )
 
             is UpdateChecker.Result.UpToDate -> KernelState.log(
-                KernelState.LogEntry.Level.INFO,
-                "Update",
-                "已是最新版本（$channelTag 通道）",
-            )
+                                                    context,
+                                                    KernelState.LogEntry.Level.INFO,
+                                                    "Update",
+                                                    R.string.log_update_latest,
+                                                    channelTag,
+                                                )
 
             is UpdateChecker.Result.Failed -> KernelState.log(
-                KernelState.LogEntry.Level.WARN,
-                "Update",
-                "检查更新失败：${outcome.message}（$channelTag 通道）",
-            )
+                                                  context,
+                                                  KernelState.LogEntry.Level.WARN,
+                                                  "Update",
+                                                  R.string.log_update_failed,
+                                                  outcome.message,
+                                                  channelTag,
+                                              )
         }
     }
 }

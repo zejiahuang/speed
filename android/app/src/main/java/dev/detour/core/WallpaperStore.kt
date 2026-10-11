@@ -11,6 +11,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
 import java.security.MessageDigest
+import dev.detour.R
 
 /**
  * The user's background photo, copied into app storage and made identifiable.
@@ -213,9 +214,14 @@ object WallpaperStore {
             meta.writeText(metaJson.toString())
             Prefs.of(context).updateWallpaper(identity)
             KernelState.log(
-                KernelState.LogEntry.Level.INFO, TAG,
-                "壁纸已保存（${mime}，${byteCount / 1024} KiB，" +
-                    "${bounds.outWidth}×${bounds.outHeight}）",
+                context,
+                KernelState.LogEntry.Level.INFO,
+                TAG,
+                R.string.log_wallpaper_saved,
+                mime,
+                byteCount / 1024,
+                bounds.outWidth,
+                bounds.outHeight,
             )
             identity
         } catch (err: Throwable) {

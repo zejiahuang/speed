@@ -541,8 +541,8 @@
          `settings_export_failed` / `settings_import_read_failed`, and it used to
          be a Chinese literal in the Kotlin — invisible to translation, and shown
          to the user inside an otherwise translated sentence. -->
-    <string name="settings_export_stream_failed">Cannot open the output stream</string>
-    <string name="settings_import_stream_failed">Cannot open the input stream</string>
+    <string name="common_output_stream_failed">Cannot open the output stream</string>
+    <string name="common_input_stream_failed">Cannot open the input stream</string>
     <string name="settings_import">Import data</string>
     <string name="settings_import_hint">Restore settings from a JSON file; this overwrites the current ones</string>
     <string name="settings_import_action">Import</string>
@@ -642,4 +642,104 @@
     <string name="battery_body">The system may reap the tunnel while you are not using it, which shows up as a connection that reports itself up while nothing moves. Set speed\'s battery policy to \"Unrestricted\", otherwise background survival cannot be guaranteed.</string>
     <string name="battery_oem_hint">Some systems also need \"Autostart\" and \"Background running\" enabled separately. Neither has a standard entry point and this app cannot read them, so please confirm them in the system settings yourself.</string>
     <string name="battery_open_settings">Open battery settings</string>
+
+    <!-- Log lines.
+
+         The log is a user-visible surface — it is one of the four tabs — so its
+         lines are resources like every other string. They used to be literals in
+         the Kotlin, which is invisible to translation and leaves a Chinese log
+         under an English interface.
+
+         The kernel's own lines are the exception and stay English in both
+         languages: they are emitted by the Rust side, and a diagnostic line that
+         changes language with the UI is harder to search for in a bug report. -->
+    <string name="log_kernel_loaded">Kernel library loaded</string>
+    <string name="log_kernel_unavailable">Kernel library unavailable: %1$s</string>
+    <string name="log_prefetch_done">Prefetched rules at launch: %1$d KiB</string>
+    <string name="log_prefetch_failed">Prefetching rules at launch failed: %1$s</string>
+    <string name="log_auto_connect_no_disclaimer">Auto-connect at launch skipped: the disclaimer has not been accepted</string>
+    <string name="log_auto_connect_no_vpn">Auto-connect at launch skipped: no VPN authorisation yet</string>
+    <string name="log_vpn_denied">The user denied VPN authorisation</string>
+    <string name="log_no_notification_permission">No notification permission; the foreground service may be restricted by the system</string>
+    <string name="log_prepare_failed">VpnService.prepare threw: %1$s</string>
+    <string name="log_vpn_already_granted">VPN already authorised; starting directly</string>
+    <string name="log_vpn_needs_grant">Authorisation needed; showing the system dialog</string>
+    <string name="log_battery_settings_unavailable">The battery settings page does not open; cannot guide the user</string>
+    <string name="log_disclaimer_accepted">The user accepted the disclaimer</string>
+    <string name="log_disclaimer_declined">The user declined the disclaimer; exiting</string>
+    <string name="log_already_running">Already running; ignoring the duplicate request</string>
+    <string name="log_rules_loaded">Rules loaded: %1$d KiB (source %2$s)</string>
+    <string name="log_proxy_listening">Proxy listening on 127.0.0.1:%1$d</string>
+    <string name="log_kernel_started_vpn">Kernel started (VPN)</string>
+    <string name="log_kernel_started_root">Root mode started: %1$d domains → %2$s, proxy listening on 127.0.0.1:%3$d</string>
+    <string name="log_vpn_takeover">Taking over public traffic; the kernel splits it by the rules</string>
+    <string name="log_rules_hot_swapped">Rules hot-swapped (%1$d KiB); flows in flight were not interrupted</string>
+    <string name="log_rules_hot_swap_rejected">The kernel rejected the rule hot-swap: %1$s</string>
+    <string name="log_rules_reload_failed">Reloading the rules failed: %1$s</string>
+    <string name="log_loop_stop_timeout">The step loop did not exit within %1$d ms; giving up — the kernel will leak rather than be freed</string>
+    <string name="log_disconnected">Disconnected</string>
+    <string name="log_vpn_revoked">The system revoked the VPN</string>
+    <string name="log_root_parse_failed">Parsing the rule document failed; root mode will not hijack any domain: %1$s</string>
+    <string name="log_root_no_domains">The rule document contains no domains; root mode started but hijacks no traffic</string>
+    <string name="log_cache_from_older_version">The rule cache came from an older version; discarded and re-fetched</string>
+    <string name="log_offline_stamp_mismatch">Offline mode: the cache is from %1$s, which does not match the current source %2$s; refusing to use it (that document is certainly not the selected rule set, and using it would only produce a tunnel that forwards nothing)</string>
+    <string name="log_offline_no_stamp">Offline mode: the cache carries no source stamp, so it cannot be checked; using it as offline mode requires</string>
+    <string name="log_offline_using_cache">Offline mode: using the downloaded rules</string>
+    <string name="log_rules_updated">Rules updated (%1$d KiB, source %2$s)</string>
+    <string name="log_fetch_failed">Fetching the rules failed: %1$s</string>
+    <string name="log_using_cache">Using the cached rules</string>
+    <string name="log_cache_mismatch_and_fetch_failed">The cache\'s source does not match and the fetch failed too; it cannot be used</string>
+    <string name="log_rules_filtered">Filtered the rules by %1$d switches: %2$d KiB → %3$d KiB</string>
+    <string name="log_filter_failed">Filtering the rules failed; using the unfiltered ones this time: %1$s</string>
+    <string name="log_fetching">Fetching rules: %1$s (candidate %2$d/%3$d, %4$s)</string>
+    <string name="log_candidate_failed">Candidate %1$d/%2$d failed: %3$s (%4$s)</string>
+    <string name="log_reading_local">Reading the local rule file: %1$s (%2$d KiB)</string>
+    <string name="log_local_imported">Imported local rules: %1$s (%2$d KiB, copy %3$s)</string>
+    <string name="log_update_available">Version %1$s is available (%2$s channel)</string>
+    <string name="log_update_latest">Up to date (%1$s channel)</string>
+    <string name="log_update_failed">The update check failed: %1$s (%2$s channel)</string>
+    <string name="log_wallpaper_saved">Wallpaper saved (%1$s, %2$d KiB, %3$d×%4$d)</string>
+    <string name="log_no_app_for_url">No app can open %1$s: %2$s</string>
+    <string name="log_parse_failed">Parsing the rules failed: %1$s</string>
+    <string name="log_import_failed">Importing the local rules failed: %1$s</string>
+    <!-- Exception messages that reach the screen.
+
+         These are thrown from the rule pipeline and surface either as
+         `status.message` on the home card (when the phase is ERROR) or inside a
+         toast (`导入失败：…`), so they are user-visible text like any other. A
+         message that stayed a literal would be Chinese under an English UI, in
+         the one place a user is already looking because something went wrong. -->
+    <string name="err_missing_groups_field">Missing the groups field</string>
+    <string name="err_offline_no_cache">Offline, and no rules have been downloaded on this device yet</string>
+    <string name="err_offline_source_mismatch">Offline mode: the downloaded rules belong to %1$s, which does not match the current selection %2$s; go online to download again, or switch back to %1$s</string>
+    <string name="err_source_unavailable">The rule source \"%1$s\" is unavailable</string>
+    <string name="err_all_candidates_failed">All %2$d addresses of the rule source \"%1$s\" failed: %3$s</string>
+    <string name="err_local_file_missing">The local rule file is gone; import \"%1$s\" again</string>
+    <string name="err_not_a_rule_document">The content is an HTML page, not a rule document</string>
+    <string name="err_too_few_entries">The rule source \"%1$s\" parsed to too few entries: %2$d found, at least %3$d required</string>
+    <!-- The long tail: error and status text that reaches the screen from paths
+         the first pass did not cover — the update checker, the rule import, the
+         root installer, the battery reminder, and the default group name. -->
+    <string name="log_battery_unrestricted">Battery policy: set to unrestricted</string>
+    <string name="log_battery_restricted">Battery policy: not unrestricted; the system may reap the tunnel</string>
+    <string name="err_kernel_error">The kernel returned an error</string>
+    <string name="err_ca_fingerprint">Cannot compute the CA certificate fingerprint (subject hash)</string>
+    <string name="err_root_install_failed">Root mode install failed (%1$s): %2$s</string>
+    <string name="err_root_step">step %1$d</string>
+    <string name="err_root_no_su_reply">su returned nothing</string>
+    <string name="err_su_start_failed">Cannot start su: %1$s</string>
+    <string name="err_su_timeout">su timed out (%1$d ms): %2$s</string>
+    <string name="rules_unnamed_group">Unnamed</string>
+    <string name="rules_local_default_label">Local rules</string>
+    <string name="err_import_read_failed">Reading the file failed: %1$s</string>
+    <string name="err_import_too_large">The file is over %1$d MiB; it does not look like a rule document</string>
+    <string name="err_import_empty">The file is empty</string>
+    <string name="err_import_not_a_document">The content is not a rule document</string>
+    <string name="err_import_write_failed">Writing the local copy failed: %1$s</string>
+    <string name="err_update_no_url">No update address is configured</string>
+    <string name="err_update_cleartext">The system does not allow cleartext HTTP; use https:// instead</string>
+    <string name="err_update_too_large">The response is too large</string>
+    <string name="err_update_missing_fields">Missing versionCode or url</string>
+    <string name="err_update_version_fallback">version %1$d</string>
+    <string name="err_update_version_unparsable">Cannot parse the version number: %1$s</string>
 </resources>

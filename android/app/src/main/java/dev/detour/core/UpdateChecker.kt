@@ -6,6 +6,8 @@ import java.net.HttpURLConnection
 import java.net.URL
 import org.json.JSONArray
 import org.json.JSONObject
+import android.content.Context
+import dev.detour.R
 
 /**
  * Fetches a release manifest and decides whether a newer build exists.
@@ -200,6 +202,7 @@ object UpdateChecker {
      *   exactly as it did before the channel existed.
      */
     fun check(
+        context: Context,
         url: String,
         currentVersionCode: Int,
         currentVersionName: String,
@@ -212,7 +215,7 @@ object UpdateChecker {
         return try {
             val trimmed = url.trim()
             if (trimmed.isEmpty()) {
-                return Result.Failed("未配置更新地址")
+                return Result.Failed(context.getString(R.string.err_update_no_url))
             }
 
             // Validate the scheme before touching URL(): `URL()` throws on an
@@ -235,7 +238,7 @@ object UpdateChecker {
             // rule-source fetches that carry the whole routing table.
             val scheme = schemeOf(trimmed)
             if (scheme != "https") {
-                return Result.Failed("系统不允许明文 HTTP，请改用 https://")
+                return Result.Failed(context.getString(R.string.err_update_cleartext))
             }
 
             val target = urlForChannel(trimmed, channel)
@@ -254,8 +257,8 @@ object UpdateChecker {
                     return Result.Failed("HTTP $code")
                 }
 
-                val body = readCapped(connection) ?: return Result.Failed("响应过大")
-                parse(body, currentVersionCode, currentVersionName, channel)
+                val body = readCapped(connection) ?: return Result.Failed(context.getString(R.string.err_update_too_large))
+                parse(context, body, currentVersionCode, currentVersionName, channel)
             } finally {
                 connection.disconnect()
             }
@@ -306,6 +309,7 @@ object UpdateChecker {
      * path unchanged.
      */
     private fun parse(
+        context: Context,
         body: String,
         currentVersionCode: Int,
         currentVersionName: String,
@@ -317,30 +321,30 @@ object UpdateChecker {
         // `JSONObject` from an array throws, and that throw would reach the user
         // as a parse failure for a perfectly valid response.
         if (body.trimStart().startsWith("[")) {
-            return parseGitHubList(JSONArray(body), currentVersionName, channel)
+            return parseGitHubList(context, JSONArray(body), currentVersionName, channel)
         }
 
         val json = JSONObject(body)
 
         val tagName = json.optString("tag_name", "")
         return if (tagName.isNotBlank()) {
-            parseGitHub(json, tagName, currentVersionName, channel)
+            parseGitHub(context, json, tagName, currentVersionName, channel)
         } else {
-            parseCustom(json, currentVersionCode)
+            parseCustom(context, json, currentVersionCode)
         }
     }
 
-    private fun parseCustom(json: JSONObject, currentVersionCode: Int): Result {
+    private fun parseCustom(context: Context, json: JSONObject, currentVersionCode: Int): Result {
         // Only `versionCode` and `url` are required. `-1` is the sentinel for
         // "absent or not an integer": a real Android versionCode is always
         // positive, so it can never collide with it.
         val versionCode = json.optInt("versionCode", -1)
         val downloadUrl = json.optString("url", "")
         if (versionCode < 0 || downloadUrl.isBlank()) {
-            return Result.Failed("缺少 versionCode 或 url")
+            return Result.Failed(context.getString(R.string.err_update_missing_fields))
         }
 
-        val versionName = json.optString("versionName", "").ifBlank { "版本 $versionCode" }
+        val versionName = json.optString("versionName", "").ifBlank { context.getString(R.string.err_update_version_fallback, versionCode) }
         val notes = if (json.isNull("notes")) null else json.optString("notes", "").ifBlank { null }
 
         // Compare the integer `versionCode`, never the `versionName` string:
@@ -360,6 +364,7 @@ object UpdateChecker {
      * @param tagName the already-read `tag_name`.
      */
     private fun parseGitHub(
+        context: Context,
         json: JSONObject,
         tagName: String,
         currentVersionName: String,
@@ -390,9 +395,13 @@ object UpdateChecker {
         // "older" would dress a broken release up as "you are up to date" and
         // silently hide every future update until someone notices.
         val current = parseVersion(currentVersionName)
-            ?: return Result.Failed("版本号无法解析：$currentVersionName")
+            ?: return Result.Failed(
+                  context.getString(R.string.err_update_version_unparsable, currentVersionName),
+              )
         val remote = parseVersion(versionName)
-            ?: return Result.Failed("版本号无法解析：$versionName")
+            ?: return Result.Failed(
+                  context.getString(R.string.err_update_version_unparsable, versionName),
+              )
 
         // Compare the parsed versions, never the strings: lexicographically
         // "0.10.0" sorts *before* "0.9.0", so a string compare would call a newer
@@ -435,7 +444,12 @@ object UpdateChecker {
      * rest. The single-object path deliberately does the opposite — see its note
      * — because there the one bad tag *is* the whole response.
      */
-    private fun parseGitHubList(array: JSONArray, currentVersionName: String, channel: Channel): Result {
+    private fun parseGitHubList(
+        context: Context,
+        array: JSONArray,
+        currentVersionName: String,
+        channel: Channel,
+    ): Result {
         var best: JSONObject? = null
         var bestVersion: Version? = null
 
@@ -460,7 +474,7 @@ object UpdateChecker {
         // comparison, the mirror rewrite and the notes handling. The channel
         // checks are re-run inside and pass, since this loop applied the same
         // test to the same entry.
-        return parseGitHub(winner, winner.optString("tag_name", ""), currentVersionName, channel)
+        return parseGitHub(context, winner, winner.optString("tag_name", ""), currentVersionName, channel)
     }
 
     /**

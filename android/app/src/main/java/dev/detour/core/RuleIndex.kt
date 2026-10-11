@@ -3,6 +3,7 @@ package dev.detour.core
 import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
+import dev.detour.R
 
 /**
  * The rule document, as a tree the rules screen can walk.
@@ -134,12 +135,12 @@ class RuleIndex private constructor(
 
     companion object {
         /** Parse the cached document. */
-        fun parse(context: Context): RuleIndex = decode(RulesRepository.load(context))
+        fun parse(context: Context): RuleIndex = decode(context, RulesRepository.load(context))
 
         /** Drop the cache, fetch again, and parse. */
         fun refresh(context: Context): RuleIndex {
             RulesRepository.invalidate(context)
-            return decode(RulesRepository.load(context, forceRefresh = true))
+            return decode(context, RulesRepository.load(context, forceRefresh = true))
         }
 
         /**
@@ -178,7 +179,7 @@ class RuleIndex private constructor(
             return seen.toList()
         }
 
-        fun decode(document: ByteArray): RuleIndex {
+        fun decode(context: Context, document: ByteArray): RuleIndex {
             val root = JSONObject(String(document, Charsets.UTF_8))
             val groups = root.optJSONArray("groups") ?: JSONArray()
             val parsed = ArrayList<Node.Group>(groups.length())
@@ -210,7 +211,7 @@ class RuleIndex private constructor(
                     Node.Domain(domain, addresses)
                 }
                 parsed += Node.Group(
-                    name = group.optString("group", "未命名"),
+                    name = group.optString("group", context.getString(R.string.rules_unnamed_group)),
                     domains = domains,
                     addressCount = domains.sumOf { it.addresses.size },
                 )

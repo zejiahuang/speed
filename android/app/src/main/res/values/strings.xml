@@ -541,8 +541,8 @@
          `settings_export_failed` / `settings_import_read_failed`, and it used to
          be a Chinese literal in the Kotlin — invisible to translation, and shown
          to the user inside an otherwise translated sentence. -->
-    <string name="settings_export_stream_failed">无法打开输出流</string>
-    <string name="settings_import_stream_failed">无法打开输入流</string>
+    <string name="common_output_stream_failed">无法打开输出流</string>
+    <string name="common_input_stream_failed">无法打开输入流</string>
     <string name="settings_import">导入数据</string>
     <string name="settings_import_hint">从 JSON 文件恢复设置，会覆盖当前设置</string>
     <string name="settings_import_action">导入</string>
@@ -642,4 +642,104 @@
     <string name="battery_body">系统可能在你不用时回收隧道，表现为连接显示正常、但流量走不动。请把 speed 的省电策略设为「无限制」，否则后台保活无法保证。</string>
     <string name="battery_oem_hint">部分系统还需要单独打开「自启动」和「后台运行」。这两项没有统一入口，本应用也无法读取，需要你在系统设置里自行确认。</string>
     <string name="battery_open_settings">去电池设置</string>
+
+    <!-- Log lines.
+
+         The log is a user-visible surface — it is one of the four tabs — so its
+         lines are resources like every other string. They used to be literals in
+         the Kotlin, which is invisible to translation and leaves a Chinese log
+         under an English interface.
+
+         The kernel's own lines are the exception and stay English in both
+         languages: they are emitted by the Rust side, and a diagnostic line that
+         changes language with the UI is harder to search for in a bug report. -->
+    <string name="log_kernel_loaded">内核库已加载</string>
+    <string name="log_kernel_unavailable">内核库不可用：%1$s</string>
+    <string name="log_prefetch_done">启动时已预取规则：%1$d KiB</string>
+    <string name="log_prefetch_failed">启动时预取规则失败：%1$s</string>
+    <string name="log_auto_connect_no_disclaimer">启动自动连接跳过：还没有接受免责声明</string>
+    <string name="log_auto_connect_no_vpn">启动自动连接跳过：还没有 VPN 授权</string>
+    <string name="log_vpn_denied">用户拒绝了 VPN 授权</string>
+    <string name="log_no_notification_permission">没有通知权限，前台服务可能被系统限制</string>
+    <string name="log_prepare_failed">VpnService.prepare 抛出异常：%1$s</string>
+    <string name="log_vpn_already_granted">VPN 已有授权，直接启动</string>
+    <string name="log_vpn_needs_grant">需要授权，弹出系统对话框</string>
+    <string name="log_battery_settings_unavailable">省电策略设置页打不开，无法引导用户</string>
+    <string name="log_disclaimer_accepted">用户已接受免责声明</string>
+    <string name="log_disclaimer_declined">用户不同意免责声明，退出应用</string>
+    <string name="log_already_running">已在运行，忽略重复请求</string>
+    <string name="log_rules_loaded">规则已加载 %1$d KiB（来源 %2$s）</string>
+    <string name="log_proxy_listening">代理已监听 127.0.0.1:%1$d</string>
+    <string name="log_kernel_started_vpn">内核已启动（VPN）</string>
+    <string name="log_kernel_started_root">root 模式已启动：%1$d 个域名 → %2$s，代理监听 127.0.0.1:%3$d</string>
+    <string name="log_vpn_takeover">接管公网流量，由内核按规则分流</string>
+    <string name="log_rules_hot_swapped">规则已热替换（%1$d KiB），在跑的流未受影响</string>
+    <string name="log_rules_hot_swap_rejected">规则热替换被内核拒绝：%1$s</string>
+    <string name="log_rules_reload_failed">重载规则失败：%1$s</string>
+    <string name="log_loop_stop_timeout">步进循环未在 %1$dms 内退出，放弃等待；内核将泄漏而不是被释放</string>
+    <string name="log_disconnected">已断开</string>
+    <string name="log_vpn_revoked">系统收回了 VPN</string>
+    <string name="log_root_parse_failed">规则文档解析失败，root 模式将不拦截任何域名：%1$s</string>
+    <string name="log_root_no_domains">规则文档未包含任何域名，root 模式已启动但不拦截任何流量</string>
+    <string name="log_cache_from_older_version">规则缓存来自旧版本，已丢弃并重新拉取</string>
+    <string name="log_offline_stamp_mismatch">离线模式：缓存来自 %1$s，与当前来源 %2$s 不符，拒绝使用（该文档必然不是所选规则集，用它只会得到一个不转发任何流量的隧道）</string>
+    <string name="log_offline_no_stamp">离线模式：缓存无来源标记，无法校验，仍按离线要求使用</string>
+    <string name="log_offline_using_cache">离线模式：使用已下载的规则</string>
+    <string name="log_rules_updated">规则已更新（%1$d KiB，来源 %2$s）</string>
+    <string name="log_fetch_failed">拉取规则失败：%1$s</string>
+    <string name="log_using_cache">使用缓存的规则</string>
+    <string name="log_cache_mismatch_and_fetch_failed">缓存来源与当前不符，拉取又失败，不能使用</string>
+    <string name="log_rules_filtered">已按 %1$d 个开关过滤规则：%2$d KiB → %3$d KiB</string>
+    <string name="log_filter_failed">过滤规则失败，本次使用未过滤的规则：%1$s</string>
+    <string name="log_fetching">拉取规则：%1$s（候选 %2$d/%3$d，%4$s）</string>
+    <string name="log_candidate_failed">候选 %1$d/%2$d 失败：%3$s（%4$s）</string>
+    <string name="log_reading_local">读取本地规则文件：%1$s（%2$d KiB）</string>
+    <string name="log_local_imported">已导入本地规则：%1$s（%2$d KiB，副本 %3$s）</string>
+    <string name="log_update_available">发现新版本 %1$s（%2$s 通道）</string>
+    <string name="log_update_latest">已是最新版本（%1$s 通道）</string>
+    <string name="log_update_failed">检查更新失败：%1$s（%2$s 通道）</string>
+    <string name="log_wallpaper_saved">壁纸已保存（%1$s，%2$d KiB，%3$d×%4$d）</string>
+    <string name="log_no_app_for_url">没有应用可以打开 %1$s：%2$s</string>
+    <string name="log_parse_failed">解析规则失败：%1$s</string>
+    <string name="log_import_failed">导入本地规则失败：%1$s</string>
+    <!-- Exception messages that reach the screen.
+
+         These are thrown from the rule pipeline and surface either as
+         `status.message` on the home card (when the phase is ERROR) or inside a
+         toast (`导入失败：…`), so they are user-visible text like any other. A
+         message that stayed a literal would be Chinese under an English UI, in
+         the one place a user is already looking because something went wrong. -->
+    <string name="err_missing_groups_field">缺少 groups 字段</string>
+    <string name="err_offline_no_cache">离线模式，且本地还没有已下载的规则</string>
+    <string name="err_offline_source_mismatch">离线模式：已下载的规则属于 %1$s，与当前选择的 %2$s 不符；请联网重新下载，或切回 %1$s</string>
+    <string name="err_source_unavailable">规则源「%1$s」暂不可用</string>
+    <string name="err_all_candidates_failed">规则源「%1$s」的 %2$d 个地址全部失败：%3$s</string>
+    <string name="err_local_file_missing">本地规则文件已丢失，请重新导入「%1$s」</string>
+    <string name="err_not_a_rule_document">内容是一份 HTML 页面，不是规则文档</string>
+    <string name="err_too_few_entries">规则源「%1$s」解析出的条目过少：实测 %2$d 条，至少需要 %3$d 条</string>
+    <!-- The long tail: error and status text that reaches the screen from paths
+         the first pass did not cover — the update checker, the rule import, the
+         root installer, the battery reminder, and the default group name. -->
+    <string name="log_battery_unrestricted">省电策略：已设为无限制</string>
+    <string name="log_battery_restricted">省电策略：未设为无限制，系统可能回收隧道</string>
+    <string name="err_kernel_error">内核返回了错误</string>
+    <string name="err_ca_fingerprint">无法计算 CA 证书的指纹（subject hash）</string>
+    <string name="err_root_install_failed">root 模式安装失败（%1$s）：%2$s</string>
+    <string name="err_root_step">第 %1$d 步</string>
+    <string name="err_root_no_su_reply">su 未返回</string>
+    <string name="err_su_start_failed">无法启动 su：%1$s</string>
+    <string name="err_su_timeout">su 超时（%1$dms）：%2$s</string>
+    <string name="rules_unnamed_group">未命名</string>
+    <string name="rules_local_default_label">本地规则</string>
+    <string name="err_import_read_failed">读取文件失败：%1$s</string>
+    <string name="err_import_too_large">文件超过 %1$d MiB，不像是规则文件</string>
+    <string name="err_import_empty">文件是空的</string>
+    <string name="err_import_not_a_document">内容不是规则文档</string>
+    <string name="err_import_write_failed">写入本地副本失败：%1$s</string>
+    <string name="err_update_no_url">未配置更新地址</string>
+    <string name="err_update_cleartext">系统不允许明文 HTTP，请改用 https://</string>
+    <string name="err_update_too_large">响应过大</string>
+    <string name="err_update_missing_fields">缺少 versionCode 或 url</string>
+    <string name="err_update_version_fallback">版本 %1$d</string>
+    <string name="err_update_version_unparsable">版本号无法解析：%1$s</string>
 </resources>

@@ -97,7 +97,7 @@ fun HomeScreen() {
     // this app refuses to ship, so without root the entry is not drawn.
     var rootAvailable by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
-        rootAvailable = withContext(Dispatchers.IO) { RootHelper.isAvailable() }
+        rootAvailable = withContext(Dispatchers.IO) { RootHelper.isAvailable(context) }
     }
 
     // How much room the floating glass bar takes at the bottom of this screen.

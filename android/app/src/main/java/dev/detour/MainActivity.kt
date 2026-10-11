@@ -50,6 +50,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
+import dev.detour.R
 import dev.detour.core.BatteryPolicy
 import dev.detour.core.DetourVpnService
 import dev.detour.core.Disclaimer
@@ -98,7 +99,10 @@ class MainActivity : ComponentActivity() {
             startTunnel(KernelState.Mode.VPN)
         } else {
             KernelState.log(
-                KernelState.LogEntry.Level.WARN, "MainActivity", "用户拒绝了 VPN 授权",
+                this@MainActivity,
+                KernelState.LogEntry.Level.WARN,
+                "MainActivity",
+                R.string.log_vpn_denied,
             )
         }
     }
@@ -108,8 +112,10 @@ class MainActivity : ComponentActivity() {
     ) { granted ->
         if (!granted) {
             KernelState.log(
-                KernelState.LogEntry.Level.WARN, "MainActivity",
-                "没有通知权限，前台服务可能被系统限制",
+                this@MainActivity,
+                KernelState.LogEntry.Level.WARN,
+                "MainActivity",
+                R.string.log_no_notification_permission,
             )
         }
     }
@@ -176,15 +182,20 @@ class MainActivity : ComponentActivity() {
                 val prepare = runCatching { VpnService.prepare(this) }
                     .onFailure {
                         KernelState.log(
-                            KernelState.LogEntry.Level.ERROR, "MainActivity",
-                            "VpnService.prepare 抛出异常：${it.message}",
+                            this@MainActivity,
+                            KernelState.LogEntry.Level.ERROR,
+                            "MainActivity",
+                            R.string.log_prepare_failed,
+                            it.message,
                         )
                     }
                     .getOrNull()
 
                 KernelState.log(
-                    KernelState.LogEntry.Level.INFO, "MainActivity",
-                    if (prepare == null) "VPN 已有授权，直接启动" else "需要授权，弹出系统对话框",
+                    this@MainActivity,
+                    KernelState.LogEntry.Level.INFO,
+                    "MainActivity",
+                    if (prepare == null) R.string.log_vpn_already_granted else R.string.log_vpn_needs_grant,
                 )
 
                 if (prepare != null) {
@@ -321,9 +332,9 @@ private fun DetourAppBody(onRequestNotifications: () -> Unit = {}) {
                 },
                 "MainActivity",
                 if (unrestricted) {
-                    "省电策略：已设为无限制"
+                    context.getString(R.string.log_battery_unrestricted)
                 } else {
-                    "省电策略：未设为无限制，系统可能回收隧道"
+                    context.getString(R.string.log_battery_restricted)
                 },
             )
         }
@@ -725,9 +736,10 @@ private fun DetourAppBody(onRequestNotifications: () -> Unit = {}) {
                     batteryDismissed = true
                     if (!BatteryPolicy.openSettings(context)) {
                         KernelState.log(
+                            context,
                             KernelState.LogEntry.Level.WARN,
                             "MainActivity",
-                            "省电策略设置页打不开，无法引导用户",
+                            R.string.log_battery_settings_unavailable,
                         )
                     }
                 },
@@ -762,13 +774,18 @@ private fun DetourAppBody(onRequestNotifications: () -> Unit = {}) {
                     // reads when reconstructing what happened.
                     prefs.updateDisclaimerAcceptedDigest(Disclaimer.digest(disclaimerText))
                     KernelState.log(
-                        KernelState.LogEntry.Level.INFO, "MainActivity", "用户已接受免责声明",
+                        context,
+                        KernelState.LogEntry.Level.INFO,
+                        "MainActivity",
+                        R.string.log_disclaimer_accepted,
                     )
                 },
                 onDecline = {
                     KernelState.log(
-                        KernelState.LogEntry.Level.WARN, "MainActivity",
-                        "用户不同意免责声明，退出应用",
+                        context,
+                        KernelState.LogEntry.Level.WARN,
+                        "MainActivity",
+                        R.string.log_disclaimer_declined,
                     )
                     (context as? Activity)?.finish()
                 },

@@ -509,9 +509,12 @@ internal fun openInBrowser(context: Context, url: String) {
     }
     if (opened.isFailure) {
         KernelState.log(
+            context,
             KernelState.LogEntry.Level.WARN,
             "AboutScreen",
-            "没有应用可以打开 $url：${opened.exceptionOrNull()?.message}",
+            R.string.log_no_app_for_url,
+            url,
+            opened.exceptionOrNull()?.message,
         )
     }
 }

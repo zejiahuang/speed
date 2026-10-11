@@ -4,6 +4,7 @@ import android.content.Context
 import java.io.File
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
+import dev.detour.R
 
 /**
  * The privileged half of root mode.
@@ -133,10 +134,10 @@ object RootHelper {
     @Volatile
     private var rootGranted: Boolean = false
 
-    fun isAvailable(): Boolean {
+    fun isAvailable(context: Context): Boolean {
         if (rootGranted) return true
         val granted = runCatching {
-            val result = Su().run(listOf("id"), TIMEOUT_MS)
+            val result = Su(context).run(listOf("id"), TIMEOUT_MS)
             result.ok && result.output.contains("uid=0")
         }.getOrDefault(false)
         if (granted) rootGranted = true
@@ -150,7 +151,7 @@ object RootHelper {
      * was opened. Both the service's teardown and its failure path do.
      */
     fun open(context: Context): Session? {
-        if (!isAvailable()) return null
+        if (!isAvailable(context)) return null
         return Session(context.applicationContext)
     }
 
@@ -167,8 +168,8 @@ object RootHelper {
      * the files were already in the state it wanted them in.
      */
     fun recoverStale(context: Context) {
-        if (!isAvailable()) return
-        runCatching { Su().run(undoCommands(), TIMEOUT_MS) }
+        if (!isAvailable(context)) return
+        runCatching { Su(context).run(undoCommands(), TIMEOUT_MS) }
         // The `su` side cannot reach the app's private files, so the staging dir is
         // cleared here instead, on the same best-effort terms as the undo above.
         runCatching { stageDir(context).deleteRecursively() }
@@ -229,11 +230,11 @@ object RootHelper {
      * one are logged here, at the moment they are seen, rather than being allowed
      * to masquerade as a healthy start.
      */
-    fun domainsOf(document: ByteArray): List<String> {
+    fun domainsOf(context: Context, document: ByteArray): List<String> {
         val names = runCatching {
             val groups = org.json.JSONObject(String(document, Charsets.UTF_8))
                 .optJSONArray("groups")
-                ?: throw IllegalStateException("缺少 groups 字段")
+                ?: throw IllegalStateException(context.getString(R.string.err_missing_groups_field))
             val collected = LinkedHashSet<String>()
             for (g in 0 until groups.length()) {
                 val entries = groups.optJSONObject(g)?.optJSONArray("entries") ?: continue
@@ -247,18 +248,16 @@ object RootHelper {
             collected.toList()
         }.getOrElse { err ->
             KernelState.log(
+                context,
                 KernelState.LogEntry.Level.WARN,
                 TAG,
-                "规则文档解析失败，root 模式将不拦截任何域名：${err.message}",
+                R.string.log_root_parse_failed,
+                err.message,
             )
             emptyList()
         }
         if (names.isEmpty()) {
-            KernelState.log(
-                KernelState.LogEntry.Level.WARN,
-                TAG,
-                "规则文档未包含任何域名，root 模式已启动但不拦截任何流量",
-            )
+            KernelState.log(context, KernelState.LogEntry.Level.WARN, TAG, R.string.log_root_no_domains)
         }
         return names
     }
@@ -421,7 +420,7 @@ object RootHelper {
      */
     class Session internal constructor(private val context: Context) {
 
-        private val shell = Su()
+        private val shell = Su(context)
 
         private var blockPath: File? = null
 
@@ -435,7 +434,7 @@ object RootHelper {
          *         device already returned to its previous state.
          */
         fun apply(caPem: String, names: List<String>, redirectPort: Int): String? {
-            val hash = subjectHash(caPem) ?: return "无法计算 CA 证书的指纹（subject hash）"
+            val hash = subjectHash(caPem) ?: return context.getString(R.string.err_ca_fingerprint)
 
             // Undo any leftover from a run that was killed, *before* the first
             // write. This is what makes a retry after a failure additive-free.
@@ -509,8 +508,16 @@ object RootHelper {
             if (!result.ok) {
                 val failed = result.codes.indexOfFirst { it != 0 }
                 restore()
-                val step = if (failed >= 0) "第 ${failed + 1} 步" else "su 未返回"
-                return "root 模式安装失败（$step）：${result.output.takeLast(200).trim()}"
+                val step = if (failed >= 0) {
+                      context.getString(R.string.err_root_step, failed + 1)
+                  } else {
+                      context.getString(R.string.err_root_no_su_reply)
+                  }
+                return context.getString(
+                      R.string.err_root_install_failed,
+                      step,
+                      result.output.takeLast(200).trim(),
+                  )
             }
             return null
         }
@@ -577,7 +584,7 @@ object RootHelper {
      * inherits the app's namespace, where `/` is mounted read-only and none of
      * these writes can land. [run] carries the measurement.
      */
-    private class Su {
+    private class Su(private val context: Context) {
 
         class Result(val codes: List<Int>, val output: String) {
             /** True only when every command reported success. */
@@ -663,7 +670,7 @@ object RootHelper {
                 val argv = if (option == null) listOf("su") else listOf("su", option)
                 ProcessBuilder(argv).redirectErrorStream(true).start()
             } catch (err: Throwable) {
-                return Result(emptyList(), "无法启动 su：${err.message}")
+                return Result(emptyList(), context.getString(R.string.err_su_start_failed, err.message))
             }
             // Drain stdout on a worker thread, not inline. `readText()` returns
             // only at EOF, and EOF only happens once `su` has exited — so reading
@@ -711,7 +718,7 @@ object RootHelper {
                     val partial = synchronized(sink) { sink.toString() }
                     return Result(
                         emptyList(),
-                        "su 超时（${timeoutMs}ms）：${partial.takeLast(200).trim()}",
+                        context.getString(R.string.err_su_timeout, timeoutMs, partial.takeLast(200).trim()),
                     )
                 }
                 reader.join(READER_JOIN_MS)

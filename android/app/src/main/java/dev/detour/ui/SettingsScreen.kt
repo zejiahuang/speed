@@ -411,7 +411,7 @@ fun SettingsScreen(
                           context.contentResolver.openOutputStream(uri)?.use { stream ->
                               stream.write(SettingsBackup.export(context).toByteArray())
                           } ?: throw IOException(
-                              context.getString(R.string.settings_export_stream_failed),
+                              context.getString(R.string.common_output_stream_failed),
                           )
                     }
                 }
@@ -448,7 +448,7 @@ fun SettingsScreen(
                                   context.contentResolver.openInputStream(uri)?.use { stream ->
                                       stream.bufferedReader().readText()
                                   } ?: throw IOException(
-                                      context.getString(R.string.settings_import_stream_failed),
+                                      context.getString(R.string.common_input_stream_failed),
                                   )
                             }
                         }

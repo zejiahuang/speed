@@ -3,6 +3,7 @@ package dev.detour
 import android.app.Application
 import android.net.VpnService
 import androidx.core.content.ContextCompat
+import dev.detour.R
 import dev.detour.core.BuildFlags
 import dev.detour.core.DetourVpnService
 import dev.detour.core.Disclaimer
@@ -98,9 +99,11 @@ class DetourApp : Application() {
 
         val loaded = Kernel.ensureLoaded()
         KernelState.log(
+            this@DetourApp,
             if (loaded) KernelState.LogEntry.Level.INFO else KernelState.LogEntry.Level.ERROR,
             "DetourApp",
-            if (loaded) "内核库已加载" else "内核库不可用：${Kernel.loadError}",
+            if (loaded) R.string.log_kernel_loaded else R.string.log_kernel_unavailable,
+            Kernel.loadError,
         )
 
         // Fetch the rules now rather than at connect. The cold-start delay the
@@ -126,16 +129,20 @@ class DetourApp : Application() {
             runCatching { RulesRepository.load(this@DetourApp) }
                 .onSuccess { bytes ->
                     KernelState.log(
+                        this@DetourApp,
                         KernelState.LogEntry.Level.INFO,
                         "DetourApp",
-                        "启动时已预取规则：${bytes.size / 1024} KiB",
+                        R.string.log_prefetch_done,
+                        bytes.size / 1024,
                     )
                 }
                 .onFailure { error ->
                     KernelState.log(
+                        this@DetourApp,
                         KernelState.LogEntry.Level.WARN,
                         "DetourApp",
-                        "启动时预取规则失败：${error.message}",
+                        R.string.log_prefetch_failed,
+                        error.message,
                     )
                 }
         }
@@ -203,9 +210,10 @@ class DetourApp : Application() {
         // disable auto-connect as a second symptom.
         if (!Disclaimer.isAccepted(Disclaimer.text(this), prefs)) {
             KernelState.log(
+                this@DetourApp,
                 KernelState.LogEntry.Level.WARN,
                 "DetourApp",
-                "启动自动连接跳过：还没有接受免责声明",
+                R.string.log_auto_connect_no_disclaimer,
             )
             return
         }
@@ -214,9 +222,10 @@ class DetourApp : Application() {
         val needsConsent = runCatching { VpnService.prepare(this) }.getOrNull() != null
         if (mode == KernelState.Mode.VPN && needsConsent) {
             KernelState.log(
+                this@DetourApp,
                 KernelState.LogEntry.Level.WARN,
                 "DetourApp",
-                "启动自动连接跳过：还没有 VPN 授权",
+                R.string.log_auto_connect_no_vpn,
             )
             return
         }

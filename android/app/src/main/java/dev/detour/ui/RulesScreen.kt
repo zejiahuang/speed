@@ -271,7 +271,13 @@ fun RulesScreen() {
             index = withContext(Dispatchers.IO) {
                 runCatching { RuleIndex.parse(context) }
                     .onFailure {
-                        KernelState.log(KernelState.LogEntry.Level.ERROR, "Rules", "解析规则失败：${it.message}")
+                        KernelState.log(
+                            context,
+                            KernelState.LogEntry.Level.ERROR,
+                            "Rules",
+                            R.string.log_parse_failed,
+                            it.message,
+                        )
                     }
                     .getOrNull()
             }
@@ -309,7 +315,13 @@ fun RulesScreen() {
                     is RulesRepository.LocalImport.AlreadyPresent -> loadIndex()
                     is RulesRepository.LocalImport.Failed -> {
                         val reason = outcome.reason
-                        KernelState.log(KernelState.LogEntry.Level.ERROR, "Rules", "导入本地规则失败：$reason")
+                        KernelState.log(
+                            context,
+                            KernelState.LogEntry.Level.ERROR,
+                            "Rules",
+                            R.string.log_import_failed,
+                            reason,
+                        )
                         importError = reason
                     }
                 }
@@ -338,7 +350,13 @@ fun RulesScreen() {
         index = withContext(Dispatchers.IO) {
             runCatching { RuleIndex.parse(context) }
                 .onFailure {
-                    KernelState.log(KernelState.LogEntry.Level.ERROR, "Rules", "解析规则失败：${it.message}")
+                    KernelState.log(
+                        context,
+                        KernelState.LogEntry.Level.ERROR,
+                        "Rules",
+                        R.string.log_parse_failed,
+                        it.message,
+                    )
                 }
                 .getOrNull()
         }

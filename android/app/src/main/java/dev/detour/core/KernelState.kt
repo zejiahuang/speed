@@ -1,6 +1,7 @@
 package dev.detour.core
 
 import android.content.Context
+import androidx.annotation.StringRes
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -146,6 +147,25 @@ object KernelState {
         // Outside the `update`: the archive writes to disk, and doing that inside
         // a state mutation would run it while a collector is waiting on the lock.
         archive?.invoke(entry)
+    }
+
+    /**
+     * The same line, with the message taken from a string resource.
+     *
+     * The log is a user-visible surface — it is one of the four tabs — so its
+     * lines follow the interface language like every other string. The lookup
+     * happens here rather than at each call site so that a call site stays a
+     * one-liner; `context` is passed in because this object holds no Context of
+     * its own, and every caller already has one in hand.
+     */
+    fun log(
+        context: Context,
+        level: LogEntry.Level,
+        tag: String,
+        @StringRes messageRes: Int,
+        vararg args: Any?,
+    ) {
+        log(level, tag, context.getString(messageRes, *args))
     }
 
     fun clearLogs() {

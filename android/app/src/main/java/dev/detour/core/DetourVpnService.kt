@@ -91,7 +91,12 @@ class DetourVpnService : VpnService() {
 
     private fun start(mode: KernelState.Mode) {
         if (engine != null || proxy != null || mitm != null) {
-            KernelState.log(KernelState.LogEntry.Level.WARN, TAG, "已在运行，忽略重复请求")
+            KernelState.log(
+                this@DetourVpnService,
+                KernelState.LogEntry.Level.WARN,
+                TAG,
+                R.string.log_already_running,
+            )
             return
         }
         KernelState.setStatus {
@@ -109,8 +114,12 @@ class DetourVpnService : VpnService() {
                 val source = RuleSource.forMode(mode, Prefs.of(this@DetourVpnService).selectedSource)
                 val document = RulesRepository.load(this@DetourVpnService, source = source)
                 KernelState.log(
-                    KernelState.LogEntry.Level.INFO, TAG,
-                    "规则已加载 ${document.size / 1024} KiB（来源 ${source.id}）",
+                    this@DetourVpnService,
+                    KernelState.LogEntry.Level.INFO,
+                    TAG,
+                    R.string.log_rules_loaded,
+                    document.size / 1024,
+                    source.id,
                 )
 
                 when (mode) {
@@ -168,8 +177,11 @@ class DetourVpnService : VpnService() {
             )
         }
         KernelState.log(
-            KernelState.LogEntry.Level.INFO, TAG,
-            "代理已监听 127.0.0.1:${started.port}",
+            this@DetourVpnService,
+            KernelState.LogEntry.Level.INFO,
+            TAG,
+            R.string.log_proxy_listening,
+            started.port,
         )
         updateNotification(getString(R.string.home_state_on))
         // Nothing to step: the proxy owns its own accept loop and per-connection
@@ -229,7 +241,12 @@ class DetourVpnService : VpnService() {
         KernelState.setStatus {
             it.copy(phase = KernelState.Phase.ON, sinceMillis = System.currentTimeMillis())
         }
-        KernelState.log(KernelState.LogEntry.Level.INFO, TAG, "内核已启动（VPN）")
+        KernelState.log(
+            this@DetourVpnService,
+            KernelState.LogEntry.Level.INFO,
+            TAG,
+            R.string.log_kernel_started_vpn,
+        )
         updateNotification(getString(R.string.home_state_on))
 
         runLoop()
@@ -279,7 +296,7 @@ class DetourVpnService : VpnService() {
             return
         }
 
-        val names = RootHelper.domainsOf(document)
+        val names = RootHelper.domainsOf(this@DetourVpnService, document)
         val error = session.apply(caPem, names, started.port)
         if (error != null) {
             fail(error)
@@ -294,9 +311,13 @@ class DetourVpnService : VpnService() {
             )
         }
         KernelState.log(
-            KernelState.LogEntry.Level.INFO, TAG,
-            "root 模式已启动：${names.size} 个域名 → ${RootHelper.REDIRECT_ADDRESS}，" +
-                "代理监听 127.0.0.1:${started.port}",
+            this@DetourVpnService,
+            KernelState.LogEntry.Level.INFO,
+            TAG,
+            R.string.log_kernel_started_root,
+            names.size,
+            RootHelper.REDIRECT_ADDRESS,
+            started.port,
         )
         updateNotification(getString(R.string.home_state_on))
         runRootLoop()
@@ -370,8 +391,10 @@ class DetourVpnService : VpnService() {
             builder.setMetered(false)
         }
         KernelState.log(
-            KernelState.LogEntry.Level.INFO, TAG,
-            "接管公网流量，由内核按规则分流",
+            this@DetourVpnService,
+            KernelState.LogEntry.Level.INFO,
+            TAG,
+            R.string.log_vpn_takeover,
         )
         return builder.establish()
     }
@@ -402,7 +425,7 @@ class DetourVpnService : VpnService() {
             while (isActive) {
                 val current = engine ?: break
                 if (current.step() < 0) {
-                    fail(Kernel.lastError() ?: "内核返回了错误")
+                    fail(Kernel.lastError() ?: getString(R.string.err_kernel_error))
                     break
                 }
 
@@ -620,22 +643,32 @@ class DetourVpnService : VpnService() {
                 // domain switched on would never arrive, and one switched off
                 // would keep arriving and be refused.
                 if (root != null) {
-                    rootSession?.setNames(RootHelper.domainsOf(document))
+                    rootSession?.setNames(RootHelper.domainsOf(this@DetourVpnService, document))
                 }
                 if (applied) {
                     KernelState.log(
-                        KernelState.LogEntry.Level.INFO, TAG,
-                        "规则已热替换（${document.size / 1024} KiB），在跑的流未受影响",
+                        this@DetourVpnService,
+                        KernelState.LogEntry.Level.INFO,
+                        TAG,
+                        R.string.log_rules_hot_swapped,
+                        document.size / 1024,
                     )
                 } else {
                     KernelState.log(
-                        KernelState.LogEntry.Level.ERROR, TAG,
-                        "规则热替换被内核拒绝：${Kernel.lastError()}",
+                        this@DetourVpnService,
+                        KernelState.LogEntry.Level.ERROR,
+                        TAG,
+                        R.string.log_rules_hot_swap_rejected,
+                        Kernel.lastError(),
                     )
                 }
             } catch (err: Throwable) {
                 KernelState.log(
-                    KernelState.LogEntry.Level.ERROR, TAG, "重载规则失败：${err.message}",
+                    this@DetourVpnService,
+                    KernelState.LogEntry.Level.ERROR,
+                    TAG,
+                    R.string.log_rules_reload_failed,
+                    err.message,
                 )
             }
         }
@@ -685,8 +718,11 @@ class DetourVpnService : VpnService() {
         val stopped = withTimeoutOrNull(LOOP_STOP_TIMEOUT_MS) { running.join() }
         if (stopped == null) {
             KernelState.log(
-                KernelState.LogEntry.Level.WARN, TAG,
-                "步进循环未在 ${LOOP_STOP_TIMEOUT_MS}ms 内退出，放弃等待；内核将泄漏而不是被释放",
+                this@DetourVpnService,
+                KernelState.LogEntry.Level.WARN,
+                TAG,
+                R.string.log_loop_stop_timeout,
+                LOOP_STOP_TIMEOUT_MS,
             )
         }
     }
@@ -734,7 +770,12 @@ class DetourVpnService : VpnService() {
         // comparison against a tunnel that no longer exists.
         Prefs.of(this).recordAppliedKernelSettings("")
         if (wasRunning) {
-            KernelState.log(KernelState.LogEntry.Level.INFO, TAG, "已断开")
+            KernelState.log(
+                this@DetourVpnService,
+                KernelState.LogEntry.Level.INFO,
+                TAG,
+                R.string.log_disconnected,
+            )
         }
         stopForeground(STOP_FOREGROUND_REMOVE)
     }
@@ -770,7 +811,12 @@ class DetourVpnService : VpnService() {
     override fun onRevoke() {
         // The system takes the tunnel away when another VPN is selected. Nothing
         // to do but stop cleanly and say so.
-        KernelState.log(KernelState.LogEntry.Level.WARN, TAG, "系统收回了 VPN")
+        KernelState.log(
+            this@DetourVpnService,
+            KernelState.LogEntry.Level.WARN,
+            TAG,
+            R.string.log_vpn_revoked,
+        )
         teardown()
         stopSelf()
     }
