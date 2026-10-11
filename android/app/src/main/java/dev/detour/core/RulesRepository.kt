@@ -386,7 +386,10 @@ object RulesRepository {
             forceRefresh || stale || !identityMatches -> fetchInto(context, cached, source)
             else -> cached.readBytes()
         }
-        return applySwitches(context, merged)
+        // The optimisation's order goes on last, and here rather than at each
+        // caller: this is the one place a document becomes "the document", and
+        // every mode — and the rules screen — reads it from here. See `Optimise`.
+        return Optimise.reorder(context, applySwitches(context, merged))
     }
 
     /**

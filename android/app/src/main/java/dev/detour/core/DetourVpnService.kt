@@ -55,6 +55,16 @@ class DetourVpnService : VpnService() {
      * it is that [RootHelper.Session.restore] runs before this service stops.
      */
     private var rootSession: RootHelper.Session? = null
+
+    /**
+     * The UDP/53 responder root mode redirects into. See [DnsRedirect].
+     *
+     * Held here rather than inside the session because its lifetime is not the
+     * session's: it is bound before the session's commands run and closed after
+     * they are undone, so that neither end of that window has port 53 pointed at a
+     * socket that is not listening.
+     */
+    private var dnsRedirect: DnsRedirect? = null
     private var tunnel: ParcelFileDescriptor? = null
 
     override fun onCreate() {
@@ -306,7 +316,16 @@ class DetourVpnService : VpnService() {
         }
 
         val names = RootHelper.domainsOf(this@DetourVpnService, document)
-        val error = session.apply(caPem, names, started.port)
+
+        // Bound *before* the redirect that points at it exists. `start()` answers
+        // null when the socket cannot be bound, and then no redirect is installed
+        // at all — DNS keeps working exactly as it did rather than being pointed
+        // at a port nothing listens on.
+        val responder = DnsRedirect(this@DetourVpnService, names.toSet())
+        val dnsPort = responder.start()
+        dnsRedirect = if (dnsPort != null) responder else null
+
+        val error = session.apply(caPem, names, started.port, dnsPort)
         if (error != null) {
             fail(error, ErrorReport.Reason.ROOT_INSTALL)
             return
@@ -788,6 +807,11 @@ class DetourVpnService : VpnService() {
         // connections are redirected to a closed port and reset.
         rootSession?.restore()
         rootSession = null
+        // After the restore, never before: `restore` is what removes the redirect
+        // pointing at this socket, and closing the socket first would leave a
+        // window where every query on the device is sent to a closed port.
+        dnsRedirect?.stop()
+        dnsRedirect = null
         mitm?.close()
         mitm = null
         proxy?.close()
@@ -852,6 +876,11 @@ class DetourVpnService : VpnService() {
         // changed, and the only acceptable end state is "as it was found".
         rootSession?.restore()
         rootSession = null
+        // After the restore, never before: `restore` is what removes the redirect
+        // pointing at this socket, and closing the socket first would leave a
+        // window where every query on the device is sent to a closed port.
+        dnsRedirect?.stop()
+        dnsRedirect = null
         mitm?.close()
         mitm = null
         proxy?.close()

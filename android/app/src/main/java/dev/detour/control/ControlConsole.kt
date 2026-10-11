@@ -6,6 +6,7 @@ import dev.detour.core.DetourVpnService
 import dev.detour.core.Kernel
 import dev.detour.core.KernelState
 import dev.detour.core.LogArchive
+import dev.detour.core.Optimise
 import dev.detour.core.Prefs
 import dev.detour.core.RuleIndex
 import dev.detour.core.RuleSource
@@ -447,6 +448,17 @@ object ControlConsole {
             setSetting(context, key, value)
         }
 
+        "optimise" -> {
+            // Starts a pass and answers at once. The pass takes tens of seconds and
+            // this dispatch is synchronous, so waiting for it would hold the
+            // receiver's thread past any adb timeout. See `Optimise.start`.
+            if (Optimise.start(context)) {
+                JSONObject().put("started", true)
+            } else {
+                JSONObject().put("error", "already running")
+            }
+        }
+
         "dump" -> {
             val snapshot = statusJson()
                 .put("settings", settingsJson(context))
@@ -473,7 +485,7 @@ object ControlConsole {
                     "status", "connect", "disconnect", "mode <vpn|proxy>",
                     "rules <refresh|count|clear|disable|enable|enable-all|disabled|add:<url>|import:<path>|remove:<id>>",
                     "log <clear|archive|clear-archive>",
-                    "set <key> <value>", "dump", "help",
+                    "set <key> <value>", "optimise", "dump", "help",
                 ),
             ),
         )

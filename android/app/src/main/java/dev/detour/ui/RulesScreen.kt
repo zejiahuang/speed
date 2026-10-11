@@ -59,12 +59,14 @@ import dev.detour.core.Prefs
 import dev.detour.core.RuleIndex
 import dev.detour.core.RuleSource
 import dev.detour.core.RulesRepository
+import dev.detour.core.Optimise
 import dev.detour.ui.components.DetourAlertDialog
 import dev.detour.ui.components.DetourCard
 import dev.detour.ui.components.DetourCardStyle
 import dev.detour.ui.components.DetourEmptyState
 import dev.detour.ui.components.DetourFilterChip
 import dev.detour.ui.components.DetourPageHeader
+import dev.detour.ui.components.DetourActionRow
 import dev.detour.ui.components.DetourSwitch
 import dev.detour.ui.components.LocalBottomBarClearance
 import dev.detour.ui.components.plusBarClearance
@@ -666,6 +668,12 @@ fun RulesScreen() {
             ),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            // Above the tree, and it is the one control here that changes what
+            // every mode dials first: the pass reorders the very candidates the
+            // tree below shows, in the document all three modes read.
+            item(key = "optimise") {
+                OptimiseRow()
+            }
             items(visible, key = { it.key }) { node ->
                 // A Box carrying the animation, so the three row types below stay
                 // untouched. Expanding a group then fades the new rows in and
@@ -761,6 +769,50 @@ fun RulesScreen() {
             },
         )
     }
+}
+
+/**
+ * The CDN-optimisation row.
+ *
+ * On this screen because the document it measures is the one this screen draws:
+ * the pass reorders the candidates the tree below shows, so the tree is where a
+ * user would look to see that it did anything. It sits above the tree rather than
+ * inside it because it is a property of the whole document, not of a group.
+ *
+ * The hint is three different sentences, and they are three different states
+ * rather than one sentence with the numbers swapped: a pass in flight, a document
+ * that has never been measured, and a result. "还没测过" has to be tellable from
+ * "measured and nothing was reachable", and a bare count of zero cannot do it.
+ */
+@Composable
+private fun OptimiseRow() {
+    val context = LocalContext.current
+    val progress by Optimise.progress.collectAsState()
+    // Read from disk, so re-read when a pass ends — `progress` returning to null
+    // is that moment, and nothing else on this screen changes when it does.
+    val summary = remember(progress) { Optimise.summary(context) }
+    val measuredAt = remember(progress) { Optimise.measuredAt(context) }
+    val running = progress
+    DetourActionRow(
+        label = stringResource(R.string.rules_optimise),
+        hint = when {
+            running != null ->
+                stringResource(R.string.rules_optimise_running, running.done, running.total)
+            measuredAt == 0L -> stringResource(R.string.rules_optimise_hint)
+            else -> stringResource(
+                R.string.rules_optimise_measured,
+                formatAge(measuredAt),
+                summary.first,
+                summary.second,
+            )
+        },
+        actionLabel = stringResource(
+            if (running != null) R.string.rules_optimise_cancel else R.string.rules_optimise_action,
+        ),
+        onAction = {
+            if (running != null) Optimise.cancel() else Optimise.start(context)
+        },
+    )
 }
 
 @Composable

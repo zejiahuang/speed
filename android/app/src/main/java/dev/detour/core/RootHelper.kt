@@ -117,6 +117,27 @@ object RootHelper {
      */
     private const val STAGE = "/data/local/tmp/detour-root"
 
+    /**
+     * The chain the DNS redirect lives in.
+     *
+     * Its own chain rather than a rule in OUTPUT, and that is not tidiness: the
+     * teardown removes our redirects by *destination* (`purgeRedirect`), and a
+     * port-53 redirect matches no particular destination — there is nothing to key
+     * a delete on. A chain can be flushed and deleted as a unit, so a session that
+     * was killed leaves nothing that a later one has to guess about.
+     */
+    private const val DNS_CHAIN = "DETOUR_DNS"
+
+    /**
+     * The port the DNS redirect captures.
+     *
+     * UDP only. DNS over TCP is rare, and answering it would mean a second
+     * responder speaking a length-prefixed protocol nothing here implements — the
+     * cost of getting that wrong is worse than the handful of queries it would
+     * carry.
+     */
+    private const val DNS_PORT = 53
+
     /** The marker that closes our block in the hosts file, for a human reading it. */
     private const val HOSTS_BEGIN = "# detour-root-begin"
     private const val HOSTS_END = "# detour-root-end"
@@ -302,6 +323,11 @@ object RootHelper {
         //    itself `on`, and every request failed with `connections = 0` — a
         //    tunnel that looks up and carries nothing.
         purgeRedirect(),
+        // 4b. Drop the DNS chain, if one is left. Before the markers are forgotten,
+        //     so a failure keeps them for the retry.
+        "iptables -t nat -D OUTPUT -j $DNS_CHAIN 2>/dev/null",
+        "iptables -t nat -F $DNS_CHAIN 2>/dev/null",
+        "iptables -t nat -X $DNS_CHAIN 2>/dev/null",
         // 5. Forget the markers only once every undo above has been attempted.
         //    `apex.mounted` is deliberately absent here: the umount check above
         //    clears it, and listing it here would discard the marker a still-live
@@ -439,10 +465,18 @@ object RootHelper {
          * @param caPem       the authority's certificate in PEM
          * @param names       the domains to point at [REDIRECT_ADDRESS]
          * @param redirectPort the proxy's loopback port
+         * @param dnsPort      where the DNS responder is listening, or `null` when
+         *                     there is none — in which case no redirect is
+         *                     installed and DNS keeps working exactly as before.
          * @return null on success, or a user-facing reason on failure — with the
          *         device already returned to its previous state.
          */
-        fun apply(caPem: String, names: List<String>, redirectPort: Int): String? {
+        fun apply(
+            caPem: String,
+            names: List<String>,
+            redirectPort: Int,
+            dnsPort: Int? = null,
+        ): String? {
             val hash = subjectHash(caPem) ?: return context.getString(R.string.err_ca_fingerprint)
 
             // Undo any leftover from a run that was killed, *before* the first
@@ -511,6 +545,30 @@ object RootHelper {
                         "--dport $REDIRECT_PORT -j REDIRECT --to-ports $redirectPort",
                 )
                 add("echo -n $redirectPort > $STAGE/redirect.port")
+
+                // The DNS redirect, when a responder is up. Its own chain (see
+                // [DNS_CHAIN]), and the exemption is by **source port**, not by uid:
+                // the kernel on the device this was built against has no `owner`
+                // match, and `iptables` answers "Couldn't find match `owner`" —
+                // which inside this batch fails the whole install (measured: the
+                // first attempt died at step 17 for exactly that). A packet whose
+                // source port is the forwarder's can never come back to it, which
+                // is the property that matters; see `DnsRedirect`.
+                if (dnsPort != null) {
+                    add("iptables -t nat -N $DNS_CHAIN 2>/dev/null || iptables -t nat -F $DNS_CHAIN")
+                    add(
+                        "iptables -t nat -A $DNS_CHAIN -p udp " +
+                            "--sport ${DnsRedirect.FORWARD_PORT} -j RETURN",
+                    )
+                    add(
+                        "iptables -t nat -A $DNS_CHAIN -p udp --dport $DNS_PORT " +
+                            "-j REDIRECT --to-ports $dnsPort",
+                    )
+                    add(
+                        "iptables -t nat -C OUTPUT -j $DNS_CHAIN 2>/dev/null || " +
+                            "iptables -t nat -A OUTPUT -j $DNS_CHAIN",
+                    )
+                }
             }
 
             val result = shell.run(commands, TIMEOUT_MS)

@@ -775,4 +775,23 @@
     <string name="report_logs">Recent log</string>
     <string name="log_hosts_clobbered_repaired">The hosts file was rewritten by something else; the rule block has been put back</string>
     <string name="log_hosts_clobbered_unrepaired">The hosts file was rewritten by something else and putting the block back failed — root mode is hijacking nothing right now</string>
+    <!-- CDN 优选：一次主动测量，把规则表里的候选按「可达且快」重排。 -->
+    <string name="log_optimise_done">Optimisation finished: %1$d candidates measured</string>
+    <string name="log_optimise_failed">Optimisation failed: the rule document could not be read</string>
+    <string name="rules_optimise">CDN optimisation</string>
+    <string name="rules_optimise_hint">Measure the rule table\'s candidate addresses once and put the reachable ones first. All three modes read the same table, so all three benefit</string>
+    <string name="rules_optimise_never">not measured yet</string>
+    <string name="rules_optimise_measured">measured %1$s · %2$d of %3$d candidates reachable</string>
+    <string name="rules_optimise_running">measuring %1$d/%2$d…</string>
+    <string name="rules_optimise_action">Measure again</string>
+    <string name="rules_optimise_cancel">Stop</string>
+    <!-- DNS 重定向的诊断。第一条查询与第一次转发成功各打一行，其余只在失败时打。 -->
+    <string name="log_dns_forward_failed">DNS forwarding failed: %1$s (%2$s)</string>
+    <string name="log_dns_reply_failed">DNS reply could not be sent: %1$s</string>
+    <string name="log_dns_query_seen">DNS responder got its first query: %1$s</string>
+    <string name="log_dns_forwarded">DNS forwarded: %1$s (upstream %2$s)</string>
+    <string name="log_dns_unavailable">DNS responder failed its self-test; no DNS redirect was installed this time (DNS is left as it was)</string>
+    <string name="log_dns_no_socket">DNS responder could not bind %1$s (%2$s); no DNS redirect was installed this time</string>
+    <string name="log_dns_stopped">DNS responder stopped receiving: %1$s</string>
+    <string name="log_dns_handle_failed">DNS responder failed on %1$s: %2$s</string>
 </resources>

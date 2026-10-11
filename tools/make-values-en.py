@@ -549,6 +549,23 @@ EN: dict[str, str] = {
     "report_logs": "Recent log",
     "log_hosts_clobbered_repaired": "The hosts file was rewritten by something else; the rule block has been put back",
     "log_hosts_clobbered_unrepaired": "The hosts file was rewritten by something else and putting the block back failed — root mode is hijacking nothing right now",
+    "log_optimise_done": "Optimisation finished: %1$d candidates measured",
+    "log_optimise_failed": "Optimisation failed: the rule document could not be read",
+    "rules_optimise": "CDN optimisation",
+    "rules_optimise_hint": "Measure the rule table's candidate addresses once and put the reachable ones first. All three modes read the same table, so all three benefit",
+    "rules_optimise_never": "not measured yet",
+    "rules_optimise_measured": "measured %1$s · %2$d of %3$d candidates reachable",
+    "rules_optimise_running": "measuring %1$d/%2$d…",
+    "rules_optimise_action": "Measure again",
+    "rules_optimise_cancel": "Stop",
+    "log_dns_forward_failed": "DNS forwarding failed: %1$s (%2$s)",
+    "log_dns_reply_failed": "DNS reply could not be sent: %1$s",
+    "log_dns_query_seen": "DNS responder got its first query: %1$s",
+    "log_dns_forwarded": "DNS forwarded: %1$s (upstream %2$s)",
+    "log_dns_unavailable": "DNS responder failed its self-test; no DNS redirect was installed this time (DNS is left as it was)",
+    "log_dns_no_socket": "DNS responder could not bind %1$s (%2$s); no DNS redirect was installed this time",
+    "log_dns_stopped": "DNS responder stopped receiving: %1$s",
+    "log_dns_handle_failed": "DNS responder failed on %1$s: %2$s",
 }
 
 

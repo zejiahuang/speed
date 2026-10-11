@@ -775,4 +775,23 @@
     <string name="report_logs">最近日志</string>
     <string name="log_hosts_clobbered_repaired">hosts 文件被外部改写，规则块已重新写入</string>
     <string name="log_hosts_clobbered_unrepaired">hosts 文件被外部改写，且重新写入失败——root 模式当前不拦截任何域名</string>
+    <!-- CDN 优选：一次主动测量，把规则表里的候选按「可达且快」重排。 -->
+    <string name="log_optimise_done">优选完成：测量 %1$d 个候选</string>
+    <string name="log_optimise_failed">优选失败：读不到规则文档</string>
+    <string name="rules_optimise">CDN 优选</string>
+    <string name="rules_optimise_hint">测一遍规则里的候选地址，把可达的排在前面。三种模式共用同一份规则表，所以都生效</string>
+    <string name="rules_optimise_never">还没测过</string>
+    <string name="rules_optimise_measured">上次测量 %1$s · %2$d/%3$d 个候选可达</string>
+    <string name="rules_optimise_running">正在测量 %1$d/%2$d…</string>
+    <string name="rules_optimise_action">重新测量</string>
+    <string name="rules_optimise_cancel">停止</string>
+    <!-- DNS 重定向的诊断。第一条查询与第一次转发成功各打一行，其余只在失败时打。 -->
+    <string name="log_dns_forward_failed">DNS 转发失败：%1$s（%2$s）</string>
+    <string name="log_dns_reply_failed">DNS 应答发不出去：%1$s</string>
+    <string name="log_dns_query_seen">DNS 应答器收到第一条查询：%1$s</string>
+    <string name="log_dns_forwarded">DNS 转发成功：%1$s（上游 %2$s）</string>
+    <string name="log_dns_unavailable">DNS 应答器自检未通过，本次不安装 DNS 重定向（DNS 保持原样）</string>
+    <string name="log_dns_no_socket">DNS 应答器无法绑定 %1$s（%2$s），本次不安装 DNS 重定向</string>
+    <string name="log_dns_stopped">DNS 应答器已停止接收：%1$s</string>
+    <string name="log_dns_handle_failed">DNS 应答器处理 %1$s 出错：%2$s</string>
 </resources>
