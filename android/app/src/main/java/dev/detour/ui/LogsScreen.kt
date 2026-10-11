@@ -229,10 +229,20 @@ fun LogsScreen() {
                 // the header announces the icons by glyph alone. A confirmation
                 // is the cheap half of that problem — a tooltip would explain
                 // the button but not protect the data.
+                //
+                // The `error` tint is the other half, and it is the half that
+                // makes the row scannable: four glyphs at one weight read as four
+                // equals, so the one that discards data looked exactly like the
+                // one that pauses the list. Colour is not carrying the meaning on
+                // its own — the glyph is a bin and the dialog says what happens —
+                // it only stops the destructive action from being the same shape
+                // as its neighbours. It also survives the palette being dynamic:
+                // `error` is a role, not a red.
                 IconButton(onClick = { confirmClear = true }) {
                     Icon(
                         Icons.Filled.Delete,
                         contentDescription = stringResource(R.string.logs_clear),
+                        tint = MaterialTheme.colorScheme.error,
                     )
                 }
                 IconButton(
@@ -284,14 +294,14 @@ fun LogsScreen() {
                             // The format argument is only known here, at failure
                             // time, so `getString` rather than a captured
                             // `stringResource`.
-                              Toast.makeText(
-                                  context,
-                                  context.getString(
-                                      R.string.logs_export_failed,
-                                      it.message ?: context.getString(R.string.common_unknown),
-                                  ),
-                                  Toast.LENGTH_SHORT,
-                              ).show()
+                            Toast.makeText(
+                                context,
+                                context.getString(
+                                    R.string.logs_export_failed,
+                                    it.message ?: context.getString(R.string.common_unknown),
+                                ),
+                                Toast.LENGTH_SHORT,
+                            ).show()
                         }
                     },
                 ) {

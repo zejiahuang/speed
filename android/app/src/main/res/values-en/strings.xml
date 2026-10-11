@@ -510,6 +510,16 @@
     <string name="rules_filter_problems_empty">No entries with an abnormal verdict</string>
     <string name="rules_filter_problems_empty_detail">Only judged addresses count; unjudged and in-flight ones are not abnormal</string>
 
+    <!-- The third empty state: a search that matched nothing. It had no detail
+         line at all, which left the screen as one grey sentence with no way
+         forward — the one state on this page that named no next step. It cannot
+         reuse `rules_empty_detail` either: that one tells the reader to change
+         the data source, and here the data source is fine; the query is what
+         missed. The wording names the two steps that actually exist today —
+         there is no clear button on the search field, so "清空搜索框" is
+         something the reader does by hand, not a control they can tap. -->
+    <string name="rules_empty_search_detail">Try a different keyword, or clear the search box to see every entry</string>
+
     <!-- Data portability: export / import, plus the About entry.
 
          The export is deliberately a *settings* document, not a backup. It

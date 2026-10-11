@@ -638,7 +638,10 @@ fun RulesScreen() {
         // hide.
         if (visible.isEmpty()) {
             if (searched.isEmpty()) {
-                DetourEmptyState(title = stringResource(R.string.rules_empty))
+                DetourEmptyState(
+                    title = stringResource(R.string.rules_empty),
+                    detail = stringResource(R.string.rules_empty_search_detail),
+                )
             } else {
                 DetourEmptyState(
                     title = stringResource(R.string.rules_filter_problems_empty),

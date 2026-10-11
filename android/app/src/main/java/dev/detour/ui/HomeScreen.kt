@@ -54,13 +54,13 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.detour.R
 import dev.detour.core.BuildFlags
+import dev.detour.core.ErrorReport
 import dev.detour.core.KernelState
 import dev.detour.core.Prefs
 import dev.detour.core.Rate
 import dev.detour.core.RootHelper
 import dev.detour.core.RuleSource
 import dev.detour.core.RulesRepository
-import dev.detour.core.ErrorReport
 import dev.detour.ui.components.DetourAlertDialog
 import dev.detour.ui.components.DetourAssistChip
 import dev.detour.ui.components.DetourCard
@@ -70,6 +70,7 @@ import dev.detour.ui.components.DetourKeyValueRow
 import dev.detour.ui.components.DetourSectionCard
 import dev.detour.ui.components.LocalBottomBarClearance
 import dev.detour.ui.icons.DetourIcons
+import dev.detour.ui.theme.LocalDetourSpacing
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -96,19 +97,22 @@ fun HomeScreen() {
     val proxyStats by KernelState.proxyStats.collectAsState()
     val context = LocalContext.current
     val prefs = Prefs.of(context)
+    // The shared spacing scale. Read once here rather than per component, so the
+    // page's rhythm is one list of tiers instead of a scatter of literals.
+    val spacing = LocalDetourSpacing.current
     val developerView = prefs.developerView
 
-        // Root mode is asked for at the moment it is chosen, not guessed at launch.
-        //
-        // It used to be probed once on entry and the picker's row was hidden when
-        // that probe came back empty — which meant a device where `su` needed a
-        // grant the app had never requested showed no way to ask for one. The
-        // request is the point: selecting the mode runs `su -c id`, the system
-        // raises its own prompt if it wants to, and a refusal is answered with a
-        // refusal rather than by silently leaving the mode where it was.
-        var rootAsking by remember { mutableStateOf(false) }
-        var rootRefused by remember { mutableStateOf(false) }
-        val uiScope = rememberCoroutineScope()
+    // Root mode is asked for at the moment it is chosen, not guessed at launch.
+    //
+    // It used to be probed once on entry and the picker's row was hidden when
+    // that probe came back empty — which meant a device where `su` needed a
+    // grant the app had never requested showed no way to ask for one. The
+    // request is the point: selecting the mode runs `su -c id`, the system
+    // raises its own prompt if it wants to, and a refusal is answered with a
+    // refusal rather than by silently leaving the mode where it was.
+    var rootAsking by remember { mutableStateOf(false) }
+    var rootRefused by remember { mutableStateOf(false) }
+    val uiScope = rememberCoroutineScope()
 
     // How much room the floating glass bar takes at the bottom of this screen.
     // Read once, in composition, for the trailing `Spacer` inside the scroll
@@ -156,10 +160,33 @@ fun HomeScreen() {
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 24.dp),
+            .padding(horizontal = spacing.screenH),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Spacer(Modifier.height(32.dp))
+        // 4dp, not the 12 it used to be, and the number is derived rather than
+        // chosen. The Row below is not as tall as the title's line box (28dp):
+        // its height is the mode chip's 48dp minimum touch target — an
+        // `AssistChip` is a 32dp visible pill inside 8dp of transparent padding
+        // top and bottom — and the Row centres its children, so the title ends up
+        // sitting ~10dp below the Row's top edge. To land the *title* where the
+        // other pages' title sits, the top spacing has to be `DetourPageHeader`'s
+        // `top = 12.dp` minus that ~10dp, which is this 4dp. Measured on the
+        // emulator (900x1600 @320dpi), this screen's title started at y=142px
+        // while the rule, log and settings pages all started at y=88px; every 1dp
+        // taken off this spacer moves the title's top edge up 2px, so 12dp put it
+        // at 102px and 4dp puts it at 102 − 8×2 = 86px, which is 2px (1dp) from
+        // the other three. The chip's own visible box then lands at
+        // 4dp + 8dp = 12dp, exactly the other pages' header `top`.
+        //
+        // The home screen is the third page to hand-roll its own header, which is
+        // the drift `DetourPageHeader` was extracted to stop. It cannot use that
+        // component outright — the mode chip is an interactive control, and the
+        // title here is deliberately `titleLarge` rather than `headlineSmall` so
+        // it does not compete with the power control (see the note above) — but
+        // the *position* has no such excuse, and this is the one number that has
+        // to agree with it. Moving the header up also moves the power control up,
+        // which is what the note above wanted in the first place.
+        Spacer(Modifier.height(spacing.xs))
 
         // Header: the app name top-left, the mode top-right. It used to be two
         // centred lines, which spent the two most valuable lines of a short screen
@@ -288,7 +315,7 @@ fun HomeScreen() {
             )
         }
 
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(spacing.xl))
 
         PowerControl(
             status = status,
@@ -307,7 +334,7 @@ fun HomeScreen() {
             },
         )
 
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(spacing.lg))
 
         Text(
             text = statusText(status),
@@ -316,7 +343,7 @@ fun HomeScreen() {
         )
 
         if (failure != null) {
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(spacing.sm))
             Text(
                 text = failure,
                 style = MaterialTheme.typography.bodySmall,
@@ -327,7 +354,7 @@ fun HomeScreen() {
             // a rule document is. The line under it is the sentence for everyone
             // else — and it is chosen by the cause the service recorded, not by
             // matching that message, so translating either one cannot break it.
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(spacing.xs))
             Text(
                 text = stringResource(
                     status.failure?.let { ErrorReport.suggestionRes(it) } ?: R.string.home_error_hint,
@@ -341,14 +368,14 @@ fun HomeScreen() {
             // picker's root row used to be.
             val report = status.reportPath
             if (report != null) {
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(spacing.xs))
                 TextButton(onClick = { shareErrorReport(context, report) }) {
                     Text(stringResource(R.string.error_report_share))
                 }
             }
         }
 
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(spacing.xl))
 
         // Hidden rather than shown as "0 B/s". The row exists to answer "is it
         // moving", and a pair of zeros answers that question wrongly — it reads as
@@ -382,11 +409,11 @@ fun HomeScreen() {
             status.mode == KernelState.Mode.PROXY &&
             status.proxyPort > 0
         ) {
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(spacing.md))
             ProxyAddressCard(status.proxyPort)
         }
 
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(spacing.md))
 
         // The "rules hit" number has to come from whichever subsystem is actually
         // running. Only VPN mode has the tunnel that `stats.dnsAnsweredLocally`
@@ -415,7 +442,7 @@ fun HomeScreen() {
         // `forMode`, not `selectedSource`: in root mode the two differ, and this
         // card answers "which document is running", so showing the user's stored
         // choice there would name a document that is not loaded.
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(spacing.md))
         val source = RuleSource.forMode(status.mode, prefs.selectedSource)
         val sourceLabel = source.labelRes
             ?.let { stringResource(it) }
@@ -476,7 +503,7 @@ fun HomeScreen() {
         // Each of those modes answers "did the rules do anything" with the single
         // number in the session card instead.
         if (status.isRunning && status.mode == KernelState.Mode.VPN) {
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(spacing.md))
             val matched = stats.flowsMatchedRules
             val direct = stats.flowsDirect
             DetourSectionCard(title = stringResource(R.string.home_hits_title)) {
@@ -545,7 +572,7 @@ fun HomeScreen() {
             }
         }
 
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(spacing.xl))
 
         // The bar floats over the content now rather than being a `Scaffold`
         // `bottomBar`, so nothing else reserves its height and this column would

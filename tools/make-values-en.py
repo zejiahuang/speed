@@ -368,6 +368,7 @@ EN: dict[str, str] = {
     "rules_empty_detail": "Switch to another source, or add a custom one in settings",
     "rules_filter_problems_empty": "No entries with an abnormal verdict",
     "rules_filter_problems_empty_detail": "Only judged addresses count; unjudged and in-flight ones are not abnormal",
+    "rules_empty_search_detail": "Try a different keyword, or clear the search box to see every entry",
 
     # Data portability
     "settings_section_data": "Data and about",

@@ -28,13 +28,32 @@ import dev.detour.core.Prefs
  * this library replaces came about.
  */
 
-/** Spacing scale. Every margin in the library comes from one of these. */
+/**
+ * Spacing scale. Every margin on a screen comes from one of these.
+ *
+ * The tiers are not evenly spaced because they answer different questions:
+ * `xs`–`sm` separate things *inside* one component (a label from its value),
+ * `md` separates siblings (card from card), `lg` binds a control to the text
+ * that describes it, `xl` separates sections, and `xxl` is the page's own top
+ * inset. A screen that picks its gaps off this list gets a rhythm for free; one
+ * that writes `20.dp` gets a gap that is closer to its sibling's 24 than to its
+ * own control's 12, which is how "the status text looks like it belongs to the
+ * card below" happens.
+ *
+ * **`xxl` was added when the home screen was moved onto this scale.** Before
+ * that the scale stopped at `xl` and the page top was a bare `32.dp`; the first
+ * version of this comment claimed "every margin in the library comes from one of
+ * these" while *nothing* read the type at all — the whole thing was provided by
+ * the theme and consumed by no one. The screens now read it, so the claim is
+ * about code that exists.
+ */
 data class DetourSpacing(
     val xs: Dp = 4.dp,
     val sm: Dp = 8.dp,
     val md: Dp = 12.dp,
     val lg: Dp = 16.dp,
     val xl: Dp = 24.dp,
+    val xxl: Dp = 32.dp,
     val screenH: Dp = 20.dp,
 )
 
