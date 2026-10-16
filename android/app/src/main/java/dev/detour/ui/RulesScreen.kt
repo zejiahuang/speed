@@ -23,12 +23,10 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -66,10 +64,12 @@ import dev.detour.ui.components.DetourCardStyle
 import dev.detour.ui.components.DetourEmptyState
 import dev.detour.ui.components.DetourFilterChip
 import dev.detour.ui.components.DetourPageHeader
+import dev.detour.ui.components.DetourSearchField
 import dev.detour.ui.components.DetourActionRow
 import dev.detour.ui.components.DetourSwitch
 import dev.detour.ui.components.LocalBottomBarClearance
 import dev.detour.ui.components.plusBarClearance
+import dev.detour.ui.theme.LocalDetourSpacing
 import java.text.DateFormat
 import java.util.Date
 import kotlin.math.roundToInt
@@ -191,6 +191,9 @@ fun RulesScreen() {
     val context = LocalContext.current
     val prefs = Prefs.of(context)
     val scope = rememberCoroutineScope()
+    // The page's gutter, read once: the header, the search field, the source row,
+    // the verdict filter and the list all start on this one 20dp line.
+    val spacing = LocalDetourSpacing.current
 
     var index by remember { mutableStateOf<RuleIndex?>(null) }
     var loading by remember { mutableStateOf(true) }
@@ -460,23 +463,21 @@ fun RulesScreen() {
             },
         )
 
-        OutlinedTextField(
+        DetourSearchField(
             value = query,
             onValueChange = { query = it },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp),
-            singleLine = true,
-            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
-            placeholder = { Text(stringResource(R.string.rules_search_hint)) },
+            placeholder = stringResource(R.string.rules_search_hint),
+            // The field carries no horizontal padding of its own; the page's
+            // gutter comes from here, the same 20dp the header and the list use.
+            modifier = Modifier.padding(horizontal = spacing.screenH),
         )
 
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(spacing.sm))
 
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 20.dp, end = 8.dp),
+                .padding(start = spacing.screenH, end = spacing.sm),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // One chip per source, generated from the stored list. The old row was
@@ -513,7 +514,7 @@ fun RulesScreen() {
                     modifier = Modifier
                         .weight(1f)
                         .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(spacing.sm),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     prefs.ruleSources.forEach { source ->
@@ -545,7 +546,7 @@ fun RulesScreen() {
             }
         }
 
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(spacing.sm))
 
         // The verdict filter, on its own line below the sources: it is a lens on
         // the *document*, while the row above chooses which document. Mixing the
@@ -553,8 +554,8 @@ fun RulesScreen() {
         // source. Left-aligned and inset to the same 20.dp gutter as everything
         // else, so it lines up with the search field and the list.
         Row(
-            modifier = Modifier.padding(horizontal = 20.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(horizontal = spacing.screenH),
+            horizontalArrangement = Arrangement.spacedBy(spacing.sm),
         ) {
             DetourFilterChip(
                 selected = !problemsOnly,
@@ -576,7 +577,7 @@ fun RulesScreen() {
         }
 
         if (loading) {
-            LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 20.dp))
+            LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = spacing.screenH))
         }
 
         if (current == null && !loading) {
@@ -664,12 +665,15 @@ fun RulesScreen() {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                start = 20.dp,
-                end = 20.dp,
-                top = 8.dp,
-                bottom = 24.dp.plusBarClearance(barClearance),
+                start = spacing.screenH,
+                end = spacing.screenH,
+                top = spacing.sm,
+                bottom = spacing.xl.plusBarClearance(barClearance),
             ),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            // Item rhythm is `md` (12dp), deliberately wider than the density
+            // flow's `xs` (4dp): a rule card is a container, not a log line, and
+            // 8dp read as cards touching.
+            verticalArrangement = Arrangement.spacedBy(spacing.md),
         ) {
             // Above the tree, and it is the one control here that changes what
             // every mode dials first: the pass reorders the very candidates the
@@ -827,12 +831,18 @@ private fun GroupCard(
     onToggle: (String, Boolean) -> Unit,
     ipStats: Kernel.IpStats?,
 ) {
+    val spacing = LocalDetourSpacing.current
     val key = "g:${group.name}"
     DetourCard(style = DetourCardStyle.Glass) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
+                .padding(
+                    start = spacing.lg,
+                    end = spacing.sm,
+                    top = spacing.md,
+                    bottom = spacing.md,
+                ),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(
@@ -904,6 +914,7 @@ private fun DomainRow(
     onToggle: (String, Boolean) -> Unit,
     ipStats: Kernel.IpStats?,
 ) {
+    val spacing = LocalDetourSpacing.current
     val key = "d:${node.domain}"
     Row(
         modifier = Modifier
@@ -929,7 +940,7 @@ private fun DomainRow(
                 contentDescription = stringResource(
                     if (expanded) R.string.rules_collapse else R.string.rules_expand,
                 ),
-                modifier = Modifier.padding(end = 4.dp),
+                modifier = Modifier.padding(end = spacing.xs),
             )
             Column(Modifier.weight(1f)) {
                 Text(

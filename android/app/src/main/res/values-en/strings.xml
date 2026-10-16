@@ -32,6 +32,7 @@
     <string name="home_speed_up">Up</string>
     <string name="home_total">This session</string>
     <string name="home_domains_saved">Rules hit %1$d times this session</string>
+    <string name="home_dns_answered">Resolved %1$d domains this session</string>
     <string name="home_no_permission">VPN mode needs system authorisation</string>
     <string name="home_grant">Grant</string>
     <string name="home_switch_mode">Switch mode</string>
@@ -470,6 +471,12 @@
          `settings_unknown`, which no screen ever read; the export and import
          paths both need it, so it is a shared string now. -->
     <string name="common_unknown">Unknown error</string>
+
+    <!-- The search field's clear button (`DetourSearchField`). It is shared
+         because the field is: the rule, log and settings pages all render the
+         same control, and its clear button needs one accessible name rather
+         than three. -->
+    <string name="search_clear">Clear search</string>
 
     <!-- The numeric-entry dialog that every slider opens (`DetourSliderRow`).
          Every slider in the app has it, not only the glass ones: a drag alone

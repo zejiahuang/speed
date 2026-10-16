@@ -21,6 +21,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.detour.ui.theme.LocalDetourSpacing
 
 /**
  * The one "there is nothing here" state.
@@ -53,10 +54,11 @@ fun DetourEmptyState(
     modifier: Modifier = Modifier,
     icon: ImageVector? = null,
 ) {
+    val spacing = LocalDetourSpacing.current
     Column(
         modifier = modifier
             .fillMaxSize()
-            .padding(32.dp),
+            .padding(spacing.xxl),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
@@ -76,7 +78,7 @@ fun DetourEmptyState(
                     tint = MaterialTheme.colorScheme.onPrimaryContainer,
                 )
             }
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(spacing.lg))
         }
         Text(
             title,
@@ -86,7 +88,7 @@ fun DetourEmptyState(
             textAlign = TextAlign.Center,
         )
         if (detail != null) {
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(spacing.xs))
             Text(
                 detail,
                 style = MaterialTheme.typography.bodySmall,

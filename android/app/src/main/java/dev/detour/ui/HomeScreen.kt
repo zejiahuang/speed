@@ -70,6 +70,7 @@ import dev.detour.ui.components.DetourKeyValueRow
 import dev.detour.ui.components.DetourSectionCard
 import dev.detour.ui.components.LocalBottomBarClearance
 import dev.detour.ui.icons.DetourIcons
+import dev.detour.ui.theme.LocalDetourMotion
 import dev.detour.ui.theme.LocalDetourSpacing
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -232,7 +233,7 @@ fun HomeScreen() {
                         text = stringResource(R.string.home_mode_vpn),
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
+                        modifier = Modifier.padding(horizontal = spacing.md, vertical = 5.dp),
                     )
                 }
             } else {
@@ -354,23 +355,31 @@ fun HomeScreen() {
             // a rule document is. The line under it is the sentence for everyone
             // else — and it is chosen by the cause the service recorded, not by
             // matching that message, so translating either one cannot break it.
+            //
+            // The sentence and the report button now share one line: the sentence
+            // is the explanation, the button is the action, and stacking them spent
+            // a row a failing screen has no room for. The sentence takes the
+            // leftover width (`weight(1f)`) so a long suggestion wraps inside its
+            // own column instead of pushing the button off the edge; the button
+            // keeps its natural width on the right.
             Spacer(Modifier.height(spacing.xs))
-            Text(
-                text = stringResource(
-                    status.failure?.let { ErrorReport.suggestionRes(it) } ?: R.string.home_error_hint,
-                ),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-            )
-            // Only when a report was actually written. A button that opened
-            // nothing would be the same "control that does nothing" the mode
-            // picker's root row used to be.
-            val report = status.reportPath
-            if (report != null) {
-                Spacer(Modifier.height(spacing.xs))
-                TextButton(onClick = { shareErrorReport(context, report) }) {
-                    Text(stringResource(R.string.error_report_share))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = stringResource(
+                        status.failure?.let { ErrorReport.suggestionRes(it) } ?: R.string.home_error_hint,
+                    ),
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                // Only when a report was actually written. A button that opened
+                // nothing would be the same "control that does nothing" the mode
+                // picker's root row used to be.
+                val report = status.reportPath
+                if (report != null) {
+                    TextButton(onClick = { shareErrorReport(context, report) }) {
+                        Text(stringResource(R.string.error_report_share))
+                    }
                 }
             }
         }
@@ -383,7 +392,7 @@ fun HomeScreen() {
         if (prefs.homeShowRate) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(spacing.md),
             ) {
                 RateCard(
                     modifier = Modifier.weight(1f),
@@ -431,7 +440,7 @@ fun HomeScreen() {
             KernelState.Mode.PROXY -> proxyStats?.matched ?: 0L
             KernelState.Mode.VPN -> stats.dnsAnsweredLocally
         }
-        SessionCard(stats, ruleHits, developerView)
+        SessionCard(stats, ruleHits, status.mode, developerView)
 
         // Which rules are in force and how old they are. The home screen used to
         // say nothing about the rule set at all, so "am I running last week's
@@ -519,7 +528,7 @@ fun HomeScreen() {
                             "${matched * 100 / (matched + direct)}%",
                         )
                     },
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    modifier = Modifier.padding(horizontal = spacing.lg, vertical = spacing.md),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -688,6 +697,7 @@ private fun statusText(status: KernelState.Status): String = stringResource(
  */
 @Composable
 private fun PowerControl(status: KernelState.Status, onToggle: () -> Unit) {
+    val motion = LocalDetourMotion.current
     val running = status.isRunning
     val busy = status.phase == KernelState.Phase.STARTING
 
@@ -696,13 +706,21 @@ private fun PowerControl(status: KernelState.Status, onToggle: () -> Unit) {
         status.phase == KernelState.Phase.ERROR -> MaterialTheme.colorScheme.errorContainer
         else -> MaterialTheme.colorScheme.surfaceVariant
     }
-    val container by animateColorAsState(target, label = "power-container")
+    val container by animateColorAsState(
+        target,
+        animationSpec = motion.effectsColor,
+        label = "power-container",
+    )
     val content = when {
         running -> MaterialTheme.colorScheme.onPrimary
         status.phase == KernelState.Phase.ERROR -> MaterialTheme.colorScheme.onErrorContainer
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
-    val scale by animateFloatAsState(if (busy) 0.94f else 1f, label = "power-scale")
+    val scale by animateFloatAsState(
+        if (busy) 0.94f else 1f,
+        animationSpec = motion.fastSpatial,
+        label = "power-scale",
+    )
     // A soft halo that fades on while the tunnel is up. Drawn *behind* the circle
     // (first child of the Box below) so the control reads as "lit" at a glance
     // without touching the circle's own colours. Transparent rather than absent
@@ -713,6 +731,7 @@ private fun PowerControl(status: KernelState.Status, onToggle: () -> Unit) {
         } else {
             Color.Transparent
         },
+        animationSpec = motion.effectsColor,
         label = "power-halo",
     )
 
@@ -738,7 +757,11 @@ private fun PowerControl(status: KernelState.Status, onToggle: () -> Unit) {
                 // The ternary is what makes the control honest — it used to draw
                 // `PlayArrow` in *both* states, so the one button that exists to
                 // say which way it will go said nothing.
-                Crossfade(targetState = running, label = "power-icon") { isRunning ->
+                Crossfade(
+                    targetState = running,
+                    animationSpec = motion.effects,
+                    label = "power-icon",
+                ) { isRunning ->
                     Icon(
                         imageVector = if (isRunning) DetourIcons.Stop else Icons.Filled.PlayArrow,
                         // Still keyed on `running`, not the crossfade frame: the
@@ -764,6 +787,7 @@ private fun PowerControl(status: KernelState.Status, onToggle: () -> Unit) {
 @Composable
 private fun ProxyAddressCard(port: Int) {
     val context = LocalContext.current
+    val spacing = LocalDetourSpacing.current
     val clipboard = context.getSystemService(ClipboardManager::class.java)
     var copied by remember { mutableStateOf(false) }
     val address = "127.0.0.1:" + port
@@ -785,7 +809,12 @@ private fun ProxyAddressCard(port: Int) {
         style = DetourCardStyle.Glass,
     ) {
         Row(
-            modifier = Modifier.padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+            modifier = Modifier.padding(
+                start = spacing.lg,
+                end = spacing.sm,
+                top = spacing.sm,
+                bottom = spacing.sm,
+            ),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
@@ -840,6 +869,7 @@ private fun ModePicker(
     onDismiss: () -> Unit,
     onPick: (KernelState.Mode) -> Unit,
 ) {
+    val spacing = LocalDetourSpacing.current
     DetourAlertDialog(
         onDismissRequest = onDismiss,
         title = stringResource(R.string.home_mode_pick),
@@ -851,14 +881,14 @@ private fun ModePicker(
                     selected = current == KernelState.Mode.PROXY,
                     onClick = { onPick(KernelState.Mode.PROXY) },
                 )
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(spacing.sm))
                 ModeRow(
                     title = stringResource(R.string.home_mode_vpn),
                     detail = stringResource(R.string.home_mode_vpn_desc),
                     selected = current == KernelState.Mode.VPN,
                     onClick = { onPick(KernelState.Mode.VPN) },
                 )
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(spacing.sm))
                 // Always drawn, and that is the change: the row used to appear only
                 // when a probe taken at launch had already found a usable `su`,
                 // which hid the request from the devices that had not been asked
@@ -948,6 +978,7 @@ private fun ModeRow(
     onClick: () -> Unit,
     enabled: Boolean = true,
 ) {
+    val spacing = LocalDetourSpacing.current
     // Filled on purpose — do not "finish the job" by moving this to Glass. This
     // row only ever renders inside `ModePicker`, which is a `Dialog`, and a
     // Compose `Dialog` is a separate window: it has no access to the page's
@@ -971,7 +1002,7 @@ private fun ModeRow(
             },
         ),
     ) {
-        Column(Modifier.padding(12.dp)) {
+        Column(Modifier.padding(spacing.md)) {
             Text(title, style = MaterialTheme.typography.titleSmall)
             Text(
                 detail,
@@ -989,11 +1020,12 @@ private fun RateCard(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     bytesPerSecond: Long,
 ) {
+    val spacing = LocalDetourSpacing.current
     DetourCard(
         modifier = modifier,
         style = DetourCardStyle.Glass,
     ) {
-        Column(Modifier.padding(16.dp)) {
+        Column(Modifier.padding(spacing.lg)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
                     icon,
@@ -1021,48 +1053,54 @@ private fun RateCard(
 private fun SessionCard(
     stats: dev.detour.core.Kernel.Stats,
     ruleHits: Long,
+    mode: KernelState.Mode,
     developerView: Boolean,
 ) {
-    DetourCard(
-        modifier = Modifier.fillMaxWidth(),
-        style = DetourCardStyle.Glass,
-    ) {
-        Column(Modifier.padding(16.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Text(
-                    stringResource(R.string.home_total),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    formatBytes(stats.bytesTotal),
-                    style = MaterialTheme.typography.titleMedium,
-                )
-            }
+    val spacing = LocalDetourSpacing.current
+    // A section card now, so the title comes from the shared role rather than the
+    // inline `labelMedium` line this card used to draw: 本次会话 sits above the
+    // card the same way 规则状态 and 命中规则统计 do.
+    DetourSectionCard(title = stringResource(R.string.home_total)) {
+        // The total is the card's first line. It used to share a row with the
+        // 本次会话 label; the label is the card title now, so the number stands
+        // alone at the weight it always had.
+        Text(
+            text = formatBytes(stats.bytesTotal),
+            modifier = Modifier.padding(horizontal = spacing.lg, vertical = spacing.md),
+            style = MaterialTheme.typography.titleMedium,
+        )
+        DetourDivider()
+        // The hit line. Both numbers stay: under VPN it reads 本次解析域名 N 个
+        // (`dnsAnsweredLocally`), which is what tells it apart from the
+        // 命中规则统计 card's 命中规则 row; under ROOT and PROXY it keeps
+        // 本次命中规则 N 次.
+        Text(
+            text = stringResource(
+                if (mode == KernelState.Mode.VPN) {
+                    R.string.home_dns_answered
+                } else {
+                    R.string.home_domains_saved
+                },
+                ruleHits,
+            ),
+            modifier = Modifier.padding(horizontal = spacing.lg, vertical = spacing.md),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
 
-            Spacer(Modifier.height(8.dp))
-            Text(
-                text = stringResource(R.string.home_domains_saved, ruleHits),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
-            // Everything below is kernel detail. It is genuinely useful when
-            // something is wrong and noise when it is not, which is why it is
-            // behind a setting rather than always on.
-            if (developerView) {
-                Spacer(Modifier.height(12.dp))
-                DeveloperRows(stats)
-            }
+        // Everything below is kernel detail. It is genuinely useful when
+        // something is wrong and noise when it is not, which is why it is
+        // behind a setting rather than always on.
+        if (developerView) {
+            Spacer(Modifier.height(spacing.md))
+            DeveloperRows(stats)
         }
     }
 }
 
 @Composable
 private fun DeveloperRows(stats: dev.detour.core.Kernel.Stats) {
+    val spacing = LocalDetourSpacing.current
     // Every label comes from `strings.xml` — the same reason as everywhere else:
     // a hard-coded Chinese literal is a string that can never be translated.
     val rows = listOf(
@@ -1081,7 +1119,7 @@ private fun DeveloperRows(stats: dev.detour.core.Kernel.Stats) {
         stringResource(R.string.dev_live_flows) to stats.liveFlows.toString(),
         stringResource(R.string.dev_packets) to "${stats.packetsIn} / ${stats.packetsOut}",
     )
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(spacing.xs)) {
         for ((label, value) in rows) {
             Row(
                 modifier = Modifier.fillMaxWidth(),

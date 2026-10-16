@@ -14,21 +14,19 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -44,7 +42,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import dev.detour.R
 import dev.detour.core.KernelState
@@ -57,9 +54,12 @@ import dev.detour.ui.components.DetourCardStyle
 import dev.detour.ui.components.DetourEmptyState
 import dev.detour.ui.components.DetourFilterChip
 import dev.detour.ui.components.DetourPageHeader
+import dev.detour.ui.components.DetourSearchField
 import dev.detour.ui.components.LocalBottomBarClearance
 import dev.detour.ui.components.plusBarClearance
 import dev.detour.ui.icons.DetourIcons
+import dev.detour.ui.theme.LocalDetourMotion
+import dev.detour.ui.theme.LocalDetourSpacing
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -110,6 +110,8 @@ fun LogsScreen() {
     // reused by both consumers below — the list's bottom padding and the
     // bottom-anchored button — so the two cannot drift to different heights.
     val barClearance = LocalBottomBarClearance.current
+    val spacing = LocalDetourSpacing.current
+    val motion = LocalDetourMotion.current
 
     // Resolved here because `stringResource` is composable and the click
     // handlers that show them are not. Capturing the resolved values keeps the
@@ -206,7 +208,11 @@ fun LogsScreen() {
                     // Crossfade the glyph: the two states are unrelated shapes
                     // (play vs. pause bars), and an instant swap reads as a redraw
                     // rather than a toggle.
-                    Crossfade(targetState = paused, label = "logs-pause-icon") { isPaused ->
+                    Crossfade(
+                        targetState = paused,
+                        animationSpec = motion.effects,
+                        label = "logs-pause-icon",
+                    ) { isPaused ->
                         Icon(
                             if (isPaused) Icons.Filled.PlayArrow else DetourIcons.Pause,
                             contentDescription = stringResource(
@@ -314,23 +320,21 @@ fun LogsScreen() {
         )
 
         // Under the header and above the chips: the search narrows what the chips
-        // already narrowed, so it reads as the second, finer control.
-        OutlinedTextField(
+        // already narrowed, so it reads as the second, finer control. The shared
+        // field carries no horizontal inset of its own, so the page gutter is
+        // supplied here — see [DetourSearchField].
+        DetourSearchField(
             value = query,
             onValueChange = { query = it },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp),
-            singleLine = true,
-            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
-            placeholder = { Text(stringResource(R.string.logs_search_hint)) },
+            placeholder = stringResource(R.string.logs_search_hint),
+            modifier = Modifier.padding(horizontal = spacing.screenH),
         )
 
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(spacing.sm))
 
         Row(
-            modifier = Modifier.padding(horizontal = 20.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(horizontal = spacing.screenH),
+            horizontalArrangement = Arrangement.spacedBy(spacing.sm),
         ) {
             Filter.entries.forEach { option ->
                 DetourFilterChip(
@@ -341,7 +345,7 @@ fun LogsScreen() {
             }
         }
 
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(spacing.sm))
 
         if (visible.isEmpty()) {
             // Three different reasons the list can be empty, and each needs its
@@ -383,15 +387,19 @@ fun LogsScreen() {
                 state = listState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(
-                    start = 20.dp,
-                    end = 20.dp,
-                    top = 4.dp,
+                    start = spacing.screenH,
+                    end = spacing.screenH,
+                    top = spacing.xs,
                     // The clearance is added, never substituted, so the list
                     // keeps the breathing room it already had and the bar's
                     // height lands on top of it rather than eating into it.
-                    bottom = 24.dp.plusBarClearance(barClearance),
+                    bottom = spacing.xl.plusBarClearance(barClearance),
                 ),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+                // The log list is a density flow, not a card list: 4 dp between
+                // lines, deliberately tighter than the 12 dp the card pages use.
+                // It maps to `xs`; widening it to `md` would make the page taller,
+                // which is the opposite of what this screen is for.
+                verticalArrangement = Arrangement.spacedBy(spacing.xs),
             ) {
                 // Keyed by position in the visible snapshot rather than by a
                 // timestamp-plus-hash. The service emits a sample twice a second and
@@ -428,11 +436,11 @@ fun LogsScreen() {
                     onClick = { scope.launch { listState.animateScrollToItem(0) } },
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
-                        // Lifted by the bar's clearance on top of its own 24.dp
+                        // Lifted by the bar's clearance on top of its own `xl`
                         // margin. The bar is anchored to the same bottom-centre,
                         // so at the original offset the two sat on exactly the
                         // same spot and the button was unreachable behind it.
-                        .padding(bottom = 24.dp.plusBarClearance(barClearance)),
+                        .padding(bottom = spacing.xl.plusBarClearance(barClearance)),
                     variant = DetourButtonVariant.Tonal,
                 ) {
                     Text(stringResource(R.string.logs_back_to_latest))
@@ -535,6 +543,7 @@ private fun LogRow(
     isToday: Boolean,
     onLongPress: () -> Unit,
 ) {
+    val spacing = LocalDetourSpacing.current
     val tint: Color = when (entry.level) {
         KernelState.LogEntry.Level.ERROR -> MaterialTheme.colorScheme.error
         KernelState.LogEntry.Level.WARN -> MaterialTheme.colorScheme.tertiary
@@ -563,27 +572,44 @@ private fun LogRow(
         ),
         style = DetourCardStyle.Glass,
     ) {
-        Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+        // One line to start, rather than the two the old stamp-over-message-over-
+        // tag stack always needed. The time, the tag and the message share the
+        // row, and only the message flexes (`weight(1f)`): the time and the tag
+        // are the two fields with a fixed shape, so they size to their content
+        // and the message takes whatever is left. A short line — most of them —
+        // is then a single row of height instead of two.
+        //
+        // The message wraps *inside its own column* (`maxLines = 2`), so a long
+        // line grows downward and never pushes the tag off the row, and the tag
+        // is never truncated — a half tag is worse than none. The level is still
+        // carried by the message's colour alone (the `tint` above), exactly as
+        // the stacked layout carried it; nothing about the severity moved. The
+        // two separators use `md` (12 dp), which is the gap the old row's single
+        // zero-size `Spacer` with 6 dp horizontal padding actually produced.
+        Row(
+            modifier = Modifier.padding(horizontal = spacing.md, vertical = spacing.sm),
+            verticalAlignment = Alignment.Top,
+        ) {
             Text(
                 stamp(entry, isToday),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Spacer(Modifier.padding(horizontal = 6.dp))
-            Column(Modifier.weight(1f)) {
-                Text(
-                    entry.message,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = tint,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    entry.tag,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            Spacer(Modifier.width(spacing.md))
+            Text(
+                entry.tag,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.width(spacing.md))
+            Text(
+                entry.message,
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodySmall,
+                color = tint,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }

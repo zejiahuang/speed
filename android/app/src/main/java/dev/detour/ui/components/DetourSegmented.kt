@@ -15,8 +15,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
-import androidx.compose.ui.unit.dp
 import dev.detour.ui.theme.DetourTheme
+import dev.detour.ui.theme.LocalDetourSpacing
 
 /**
  * A row of segmented buttons, one selected.
@@ -45,7 +45,8 @@ fun DetourSegmentedRow(
     modifier: Modifier = Modifier,
     hint: String? = null,
 ) {
-    Column(modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+    val spacing = LocalDetourSpacing.current
+    Column(modifier.padding(horizontal = spacing.lg, vertical = spacing.md)) {
         Text(label, style = MaterialTheme.typography.bodyLarge)
         if (hint != null) {
             Text(
@@ -54,7 +55,7 @@ fun DetourSegmentedRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(spacing.sm))
         SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
             options.forEachIndexed { index, (value, labelRes) ->
                 SegmentedButton(

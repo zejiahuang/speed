@@ -12,6 +12,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import dev.detour.ui.theme.LocalDetourSpacing
 
 /**
  * The bar every full page opens with: a title, an optional second line, and the
@@ -23,13 +24,13 @@ import androidx.compose.ui.unit.dp
  * have moved one page and not the other. Everything now goes through this
  * function, so "what a page title looks like" is one edit.
  *
- * **The padding is load-bearing and must not be "tidied".** `start = 20.dp` is
- * the same gutter the search field, the source chips and the list below use, and
- * `top = 12.dp` is the value the rule page (`RulesScreen`) and the log page
- * (`LogsScreen`) both shipped with. This is a refactor of an existing header, not
- * a redesign: changing either number slides the title relative to the content
- * under it on two screens at once, which is precisely the drift the component
- * was extracted to stop.
+ * **The padding is load-bearing and must not be "tidied".** `start` reads
+ * `DetourSpacing.screenH`(20dp) — the same gutter the search field, the source
+ * chips and the list below use — and `top = 12.dp` is the value the rule page
+ * (`RulesScreen`) and the log page (`LogsScreen`) both shipped with. This is a
+ * refactor of an existing header, not a redesign: changing either number slides
+ * the title relative to the content under it on two screens at once, which is
+ * precisely the drift the component was extracted to stop.
  *
  * `actions` is a [RowScope] lambda rather than a list of `IconButton`s because
  * the caller owns what the buttons *do* — the header only owns where they sit.
@@ -48,10 +49,11 @@ fun DetourPageHeader(
     modifier: Modifier = Modifier,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
+    val spacing = LocalDetourSpacing.current
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(start = 20.dp, end = 8.dp, top = 12.dp),
+            .padding(start = spacing.screenH, end = spacing.sm, top = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // weight(1f), so a long title pushes the actions to the edge instead of
@@ -72,6 +74,6 @@ fun DetourPageHeader(
                 )
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { actions() }
+        Row(horizontalArrangement = Arrangement.spacedBy(spacing.xs)) { actions() }
     }
 }

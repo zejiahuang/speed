@@ -40,6 +40,21 @@ import dev.detour.core.Prefs
  * own control's 12, which is how "the status text looks like it belongs to the
  * card below" happens.
  *
+ * **`lg`(16) carries two uses, and they are the same tier on purpose.** It is
+ * the gap between a control and the text that describes it (the home screen's
+ * power control and the status line under it), *and* the inset inside a card (a
+ * row's 16dp horizontal padding, a divider's). They read as two jobs, but they
+ * are one number deliberately: a separate "card inset" tier would be a second
+ * name for 16, which is exactly the drift this type exists to prevent. One tier,
+ * two documented uses, one value.
+ *
+ * **`screenH`(20) is not `lg`.** It is the page's left and right gutter — the
+ * single vertical line the title, the search field, the source row and the list
+ * all start on. A card's inner inset is `lg`(16) *inside* that gutter; the two
+ * differ by 4dp and each is right for its own job. `screenH` is a tier of its
+ * own rather than "`lg` plus four" because it is a page-level decision, not a
+ * component-level one.
+ *
  * **`xxl` was added when the home screen was moved onto this scale.** Before
  * that the scale stopped at `xl` and the page top was a bare `32.dp`; the first
  * version of this comment claimed "every margin in the library comes from one of
@@ -82,6 +97,20 @@ data class DetourMotion(
         stiffness = Spring.StiffnessMedium,
     ),
     val effects: FiniteAnimationSpec<Float> = tween(
+        durationMillis = 200,
+        easing = LinearOutSlowInEasing,
+    ),
+    /**
+     * The same ease-out as [effects], typed for colour.
+     *
+     * `animateColorAsState` wants an `AnimationSpec<Color>`, and the specs above
+     * are `FiniteAnimationSpec<Float>` — the two do not unify, so a colour
+     * transition cannot borrow [effects] directly. This is that spec with the
+     * other element type: identical numbers on purpose, because a colour fading
+     * and an alpha fading should read as one motion, not two that happen to be
+     * close.
+     */
+    val effectsColor: FiniteAnimationSpec<Color> = tween(
         durationMillis = 200,
         easing = LinearOutSlowInEasing,
     ),

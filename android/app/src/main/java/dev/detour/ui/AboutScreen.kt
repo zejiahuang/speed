@@ -49,6 +49,7 @@ import dev.detour.ui.components.DetourSectionCard
 import dev.detour.ui.components.DetourSegmentedRow
 import dev.detour.ui.components.DetourToggleRow
 import dev.detour.ui.components.MarkdownText
+import dev.detour.ui.theme.LocalDetourSpacing
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -94,6 +95,7 @@ fun AboutScreen(onClose: () -> Unit) {
     val context = LocalContext.current
     val prefs = Prefs.of(context)
     val scope = rememberCoroutineScope()
+    val spacing = LocalDetourSpacing.current
 
     // The manifest address is still read here even though this page no longer
     // shows it. It is what decides whether the check button exists at all, and it
@@ -168,12 +170,12 @@ fun AboutScreen(onClose: () -> Unit) {
                 .fillMaxSize()
                 .windowInsetsPadding(WindowInsets.safeDrawing)
                 .verticalScroll(rememberScrollState())
-                .padding(bottom = 32.dp),
+                .padding(bottom = spacing.xxl),
             // The settings list's own rhythm — 12 dp between cards — so the two
             // pages read as the same surface. The gutter is applied per card
             // below rather than here, because `DetourPageHeader` carries its own
             // 20 dp start padding and a second one would double it.
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(spacing.md),
         ) {
             DetourPageHeader(
                 title = stringResource(R.string.about_title),
@@ -186,7 +188,7 @@ fun AboutScreen(onClose: () -> Unit) {
 
             DetourSectionCard(
                 title = stringResource(R.string.about_section_version),
-                modifier = Modifier.padding(horizontal = 20.dp),
+                modifier = Modifier.padding(horizontal = spacing.screenH),
             ) {
                 DetourKeyValueRow(
                     label = stringResource(R.string.about_app_version),
@@ -237,7 +239,7 @@ fun AboutScreen(onClose: () -> Unit) {
 
             DetourSectionCard(
                 title = stringResource(R.string.about_section_project),
-                modifier = Modifier.padding(horizontal = 20.dp),
+                modifier = Modifier.padding(horizontal = spacing.screenH),
             ) {
                 // The link is the whole card, and the URL is printed under it
                 // rather than hidden behind the tap. A row that says 项目仓库 and
@@ -257,7 +259,7 @@ fun AboutScreen(onClose: () -> Unit) {
 
             DetourSectionCard(
                 title = stringResource(R.string.about_section_rules),
-                modifier = Modifier.padding(horizontal = 20.dp),
+                modifier = Modifier.padding(horizontal = spacing.screenH),
             ) {
                 DetourKeyValueRow(
                     label = stringResource(R.string.about_rule_source),
@@ -272,7 +274,7 @@ fun AboutScreen(onClose: () -> Unit) {
 
             DetourSectionCard(
                 title = stringResource(R.string.about_section_update),
-                modifier = Modifier.padding(horizontal = 20.dp),
+                modifier = Modifier.padding(horizontal = spacing.screenH),
             ) {
                 // The 启动时自动检查 switch, and now the card's first row.
                 //
@@ -353,7 +355,7 @@ fun AboutScreen(onClose: () -> Unit) {
                         onSelect = { value -> prefs.updateUpdateChannel(value) },
                     )
                     DetourDivider()
-                    Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                    Column(Modifier.padding(horizontal = spacing.lg, vertical = spacing.md)) {
                         DetourButton(
                             onClick = {
                                 // The tap is answered immediately — the label
@@ -428,13 +430,13 @@ fun AboutScreen(onClose: () -> Unit) {
                                 val notes = release.notes
                                 if (!notes.isNullOrBlank()) {
                                     DetourDivider()
-                                    Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                                    Column(Modifier.padding(horizontal = spacing.lg, vertical = spacing.md)) {
                                         Text(
                                             stringResource(R.string.about_update_notes),
                                             style = MaterialTheme.typography.labelSmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         )
-                                        Spacer(Modifier.height(4.dp))
+                                        Spacer(Modifier.height(spacing.xs))
                                         // The upper bound is not optional: this whole
                                         // page scrolls vertically, and without a bound
                                         // the scroll inside `MarkdownText` would
@@ -452,7 +454,7 @@ fun AboutScreen(onClose: () -> Unit) {
                                     }
                                 }
                                 DetourDivider()
-                                Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                                Column(Modifier.padding(horizontal = spacing.lg, vertical = spacing.md)) {
                                     DetourButton(
                                         onClick = { openInBrowser(context, release.url) },
                                         modifier = Modifier.fillMaxWidth(),
@@ -546,11 +548,12 @@ internal fun openInBrowser(context: Context, url: String) {
  */
 @Composable
 private fun UpdateResultText(text: String) {
+    val spacing = LocalDetourSpacing.current
     Text(
         text,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .padding(horizontal = spacing.lg, vertical = spacing.md),
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )

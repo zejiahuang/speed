@@ -29,9 +29,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -54,7 +52,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import dev.detour.BuildConfig
 import dev.detour.R
@@ -82,12 +79,15 @@ import dev.detour.ui.components.DetourKeyValueRow
 import dev.detour.ui.components.DetourNavRow
 import dev.detour.ui.components.DetourPageHeader
 import dev.detour.ui.components.LocalBottomBarClearance
+import dev.detour.ui.components.DetourSearchField
 import dev.detour.ui.components.DetourSectionCard
+import dev.detour.ui.components.DetourSectionTitle
 import dev.detour.ui.components.DetourSegmentedRow
 import dev.detour.ui.components.DetourSliderRow
 import dev.detour.ui.components.DetourStepperRow
 import dev.detour.ui.components.DetourToggleRow
 import dev.detour.ui.theme.LocalDetourMotion
+import dev.detour.ui.theme.LocalDetourSpacing
 import dev.detour.ui.theme.supportsDynamicColor
 import java.io.IOException
 import java.time.LocalDateTime
@@ -532,6 +532,7 @@ fun SettingsScreen(
     // Every setting as a row, in the order it is shown. The content lambdas read
     // `prefs` live, so a change recomposes the row exactly as it did when the
     // layout was written out by hand.
+    val spacing = LocalDetourSpacing.current
     val rows: List<SettingsRow> = buildList {
         // --- connection -------------------------------------------------------
 
@@ -591,15 +592,11 @@ fun SettingsScreen(
                     page = SettingsPage.CONNECTION,
                     searchText = listOf(sourceHeading, pinnedLabel, pinned.url, pinnedHint),
                 ) {
-                    Text(
-                        sourceHeading,
-                        modifier = Modifier.padding(start = 16.dp, top = 12.dp),
-                        style = MaterialTheme.typography.bodyLarge,
-                    )
+                    DetourSectionTitle(sourceHeading)
                     Column(
                         Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                            .padding(horizontal = spacing.lg, vertical = spacing.md),
                     ) {
                         Text(pinnedLabel, style = MaterialTheme.typography.bodyLarge)
                         Text(
@@ -609,7 +606,7 @@ fun SettingsScreen(
                         )
                         Text(
                             pinnedHint,
-                            modifier = Modifier.padding(top = 4.dp),
+                            modifier = Modifier.padding(top = spacing.xs),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -631,11 +628,7 @@ fun SettingsScreen(
                         }
                     },
                 ) {
-                    Text(
-                        sourceHeading,
-                        modifier = Modifier.padding(start = 16.dp, top = 12.dp),
-                        style = MaterialTheme.typography.bodyLarge,
-                    )
+                    DetourSectionTitle(sourceHeading)
                     prefs.ruleSources.forEach { source ->
                         RuleSourceRow(
                             source = source,
@@ -665,11 +658,11 @@ fun SettingsScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable { showAddSource = true }
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                            .padding(horizontal = spacing.lg, vertical = spacing.md),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Icon(Icons.Filled.Add, contentDescription = null)
-                        Spacer(Modifier.width(12.dp))
+                        Spacer(Modifier.width(spacing.md))
                         Text(
                             addSourceLabel,
                             style = MaterialTheme.typography.bodyLarge,
@@ -680,7 +673,7 @@ fun SettingsScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable { rulesImportPicker.launch(arrayOf("*/*")) }
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                            .padding(horizontal = spacing.lg, vertical = spacing.md),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         // `Icons.Filled.Add` a second time, and that is a decision
@@ -693,7 +686,7 @@ fun SettingsScreen(
                         // because this action *is* "add a source", only by file
                         // instead of by address. The label is what separates the rows.
                         Icon(Icons.Filled.Add, contentDescription = null)
-                        Spacer(Modifier.width(12.dp))
+                        Spacer(Modifier.width(spacing.md))
                         Text(
                             importLocalLabel,
                             style = MaterialTheme.typography.bodyLarge,
@@ -817,14 +810,10 @@ fun SettingsScreen(
                 // `startVpn` alone — see [SettingsRow.modes].
                 modes = VPN_ONLY,
             ) {
-                Text(
-                    exitLabel,
-                    modifier = Modifier.padding(start = 16.dp, top = 12.dp),
-                    style = MaterialTheme.typography.bodyLarge,
-                )
+                DetourSectionTitle(exitLabel)
                 Text(
                     exitHint,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    modifier = Modifier.padding(horizontal = spacing.lg, vertical = spacing.xs),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -833,7 +822,7 @@ fun SettingsScreen(
                     onValueChange = { prefs.updateUpstreamProxyAddress(it) },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp),
+                        .padding(horizontal = spacing.lg),
                     singleLine = true,
                     label = { Text(exitAddressLabel) },
                     placeholder = { Text("203.0.113.7:1080") },
@@ -858,7 +847,7 @@ fun SettingsScreen(
                     onValueChange = { prefs.updateUpstreamProxyUsername(it) },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp),
+                        .padding(horizontal = spacing.lg),
                     singleLine = true,
                     label = { Text(exitUserLabel) },
                 )
@@ -867,7 +856,7 @@ fun SettingsScreen(
                     onValueChange = { prefs.updateUpstreamProxyPassword(it) },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(start = 16.dp, end = 16.dp, top = 8.dp),
+                        .padding(start = spacing.lg, end = spacing.lg, top = spacing.sm),
                     singleLine = true,
                     label = { Text(exitPassLabel) },
                     visualTransformation = PasswordVisualTransformation(),
@@ -982,7 +971,7 @@ fun SettingsScreen(
                     onValueChange = { prefs.updateDnsUpstream(it, prefs.dnsUpstreamAddress) },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp),
+                        .padding(horizontal = spacing.lg),
                     singleLine = true,
                     label = { Text(resolverUrlLabel) },
                     placeholder = { Text("https://1.1.1.1/dns-query") },
@@ -999,7 +988,7 @@ fun SettingsScreen(
                     onValueChange = { prefs.updateDnsUpstream(prefs.dnsUpstreamUrl, it) },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(start = 16.dp, end = 16.dp, top = 8.dp),
+                        .padding(start = spacing.lg, end = spacing.lg, top = spacing.sm),
                     singleLine = true,
                     label = { Text(resolverAddressLabel) },
                     supportingText = { Text(resolverAddressHint) },
@@ -1980,6 +1969,7 @@ private fun SettingsList(
     onRestart: () -> Unit,
     onOpenPage: (SettingsPage) -> Unit,
 ) {
+    val spacing = LocalDetourSpacing.current
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         // The bar floats *over* the content rather than sitting below it in a
@@ -1990,12 +1980,12 @@ private fun SettingsList(
         // navigation-bar inset; it is zero outside the app body, so a preview is
         // unaffected.
         contentPadding = PaddingValues(
-            start = 20.dp,
-            end = 20.dp,
-            top = 12.dp,
-            bottom = 32.dp + LocalBottomBarClearance.current,
+            start = spacing.screenH,
+            end = spacing.screenH,
+            top = spacing.md,
+            bottom = spacing.xxl + LocalBottomBarClearance.current,
         ),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(spacing.md),
     ) {
         item {
             Text(
@@ -2006,28 +1996,14 @@ private fun SettingsList(
 
         // The field's horizontal inset is the list's own `contentPadding`, not a
         // second `padding` here — doubling it would make the field narrower than
-        // every card below it.
+        // every card below it. The shared field carries no inset of its own and
+        // supplies the clear button with an accessible label; see
+        // [DetourSearchField].
         item {
-            // The type is spelled out on the local so the lambda is inferred as
-            // composable; inside an `if` the slot's expected type alone is not
-            // always enough for that.
-            val clearAction: (@Composable () -> Unit)? = if (query.isNotEmpty()) {
-                {
-                    IconButton(onClick = { onQueryChange("") }) {
-                        Icon(Icons.Filled.Clear, contentDescription = null)
-                    }
-                }
-            } else {
-                null
-            }
-            OutlinedTextField(
+            DetourSearchField(
                 value = query,
                 onValueChange = onQueryChange,
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                placeholder = { Text(stringResource(R.string.settings_search_hint)) },
-                leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
-                trailingIcon = clearAction,
+                placeholder = stringResource(R.string.settings_search_hint),
             )
         }
 
@@ -2053,24 +2029,40 @@ private fun SettingsList(
         }
 
         if (needle.isEmpty()) {
-            // The entries, as one untitled card. No heading: the page's own
-            // title is 设置 and every row already carries a group's name, so a
-            // heading here would be the third copy of words already on screen
-            // twice.
+            // The entries, split across two untitled cards. Neither carries a
+            // heading: the page's own title is 设置 and every row already names
+            // its own group, so a heading here would be the third copy of words
+            // already on screen twice. The split is a rendering decision only —
+            // the five pages, their order and the search model are unchanged.
             //
             // [pages], not `SettingsPage.entries`: a group with nothing in the
             // current mode is not offered, because its page would open empty.
-            // Every mode keeps at least 日志 / 外观 / 数据, so the card is never
-            // empty itself.
-            item(key = "settings-entries") {
-                UntitledSectionCard {
-                    pages.forEachIndexed { index, target ->
-                        if (index > 0) DetourDivider()
-                        DetourNavRow(
-                            label = stringResource(target.titleFor(mode)),
-                            hint = stringResource(target.summaryFor(mode)),
-                            onClick = { onOpenPage(target) },
-                        )
+            // Every mode keeps at least 日志 / 外观 / 数据, so neither card is
+            // ever empty of its own group.
+            val entryCards = listOf(
+                "settings-entries" to listOf(
+                    SettingsPage.CONNECTION,
+                    SettingsPage.LOGS,
+                    SettingsPage.APPEARANCE,
+                ),
+                "settings-entries-advanced" to listOf(
+                    SettingsPage.ADVANCED,
+                    SettingsPage.DATA,
+                ),
+            )
+            entryCards.forEach { (key, group) ->
+                val groupPages = group.filter { it in pages }
+                if (groupPages.isEmpty()) return@forEach
+                item(key = key) {
+                    UntitledSectionCard {
+                        groupPages.forEachIndexed { index, target ->
+                            if (index > 0) DetourDivider()
+                            DetourNavRow(
+                                label = stringResource(target.titleFor(mode)),
+                                hint = stringResource(target.summaryFor(mode)),
+                                onClick = { onOpenPage(target) },
+                            )
+                        }
                     }
                 }
             }
@@ -2096,7 +2088,7 @@ private fun SettingsList(
                         stringResource(R.string.settings_search_empty),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 24.dp),
+                            .padding(vertical = spacing.xl),
                         textAlign = TextAlign.Center,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2147,6 +2139,8 @@ private fun SettingsGroupPage(
     // on screen, so there is nothing else for back to mean.
     BackHandler(enabled = true) { onClose() }
 
+    val spacing = LocalDetourSpacing.current
+
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.surface,
@@ -2156,12 +2150,12 @@ private fun SettingsGroupPage(
                 .fillMaxSize()
                 .windowInsetsPadding(WindowInsets.safeDrawing)
                 .verticalScroll(rememberScrollState())
-                .padding(bottom = 32.dp),
+                .padding(bottom = spacing.xxl),
             // The settings list's own rhythm — 12 dp between cards — so the two
             // read as the same surface. The gutter is applied per card rather than
             // here, because `DetourPageHeader` carries its own 20 dp start padding
             // and a second one would double it.
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(spacing.md),
         ) {
             DetourPageHeader(
                 title = stringResource(page.titleFor(mode)),
@@ -2175,11 +2169,11 @@ private fun SettingsGroupPage(
             if (pending) {
                 PendingCard(
                     onRestart = onRestart,
-                    modifier = Modifier.padding(horizontal = 20.dp),
+                    modifier = Modifier.padding(horizontal = spacing.screenH),
                 )
             }
 
-            UntitledSectionCard(Modifier.padding(horizontal = 20.dp)) {
+            UntitledSectionCard(Modifier.padding(horizontal = spacing.screenH)) {
                 SettingsRows(rows)
             }
         }
@@ -2195,11 +2189,12 @@ private fun SettingsGroupPage(
  */
 @Composable
 private fun PendingCard(onRestart: () -> Unit, modifier: Modifier = Modifier) {
+    val spacing = LocalDetourSpacing.current
     DetourSectionCard(
         title = stringResource(R.string.settings_kernel_pending_title),
         modifier = modifier,
     ) {
-        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+        Column(Modifier.padding(horizontal = spacing.lg, vertical = spacing.md)) {
             Text(
                 stringResource(R.string.settings_kernel_pending_body),
                 style = MaterialTheme.typography.bodyMedium,
@@ -2233,11 +2228,12 @@ private fun UntitledSectionCard(
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    val spacing = LocalDetourSpacing.current
     DetourCard(
         modifier = modifier,
         style = DetourCardStyle.Glass,
     ) {
-        Column(Modifier.padding(vertical = 4.dp), content = content)
+        Column(Modifier.padding(vertical = spacing.xs), content = content)
     }
 }
 
@@ -2301,11 +2297,12 @@ private fun RuleSourceRow(
     onSelect: () -> Unit,
     onDelete: () -> Unit,
 ) {
+    val spacing = LocalDetourSpacing.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(enabled = source.usable, onClick = onSelect)
-            .padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
+            .padding(start = spacing.lg, end = spacing.sm, top = spacing.xs, bottom = spacing.xs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         RadioButton(selected = selected, onClick = onSelect, enabled = source.usable)

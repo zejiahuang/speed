@@ -14,8 +14,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -31,9 +34,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.tooling.preview.Preview
-import androidx.compose.ui.unit.dp
 import dev.detour.R
 import dev.detour.ui.theme.DetourTheme
+import dev.detour.ui.theme.LocalDetourSpacing
 
 /**
  * The row vocabulary the settings screen is built from.
@@ -54,10 +57,11 @@ fun DetourSectionCard(
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    val spacing = LocalDetourSpacing.current
     Column(modifier) {
         Text(
             title,
-            modifier = Modifier.padding(start = 4.dp, bottom = 8.dp),
+            modifier = Modifier.padding(start = spacing.xs, bottom = spacing.sm),
             style = MaterialTheme.typography.titleSmall,
             color = MaterialTheme.colorScheme.primary,
         )
@@ -68,7 +72,7 @@ fun DetourSectionCard(
         // `LiquidGlassSurface` supplies its own tint — a colour here would be an
         // argument nothing reads, which is worse than no argument at all.
         DetourCard(style = DetourCardStyle.Glass) {
-            Column(Modifier.padding(vertical = 4.dp), content = content)
+            Column(Modifier.padding(vertical = spacing.xs), content = content)
         }
     }
 }
@@ -76,9 +80,78 @@ fun DetourSectionCard(
 /** The hairline between two rows of a section. */
 @Composable
 fun DetourDivider(modifier: Modifier = Modifier) {
+    val spacing = LocalDetourSpacing.current
     HorizontalDivider(
-        modifier = modifier.padding(horizontal = 16.dp),
+        modifier = modifier.padding(horizontal = spacing.lg),
         color = MaterialTheme.colorScheme.outlineVariant,
+    )
+}
+
+/**
+ * 卡片内部的分区块标题（例如「数据源」「上游出口」）。
+ *
+ * 这三处原本是手搓的 `Text(..., style = bodyLarge)`，**无颜色**，于是与 `DetourRow`
+ * 的行标签（同为 `bodyLarge` + `onSurface`，见 `DetourRow`）完全同字号同色，
+ * 「区块」和「行」在视觉上分不出来。本组件用 `DetourSectionCard` 标题的角色
+ * （`titleSmall` + `primary`），让全应用「卡片里的标题」只有一种语言。
+ *
+ * 与 `DetourSectionCard` 的标题**同角色、不同位置**：后者在卡*外*、上方
+ * （`start = 4.dp`），本组件在卡*内*、行上方，内缩与行对齐（`start = lg`(16)、
+ * `top = md`(12)），所以标题与它下面的行左边缘对齐。
+ */
+@Composable
+fun DetourSectionTitle(text: String, modifier: Modifier = Modifier) {
+    val spacing = LocalDetourSpacing.current
+    Text(
+        text = text,
+        modifier = modifier.padding(start = spacing.lg, top = spacing.md),
+        style = MaterialTheme.typography.titleSmall,
+        color = MaterialTheme.colorScheme.primary,
+    )
+}
+
+/**
+ * 全应用唯一的搜索输入框。
+ *
+ * 三份实现曾经并存，行为还不一致：规则页、日志页没有清空按钮，设置页有但
+ * `contentDescription` 是 null（无障碍缺口）。规则页的空状态文案
+ * 「…或清空搜索框查看全部条目」（`strings.xml:521`）因此指向一个不存在的动作；
+ * 本组件让那句话成真。
+ *
+ * **不内建任何水平内边距。** 设置页的搜索框是 `LazyColumn` 的一个 item，它的水平
+ * 内缩来自列表自己的 `contentPadding`（`SettingsScreen.kt:2007` 记录了这条规则），
+ * 若这里再补一个 20dp 就会变成 40dp；规则页/日志页则需要在 `modifier` 里传
+ * `Modifier.padding(horizontal = spacing.screenH)`。把这个决定留给调用方，是唯一
+ * 能同时满足两种布局又不重复内缩的做法。
+ *
+ * 清空按钮仅在 `value` 非空时出现，且带无障碍文案（`R.string.search_clear`）。
+ * 前置搜索图标是装饰性的，`contentDescription = null`。
+ */
+@Composable
+fun DetourSearchField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = modifier.fillMaxWidth(),
+        singleLine = true,
+        enabled = enabled,
+        placeholder = { Text(placeholder) },
+        leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+        trailingIcon = if (value.isNotEmpty()) {
+            {
+                IconButton(onClick = { onValueChange("") }) {
+                    Icon(Icons.Filled.Clear, contentDescription = stringResource(R.string.search_clear))
+                }
+            }
+        } else {
+            null
+        },
     )
 }
 
@@ -90,10 +163,11 @@ private fun DetourRow(
     modifier: Modifier = Modifier,
     trailing: @Composable () -> Unit,
 ) {
+    val spacing = LocalDetourSpacing.current
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .padding(horizontal = spacing.lg, vertical = spacing.md),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
@@ -136,9 +210,10 @@ fun DetourStepperRow(
     hint: String? = null,
 ) {
     DetourRow(label, hint, modifier) {
+        val spacing = LocalDetourSpacing.current
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(spacing.xs),
         ) {
             TextButton(onClick = onDecrease) { Text("−") }
             Text(value, style = MaterialTheme.typography.titleMedium)
@@ -175,7 +250,8 @@ fun DetourSliderRow(
 ) {
     var local by remember(value) { mutableFloatStateOf(value) }
     var editing by remember { mutableStateOf(false) }
-    Column(modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+    val spacing = LocalDetourSpacing.current
+    Column(modifier.padding(horizontal = spacing.lg, vertical = spacing.sm)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -246,6 +322,7 @@ private fun SliderInputDialog(
         initial.toString()
     }
     var text by remember(seed) { mutableStateOf(seed) }
+    val spacing = LocalDetourSpacing.current
     DetourAlertDialog(
         onDismissRequest = onDismiss,
         title = stringResource(R.string.slider_input_title),
@@ -258,7 +335,7 @@ private fun SliderInputDialog(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     singleLine = true,
                 )
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(spacing.sm))
                 Text(
                     stringResource(R.string.slider_input_range, range.start, range.endInclusive),
                     style = MaterialTheme.typography.labelSmall,
@@ -327,7 +404,8 @@ fun DetourChoiceRow(
     modifier: Modifier = Modifier,
     hint: String? = null,
 ) {
-    Column(modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+    val spacing = LocalDetourSpacing.current
+    Column(modifier.padding(horizontal = spacing.lg, vertical = spacing.md)) {
         Text(label, style = MaterialTheme.typography.bodyLarge)
         if (hint != null) {
             Text(
@@ -336,12 +414,12 @@ fun DetourChoiceRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(spacing.sm))
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(spacing.sm),
         ) {
             options.forEach { (value, labelRes) ->
                 DetourFilterChip(
@@ -394,9 +472,10 @@ fun DetourActionRow(
     onSecondary: (() -> Unit)? = null,
 ) {
     DetourRow(label, hint, modifier) {
+        val spacing = LocalDetourSpacing.current
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(spacing.xs),
         ) {
             TextButton(onClick = onAction) { Text(actionLabel) }
             if (secondaryLabel != null && onSecondary != null) {
@@ -483,5 +562,26 @@ private fun DetourListItemPreview() {
             DetourDivider()
             DetourNavRow(label = "数据与关于", hint = "导出、导入与版本信息", onClick = {})
         }
+    }
+}
+
+@Preview
+@Composable
+private fun DetourSectionTitlePreview() {
+    DetourTheme {
+        DetourSectionTitle(text = "数据源")
+    }
+}
+
+@Preview
+@Composable
+private fun DetourSearchFieldPreview() {
+    DetourTheme {
+        DetourSearchField(
+            value = "example.com",
+            onValueChange = {},
+            placeholder = "搜索域名、地址或分组",
+            modifier = Modifier.padding(horizontal = LocalDetourSpacing.current.screenH),
+        )
     }
 }

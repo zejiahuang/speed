@@ -48,6 +48,7 @@ EN: dict[str, str] = {
     "home_speed_up": "Up",
     "home_total": "This session",
     "home_domains_saved": "Rules hit %1$d times this session",
+    "home_dns_answered": "Resolved %1$d domains this session",
     "home_no_permission": "VPN mode needs system authorisation",
     "home_grant": "Grant",
     "home_switch_mode": "Switch mode",
@@ -345,6 +346,7 @@ EN: dict[str, str] = {
 
     # Logs, third batch
     "logs_search_hint": "Search content or tag",
+    "search_clear": "Clear search",
     "logs_copy_all": "Copy all",
     "logs_copied_all": "Copied %1$d lines",
     "logs_back_to_latest": "Back to latest",

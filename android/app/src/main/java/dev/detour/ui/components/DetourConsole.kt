@@ -30,6 +30,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import dev.detour.R
 import dev.detour.ui.theme.DetourTheme
+import dev.detour.ui.theme.LocalDetourSpacing
 
 /**
  * One executed command and what came back.
@@ -69,7 +70,8 @@ fun DetourConsoleRow(
     running: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    Column(modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+    val spacing = LocalDetourSpacing.current
+    Column(modifier.padding(horizontal = spacing.lg, vertical = spacing.md)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 label,
@@ -88,7 +90,7 @@ fun DetourConsoleRow(
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(spacing.sm))
         OutlinedTextField(
             value = input,
             onValueChange = onInputChange,
@@ -114,7 +116,7 @@ fun DetourConsoleRow(
                 }
             },
         )
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(spacing.sm))
 
         val prompt = stringResource(R.string.settings_console_prompt)
         val scrollState = rememberScrollState()
@@ -137,7 +139,7 @@ fun DetourConsoleRow(
                     // `dump` line wraps at the box edge instead of being clipped.
                     .fillMaxWidth()
                     .verticalScroll(scrollState)
-                    .padding(8.dp),
+                    .padding(spacing.sm),
             ) {
                 if (entries.isEmpty()) {
                     Text(
