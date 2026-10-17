@@ -742,6 +742,8 @@
     <string name="err_root_install_failed">root 模式安装失败（%1$s）：%2$s</string>
     <string name="err_root_step">第 %1$d 步</string>
     <string name="err_root_no_su_reply">su 未返回</string>
+    <string name="err_root_mount_private">root 模式没有生效：hosts 挂载对本应用不可见（su 没有进入全局 mount namespace），已回滚</string>
+    <string name="log_root_partial_status">root 模式：安装状态行缺了 %1$d 条，已按实际挂载确认成功</string>
     <string name="err_su_start_failed">无法启动 su：%1$s</string>
     <string name="err_su_timeout">su 超时（%1$dms）：%2$s</string>
     <string name="rules_unnamed_group">未命名</string>

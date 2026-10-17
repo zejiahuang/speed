@@ -14,7 +14,9 @@ import dev.detour.R
  *
  * 1. **The system hosts file.** Intercepted names are pointed at
  *    [REDIRECT_ADDRESS] so the client dials an address we control instead of the
- *    real one. Measured on this device: the resolver honours `/etc/hosts` ahead
+ *    real one. The file itself is never written — it lives on a read-only
+ *    partition, so a staged copy is bind-mounted over it (see [Session.apply]).
+ *    Measured on this device: the resolver honours `/etc/hosts` ahead
  *    of DNS for the ordinary `getaddrinfo` path every app uses — a name mapped to
  *    `127.0.0.2` resolved there, over the real DNS answer. Not measured, and
  *    deliberately not claimed: an app that resolves names itself never reads
@@ -77,22 +79,25 @@ object RootHelper {
     private const val REDIRECT_PORT = 443
 
     /**
-     * The two trust stores, and why both are written.
+     * The two trust stores, and why both are covered.
      *
      * Measured on this device (Android 14): the two are **not** the same
-     * directory. `/apex/com.android.conscrypt/cacerts` is a read-only APEX mount
-     * and `/system/etc/security/cacerts` is a separate writable directory — they
-     * hold the same 134 certificates as *copies*, with different inodes. Conscrypt
-     * on Android 14 reads the APEX store, but older releases read the system one,
-     * so the certificate is installed into both: the writable one directly, and
-     * the read-only one by bind-mounting a mirror over it.
+     * directory. `/apex/com.android.conscrypt/cacerts` and
+     * `/system/etc/security/cacerts` hold the same 134 certificates as *copies*,
+     * with different inodes. Conscrypt on Android 14 reads the APEX store, older
+     * releases read the system one, so the certificate has to reach both.
      *
-     * The bind mount is what makes the read-only store writable in effect, and it
-     * is **global**: measured on this device, a bind mount made from one `su`
-     * process was still visible from a separate, non-root `adb shell` after that
-     * process had exited. That measurement is the whole reason the mirror
-     * technique is sound — it really does cover every process that reads the
-     * store, not only the one that mounted it.
+     * **Neither is written to.** Both live on read-only partitions on a real
+     * device — a `cp` into `/system/etc/security/cacerts` answers `Read-only file
+     * system` even as root — so each is mirrored into a directory we own and the
+     * mirror is bind-mounted over it. The same technique covers `/etc/hosts`; see
+     * [apply].
+     *
+     * The bind mount is **global**: measured on this device, a bind mount made
+     * from one `su` process was still visible from a separate, non-root `adb
+     * shell` after that process had exited. That measurement is the whole reason
+     * the mirror technique is sound — it really does cover every process that
+     * reads the store, not only the one that mounted it.
      *
      * **Coverage caveat — expected, not measured here.** Android reads the trust
      * store when a process starts, so an app that is already running may keep the
@@ -103,6 +108,22 @@ object RootHelper {
      */
     private const val SYSTEM_CACERTS = "/system/etc/security/cacerts"
     private const val APEX_CACERTS = "/apex/com.android.conscrypt/cacerts"
+
+    /**
+     * The SELinux label of the file being replaced, for the staged copy.
+     *
+     * A file under `/data` is born `shell_data_file`, and a bind mount does not
+     * relabel it — the reader's `file:read` check is against the *inode*, so an
+     * app asking for `/etc/hosts` would be denied rather than served. Copying
+     * the label of the original is what makes the mount transparent.
+     *
+     * Both measured on the device (`ls -Z`): `/etc/hosts` is `system_file`, and
+     * both trust stores are `system_security_cacerts_file`. The emulator runs
+     * SELinux `Permissive`, which is why losing the label was never visible
+     * there; on an enforcing device it is a denial.
+     */
+    private const val HOSTS_LABEL = "u:object_r:system_file:s0"
+    private const val CACERTS_LABEL = "u:object_r:system_security_cacerts_file:s0"
 
     private const val HOSTS = "/etc/hosts"
 
@@ -295,15 +316,29 @@ object RootHelper {
      * instead of believing it is already done.
      */
     private fun undoCommands(): List<String> = listOf(
-        // 1. Put the hosts file back the way it was found.
-        "[ -f $STAGE/hosts.orig ] && cp -f $STAGE/hosts.orig $HOSTS",
-        // 1b. Belt and braces: if the backup is gone but our block somehow is not,
-        //     strip it by its own markers rather than leaving names pointed at a
-        //     dead loopback address. A no-op when step 1 already restored the file.
-        "sed -i '/$HOSTS_BEGIN/,/$HOSTS_END/d' $HOSTS",
-        // 2. Remove the certificate from the writable store. The path was
-        //    recorded, not recomputed, because a recovery run may not have the
-        //    certificate in hand.
+        // 1. Drop the hosts bind mount. This *is* the restore: the file on the
+        //    read-only partition was never written, so once the mount is gone the
+        //    device is back to exactly the bytes it shipped with. The marker is
+        //    only cleared once the mount is confirmed gone, so a failed umount is
+        //    retried instead of being forgotten.
+        "[ -f $STAGE/hosts.mounted ] && umount $HOSTS",
+        "mount | grep -q \" \$(readlink -f $HOSTS) \" || { rm -f $STAGE/hosts.new; rm -f $STAGE/hosts.mounted; }",
+        // 1b. Leftovers from a version that wrote the file in place. Both are
+        //     no-ops on a read-only partition (the `&&` / the redirect simply
+        //     fails), and both matter on a device where that write used to land:
+        //     without them the stale block would come back the moment the mount
+        //     above is dropped.
+        "[ -f $STAGE/hosts.orig ] && cp -f $STAGE/hosts.orig $HOSTS 2>/dev/null",
+        "sed -i '/$HOSTS_BEGIN/,/$HOSTS_END/d' $HOSTS 2>/dev/null",
+        // 2. Drop the system trust-store mount, then delete the mirror only once
+        //    the mount is confirmed gone — deleting a live mount source would
+        //    leave the directory bound to a deleted path, and an empty trust store
+        //    is a device-wide TLS failure.
+        "[ -f $STAGE/cacerts.mounted ] && umount $SYSTEM_CACERTS",
+        "mount | grep -q \" $SYSTEM_CACERTS \" || { rm -rf $STAGE/cacerts; rm -f $STAGE/cacerts.mounted; }",
+        // 2b. Leftover from a version that copied the certificate into the real
+        //     store. The path was recorded, not recomputed, because a recovery run
+        //     may not have the certificate in hand.
         "[ -f $STAGE/ca.path ] && rm -f \"\$(cat $STAGE/ca.path)\"",
         // 3. Drop the APEX bind mount (only if we made it), then delete the mirror
         //    only once the mount is confirmed gone. If the umount above failed,
@@ -487,33 +522,68 @@ object RootHelper {
             val block = stage("hosts.block", hostsBlock(names).toByteArray(Charsets.UTF_8))
             blockPath = block
 
-            val systemCert = "$SYSTEM_CACERTS/$hash.0"
             // Only mirror the APEX store if this build has one; an older device
-            // has no APEX and the writable store is the whole answer.
+            // has no APEX, and the system store — mirrored over the same way —
+            // is then the whole answer.
             val hasApex = shell.run(listOf("[ -d $APEX_CACERTS ]"), TIMEOUT_MS).ok
 
             val commands = buildList {
                 add("mkdir -p $STAGE")
-                // Strip any block of ours that is still in the file **before**
-                // taking the backup, so the backup is the clean base by
-                // construction. The undo above is supposed to have removed it, but
-                // the undo and this command list are two separate `su`
-                // invocations, and the flag that makes writes land is probed once
-                // per `Su` instance: an undo that ran before the probe succeeded
-                // writes nothing (`Read-only file system`), and the backup would
-                // then capture a file that already carries our block — so the
-                // append below stacks a second one. Measured on a device:
-                // `/etc/hosts` came back with two `# detour-root-begin` blocks and
-                // 1692 redirect lines where 846 were expected.
-                add("sed -i '/$HOSTS_BEGIN/,/$HOSTS_END/d' $HOSTS")
-                // Back up the hosts file as found. It is the clean base the block
-                // is appended to, and the exact file restore puts back.
+
+                // --- hosts ---------------------------------------------------
+                // **Nothing in this class writes the device's hosts file.** `/etc/hosts`
+                // resolves to `/system/etc/hosts`, which lives on a read-only,
+                // dm-verity protected partition on every real device. `sed -i`
+                // needs to create a temp file in that directory, so the write
+                // answers `Read-only file system` — and because it was the second
+                // command in this list, that is exactly what a "第 2 步" install
+                // failure is. It only ever passed on the emulator, where `/` and
+                // `/system` are one ext4 that a `remount,rw` can open up.
+                //
+                // A bind mount needs no write access to its target, so a staged
+                // copy is mounted over the real file. The device's file is never
+                // opened for writing: a crash cannot corrupt it, and undo is an
+                // `umount` rather than a restore.
                 add("cp -f $HOSTS $STAGE/hosts.orig")
-                // The writable store.
-                add("cp -f ${caFile.absolutePath} $systemCert")
-                add("chmod 644 $systemCert")
-                add("echo -n $systemCert > $STAGE/ca.path")
-                // The APEX store, via a mirror we own and bind-mount over it.
+                // Strip a block of ours in the *staged* copy, not in the live file.
+                // It is there because a previous install on a writable root wrote it
+                // in place; keeping it would stack a second block the moment the
+                // mount hides the original.
+                add("sed '/$HOSTS_BEGIN/,/$HOSTS_END/d' $STAGE/hosts.orig > $STAGE/hosts.new")
+                add("cat ${block.absolutePath} >> $STAGE/hosts.new")
+                // The staged copy is on `/data`, where it is born `shell_data_file`.
+                // A bind mount does not relabel it, and a reader's check is against
+                // the inode, so without this every app's resolver is denied rather
+                // than served. Measured: `ls -Z` on the staged file reports
+                // `shell_data_file` until this runs.
+                add("chcon $HOSTS_LABEL $STAGE/hosts.new")
+                // Mark before mounting: if the process dies between the two, the
+                // marker must already exist so recovery still runs `umount`.
+                add("touch $STAGE/hosts.mounted")
+                // Clear a mount a killed session left behind, so a retry cannot
+                // stack a second one on the same target. `|| true` because "not
+                // mounted" is the normal case and its status is not a failure.
+                add("umount $HOSTS 2>/dev/null || true")
+                add("mount --bind $STAGE/hosts.new $HOSTS")
+
+                // --- system trust store --------------------------------------
+                // Same partition and the same EROFS, so the same treatment: mirror
+                // the directory, add ours to the mirror, bind-mount it over the
+                // original. This is the pattern the APEX store below already used;
+                // it was simply never applied here, which is why a real device
+                // would have failed again at this step even with hosts fixed.
+                add("mkdir -p $STAGE/cacerts")
+                // The whole store, not `*.0`: it also ships `d16a5865.1`, and a
+                // mirror that is not a superset of the directory it hides drops
+                // that root for the whole device.
+                add("cp -a $SYSTEM_CACERTS/. $STAGE/cacerts/")
+                add("cp -f ${caFile.absolutePath} $STAGE/cacerts/$hash.0")
+                add("chmod 644 $STAGE/cacerts/$hash.0")
+                add("chcon -R $CACERTS_LABEL $STAGE/cacerts")
+                add("touch $STAGE/cacerts.mounted")
+                add("umount $SYSTEM_CACERTS 2>/dev/null || true")
+                add("mount --bind $STAGE/cacerts $SYSTEM_CACERTS")
+                // --- APEX trust store ----------------------------------------
                 if (hasApex) {
                     add("mkdir -p $STAGE/apex")
                     // Copy the whole store, not `*.0`. The `*.0` glob assumes every
@@ -523,16 +593,20 @@ object RootHelper {
                     // trusted root for the whole device.
                     add("cp -a $APEX_CACERTS/. $STAGE/apex/")
                     add("cp -f ${caFile.absolutePath} $STAGE/apex/$hash.0")
-                    // Mark before mounting. If the process dies between the two, the
-                    // marker must already exist so recovery still runs `umount`; the
-                    // opposite order would leave a mounted-but-unmarked state that
-                    // recovery cannot see.
+                    // `cp -a` does **not** carry the SELinux label across
+                    // filesystems here — measured, the mirror came out
+                    // `shell_data_file`. Conscrypt reads these as
+                    // `system_security_cacerts_file`, and on an enforcing device
+                    // that mismatch is a denial, i.e. a CA nobody trusts.
+                    add("chcon -R $CACERTS_LABEL $STAGE/apex")
+                    // Mark before mounting. If the process dies between the two,
+                    // the marker must already exist so recovery still runs `umount`;
+                    // the opposite order would leave a mounted-but-unmarked state
+                    // that recovery cannot see.
                     add("touch $STAGE/apex.mounted")
+                    add("umount $APEX_CACERTS 2>/dev/null || true")
                     add("mount --bind $STAGE/apex $APEX_CACERTS")
                 }
-                // The hosts entries, appended to the backup rather than to the
-                // live file, so a second install cannot stack two blocks.
-                add("cat $STAGE/hosts.orig ${block.absolutePath} > $HOSTS")
                 // Purge, then add. The undo above purged too, but its result is not
                 // checked and it is a separate `su` invocation — repeating the
                 // purge here is what makes "exactly one rule, pointing at the live
@@ -574,9 +648,38 @@ object RootHelper {
             val result = shell.run(commands, TIMEOUT_MS)
             if (!result.ok) {
                 val failed = result.codes.indexOfFirst { it != 0 }
+                // A missing status line is not proof that a command failed. The
+                // status lines come off a pipe drained on a worker thread, and that
+                // drain has a bound; a shell still writing when the bound expires
+                // loses its tail. Measured: an install failed at the last command —
+                // `echo -n <port> > redirect.port`, which cannot fail — and the very
+                // next attempt of the same build succeeded, with the mounts from the
+                // "failed" run having been rolled back by [restore].
+                //
+                // So before believing the codes, check what they are codes *for*:
+                // every code that did arrive is 0, and the hosts mount — the first
+                // thing this install makes and the one every other step builds on —
+                // is visible from this process. A shell that died before the mounts
+                // fails that test and is still reported as a failure.
+                val allArrivedSucceeded = result.codes.any { it == 0 } && result.codes.none { it > 0 }
+                if (allArrivedSucceeded && hostsMountVisible()) {
+                    KernelState.log(
+                        KernelState.LogEntry.Level.WARN,
+                        TAG,
+                        context.getString(R.string.log_root_partial_status, result.codes.count { it < 0 }),
+                    )
+                    appliedNames = names
+                    return null
+                }
                 restore()
+                // The command itself is part of the message on purpose: "第 2 步"
+                // names a position in a list that moves whenever this function
+                // does, and the one time it mattered the report was a step number
+                // with no way to tell which write it was. Truncated because one of
+                // these commands is a shell loop.
                 val step = if (failed >= 0) {
-                      context.getString(R.string.err_root_step, failed + 1)
+                      context.getString(R.string.err_root_step, failed + 1) +
+                          "：" + commands[failed].take(90)
                   } else {
                       context.getString(R.string.err_root_no_su_reply)
                   }
@@ -586,9 +689,37 @@ object RootHelper {
                         result.output.takeLast(200).trim(),
                     )
               }
+              // A mount made in a private namespace leaves this mode reporting
+              // itself "on" while nothing is intercepted — a failure that looks
+              // like success. This process's own mount table is the property that
+              // matters: the redirect is only real if the app that reads
+              // `/etc/hosts` sees the file mounted over it.
+              if (!hostsMountVisible()) {
+                  restore()
+                  return context.getString(R.string.err_root_mount_private)
+              }
               appliedNames = names
               return null
           }
+
+        /**
+         * Whether the hosts bind mount is visible from this process.
+         *
+         * `/proc/self/mountinfo` is readable without root and its fifth field is
+         * the mount point. The path compared is the *canonical* one because the
+         * kernel records where the mount actually landed: `/etc/hosts` is a
+         * symlink to `/system/etc/hosts`, and that is the name in the table.
+         *
+         * Answers `true` when the file cannot be read at all — an unreadable
+         * `mountinfo` is not evidence that the mount is missing, and failing an
+         * install on it would turn a diagnostic into a regression.
+         */
+        private fun hostsMountVisible(): Boolean = runCatching {
+            val point = File(HOSTS).canonicalPath
+            File("/proc/self/mountinfo").readLines().any { line ->
+                line.split(' ').getOrNull(4) == point
+            }
+        }.getOrDefault(true)
 
         /**
          * Rewrite the hosts block for a new rule set, leaving everything else
@@ -692,14 +823,14 @@ object RootHelper {
      *
      * `su` is given the commands on stdin rather than a `-c` string, because the
      * certificate and the hosts block contain newlines and would have to be
-     * escaped — and an escaping bug in a command that rewrites `/etc/hosts` is a
-     * bug that bricks the device's DNS. Each command is followed by an `echo` of
-     * its own exit status, so [Result.codes] is per command and the caller can
-     * say which step failed rather than only that one did.
+     * escaped — and an escaping bug in a command that ends up mounted over
+     * `/etc/hosts` is a bug that bricks the device's DNS. Each command is followed
+     * by an `echo` of its own exit status, so [Result.codes] is per command and the
+     * caller can say which step failed rather than only that one did.
      *
      * Every invocation forces the **global** mount namespace; without it the shell
-     * inherits the app's namespace, where `/` is mounted read-only and none of
-     * these writes can land. [run] carries the measurement.
+     * inherits the app's namespace and the mounts land where only this app can see
+     * them, which is the same as not making them. [run] carries the measurement.
      */
     private class Su(private val context: Context) {
 
@@ -713,18 +844,15 @@ object RootHelper {
          *
          * **`--mount-master` is load-bearing, and this is measured, not assumed.**
          * `su` inherits the mount namespace of whoever asked for it, and the app's
-         * namespace does not look like the shell's. On this device, the same block
-         * device is mounted two different ways:
+         * namespace does not look like the shell's. On this device the same block
+         * device has been seen mounted two different ways — `rw` for `adb shell`
+         * and `ro` for the app — which is what made a bare `su` useless:
          *
          * ```text
          * adb shell : /dev/block/sda2 / ext4 rw,seclabel,...    <- writable
          * app (10078): /dev/block/sda2 / ext4 ro,seclabel,...   <- READ-ONLY
          * ```
          *
-         * So a bare `su` from the app lands in a namespace where `/` is `ro`, and
-         * every write this class makes fails — `cp` to
-         * `/system/etc/security/cacerts` answers `Read-only file system` and the
-         * hosts rewrite answers `can't create /etc/hosts: Read-only file system`.
          * Measured both ways on the same device with MagiskSU's `-t <pid>` (take the
          * namespace from a process) and `-M` (force the global one):
          *
@@ -735,14 +863,21 @@ object RootHelper {
          *     -> rc=0, file present
          * ```
          *
-         * The global namespace is required for a second reason too, and it is the
-         * one that matters for interception: the APEX mirror is bind-mounted over
-         * `/apex/com.android.conscrypt/cacerts`, and that mount has to be the one
-         * every *other* app sees. Measured that it is: after a global-namespace
-         * bind mount, the app's own namespace reads 135 entries (134 + ours) and
-         * sees the new file, because the mount propagates. A bind mount made inside
-         * the app's private namespace would have been visible to this app alone —
-         * the CA would be trusted by nobody.
+         * **That `rc=0` is an emulator fact and must not be generalised.** It held
+         * because `/` and `/system` were one writable ext4 there; on a real device
+         * `/system` is a separate, dm-verity protected partition, so the same `cp`
+         * fails no matter which namespace it runs in. The install no longer writes
+         * anything into `/system` at all — it bind-mounts staged copies over the
+         * files (see [apply]) — which is why the namespace is now required for a
+         * different reason: a mount is only useful if it is the mount every other
+         * process sees.
+         *
+         * Measured that it is: after a global-namespace bind mount, the app's own
+         * namespace reads 135 entries (134 + ours) and sees the new file, because
+         * the mount propagates. A bind mount made inside the app's private
+         * namespace would have been visible to this app alone — the CA would be
+         * trusted by nobody, and the hosts redirect would intercept nothing.
+         * [apply] asserts that propagation happened rather than assuming it.
          *
          * The flag is a MagiskSU/KernelSU option, not a POSIX one, so it is *probed*
          * once instead of assumed — see [option].
@@ -896,8 +1031,15 @@ object RootHelper {
              * return. The reader is a daemon, so even then it can never keep the
              * process alive. The whole point is that a timeout is bounded by
              * `timeoutMs + READER_JOIN_MS`, never unbounded.
+             *
+             * **Measured: 500 ms was not enough.** One install in three reported
+             * "step 26 failed" on a command that cannot fail (`echo -n <port> >
+             * redirect.port`) while every line before it had arrived and the mounts
+             * were in place — the tail was still in the pipe when the snapshot was
+             * taken. The same build succeeded on the next attempt. Three seconds
+             * is the same bound with enough room for a shell that outlives `su`.
              */
-            const val READER_JOIN_MS = 500L
+            const val READER_JOIN_MS = 3_000L
         }
     }
 }

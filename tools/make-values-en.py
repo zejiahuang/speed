@@ -513,6 +513,8 @@ EN: dict[str, str] = {
     "err_root_install_failed": "Root mode install failed (%1$s): %2$s",
     "err_root_step": "step %1$d",
     "err_root_no_su_reply": "su returned nothing",
+    "err_root_mount_private": "Root mode did not take effect: the hosts mount is not visible to this app (su never entered the global mount namespace), so it was rolled back",
+    "log_root_partial_status": "Root mode: %1$d install status line(s) went missing; success was confirmed from the mounts themselves",
     "err_su_start_failed": "Cannot start su: %1$s",
     "err_su_timeout": "su timed out (%1$d ms): %2$s",
     "rules_unnamed_group": "Unnamed",
