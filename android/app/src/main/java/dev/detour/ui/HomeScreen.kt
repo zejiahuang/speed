@@ -47,10 +47,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.detour.R
 import dev.detour.core.BuildFlags
@@ -79,17 +82,47 @@ import kotlinx.coroutines.launch
 import java.io.File
 
 /**
- * 首页的两张明细卡（本次会话 / 规则状态）是否显示。
+ * 首页的三张明细卡是否显示：本次会话 / 规则状态 / 命中规则统计（VPN 下）。
  *
  * 用户要求「先隐藏」（2026-10-17）：首页只留连接本身 —— 电源控件、状态、实时
  * 上下行。代码保留而不是删掉，是因为这是「先隐藏」：改回 true 即恢复，不必回滚
- * git 历史。
+ * git 历史。第三张卡本来只在 VPN 且已连接时出现，它没有自己的开关，跟随同一个
+ * 常量。
  *
- * 代价要说清楚：**会话流量总计**与**缓存有多旧**在别的页面没有等价展示
- * （规则源在 设置 → 数据源 里能选，但看不到当前缓存文件的时间戳）。要查这两项
- * 时，把这个常量改回 true 再看，而不是去别的页面找。
+ * 代价要说清楚：**会话流量总计**、**缓存有多旧**、**命中/直连的比例与无名流量**
+ * 在别的页面都没有等价展示。要查这些，把这个常量改回 true 再看，而不是去别的
+ * 页面找。
  */
 private const val SHOW_HOME_DETAIL_CARDS = false
+
+/**
+ * 首页内容的最大宽度。
+ *
+ * 平板与横屏上把这一列拉到整屏，电源控件和两行数字会隔开半个屏幕，而这一页只有
+ * 四样东西 —— 超过这个宽度就居中留白，而不是继续拉伸。480dp 约等于手机竖屏的
+ * 舒适宽度上限。
+ */
+private val MAX_CONTENT_WIDTH = 480.dp
+
+/**
+ * 两张速率卡并排所需的最小内容宽度，不够就改成上下叠放。
+ *
+ * 两张卡各约 120dp 才装得下 `headlineSmall` 的数字，加上 12dp 的间距，300dp 是
+ * 能同时放下它们的下限。
+ */
+private val MIN_WIDTH_FOR_RATE_ROW = 300.dp
+
+/** 系统字号放大到这个倍数以上时，速率卡一律叠放：横排会把数字挤成省略号。 */
+private const val STACK_RATES_FONT_SCALE = 1.3f
+
+/**
+ * 电源控件按比例缩放的基准：这一页就是按 410dp 内容宽度（900px @320dpi）设计的。
+ *
+ * 两个数写在一起而不是只写一个比例，是因为「168dp」是设计值、不是可以随手换算的
+ * 系数 —— 改基准宽度时直径要跟着一起改，分开写会让它们各自漂移。
+ */
+private val POWER_REFERENCE_WIDTH = 410.dp
+private val POWER_REFERENCE_DIAMETER = 168.dp
 
 /**
  * The hero screen: one control, and what it is doing.
@@ -164,17 +197,38 @@ fun HomeScreen() {
     // being read, which is the same as not showing it.
     var showRootConsent by remember { mutableStateOf(false) }
 
-    // The column is scrollable because the content (a 168dp hero control plus
-    // the rate and session cards) is taller than the viewport on a short screen;
-    // without this the last card is clipped at the bottom rather than being
-    // reachable. `weight` is deliberately not used anywhere on this
-    // column: a weighted child inside a `verticalScroll` is measured with an
-    // unbounded height and throws, so the two flexible gaps are fixed instead.
+    // The column is scrollable because the hero control plus the rate cards are
+    // taller than the viewport on a short screen (a landscape phone, or any device
+    // with the system font enlarged); without this the last row is clipped rather
+    // than reachable. `weight` is deliberately not used anywhere on this column: a
+    // weighted child inside a `verticalScroll` is measured with an unbounded height
+    // and throws, so the gaps are fixed instead.
+    //
+    // Adaptive sizing, read from the window rather than from a `BoxWithConstraints`:
+    // this column is the only consumer, and a constraints wrapper would have to be
+    // re-indented around the whole body for one number.
+    //
+    // The gutter grows only past `MAX_CONTENT_WIDTH` — on a phone it stays at the
+    // 20dp the other pages use, so the four screens keep one vertical line.
+    val screenWidth = LocalConfiguration.current.screenWidthDp.dp
+    val fontScale = LocalDensity.current.fontScale
+    val sideGutter = ((screenWidth - MAX_CONTENT_WIDTH) / 2).coerceAtLeast(spacing.screenH)
+    val contentWidth = screenWidth - sideGutter * 2
+    val stackRates = contentWidth < MIN_WIDTH_FOR_RATE_ROW || fontScale >= STACK_RATES_FONT_SCALE
+    // Proportional to the content width, anchored at the size this screen was
+    // designed at: 168dp on the reference device (so nothing moves there), 132dp on
+    // a 320dp phone so the control never crowds the rate cards, 208dp on a tablet
+    // so it stays the subject of the page. A fixed size does none of that — it ate
+    // half a narrow screen and read as a button among cards on a wide one.
+    val powerDiameter = (
+        POWER_REFERENCE_DIAMETER * (contentWidth / POWER_REFERENCE_WIDTH)
+    ).coerceIn(132.dp, 208.dp)
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = spacing.screenH),
+            .padding(horizontal = sideGutter),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         // 4dp, not the 12 it used to be, and the number is derived rather than
@@ -333,6 +387,7 @@ fun HomeScreen() {
 
         PowerControl(
             status = status,
+            diameter = powerDiameter,
             onToggle = {
                 if (status.isRunning) {
                     // Read here rather than captured, so toggling the setting takes
@@ -403,22 +458,43 @@ fun HomeScreen() {
         // moving", and a pair of zeros answers that question wrongly — it reads as
         // a stalled tunnel. Turning the setting off removes the question.
         if (prefs.homeShowRate) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(spacing.md),
-            ) {
-                RateCard(
-                    modifier = Modifier.weight(1f),
-                    label = stringResource(R.string.home_speed_down),
-                    icon = Icons.Filled.KeyboardArrowDown,
-                    bytesPerSecond = down,
-                )
-                RateCard(
-                    modifier = Modifier.weight(1f),
-                    label = stringResource(R.string.home_speed_up),
-                    icon = Icons.Filled.KeyboardArrowUp,
-                    bytesPerSecond = up,
-                )
+            // Two cards side by side while there is room; stacked when the window is
+            // narrow or the system font is enlarged. The numbers are `headlineSmall`
+            // and a squeezed pair would ellipsise them — which is worse than a
+            // second row, because the row exists to be read at a glance.
+            if (stackRates) {
+                Column(verticalArrangement = Arrangement.spacedBy(spacing.md)) {
+                    RateCard(
+                        modifier = Modifier.fillMaxWidth(),
+                        label = stringResource(R.string.home_speed_down),
+                        icon = Icons.Filled.KeyboardArrowDown,
+                        bytesPerSecond = down,
+                    )
+                    RateCard(
+                        modifier = Modifier.fillMaxWidth(),
+                        label = stringResource(R.string.home_speed_up),
+                        icon = Icons.Filled.KeyboardArrowUp,
+                        bytesPerSecond = up,
+                    )
+                }
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(spacing.md),
+                ) {
+                    RateCard(
+                        modifier = Modifier.weight(1f),
+                        label = stringResource(R.string.home_speed_down),
+                        icon = Icons.Filled.KeyboardArrowDown,
+                        bytesPerSecond = down,
+                    )
+                    RateCard(
+                        modifier = Modifier.weight(1f),
+                        label = stringResource(R.string.home_speed_up),
+                        icon = Icons.Filled.KeyboardArrowUp,
+                        bytesPerSecond = up,
+                    )
+                }
             }
         }
 
@@ -526,7 +602,10 @@ fun HomeScreen() {
         // has gone through the tunnel" while the byte total above it is climbing.
         // Each of those modes answers "did the rules do anything" with the single
         // number in the session card instead.
-        if (status.isRunning && status.mode == KernelState.Mode.VPN) {
+        if (SHOW_HOME_DETAIL_CARDS &&
+            status.isRunning &&
+            status.mode == KernelState.Mode.VPN
+        ) {
             Spacer(Modifier.height(spacing.md))
             val matched = stats.flowsMatchedRules
             val direct = stats.flowsDirect
@@ -711,7 +790,11 @@ private fun statusText(status: KernelState.Status): String = stringResource(
  * job is a binary state, a hard cut reads as a glitch.
  */
 @Composable
-private fun PowerControl(status: KernelState.Status, onToggle: () -> Unit) {
+private fun PowerControl(
+    status: KernelState.Status,
+    onToggle: () -> Unit,
+    diameter: Dp = 168.dp,
+) {
     val motion = LocalDetourMotion.current
     val running = status.isRunning
     val busy = status.phase == KernelState.Phase.STARTING
@@ -751,9 +834,13 @@ private fun PowerControl(status: KernelState.Status, onToggle: () -> Unit) {
     )
 
     Box(contentAlignment = Alignment.Center) {
+        // The halo and the glyph are ratios of the circle, not independent sizes:
+        // 192/168 and 64/168 are what the screen was designed at, and keeping them
+        // proportional is what lets the control shrink on a narrow window without
+        // turning into a ring with a dot in it.
         Box(
             modifier = Modifier
-                .size(192.dp)
+                .size(diameter * 8f / 7f)
                 .background(halo, CircleShape),
         )
         Surface(
@@ -763,7 +850,7 @@ private fun PowerControl(status: KernelState.Status, onToggle: () -> Unit) {
             color = container,
             contentColor = content,
             modifier = Modifier
-                .size(168.dp)
+                .size(diameter)
                 .scale(scale),
         ) {
             Box(contentAlignment = Alignment.Center) {
@@ -784,7 +871,7 @@ private fun PowerControl(status: KernelState.Status, onToggle: () -> Unit) {
                         contentDescription = stringResource(
                             if (running) R.string.home_action_disconnect else R.string.home_action_connect,
                         ),
-                        modifier = Modifier.size(64.dp),
+                        modifier = Modifier.size(diameter * 64f / 168f),
                     )
                 }
             }
