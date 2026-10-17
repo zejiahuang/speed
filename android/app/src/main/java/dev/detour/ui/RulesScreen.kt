@@ -66,7 +66,6 @@ import dev.detour.ui.components.DetourAlertDialog
 import dev.detour.ui.components.DetourCard
 import dev.detour.ui.components.DetourCardStyle
 import dev.detour.ui.components.DetourEmptyState
-import dev.detour.ui.components.DetourFilterChip
 import dev.detour.ui.components.DetourPageHeader
 import dev.detour.ui.components.DetourSearchField
 import dev.detour.ui.components.DetourActionRow
@@ -74,8 +73,6 @@ import dev.detour.ui.components.DetourSwitch
 import dev.detour.ui.components.LocalBottomBarClearance
 import dev.detour.ui.components.plusBarClearance
 import dev.detour.ui.theme.LocalDetourSpacing
-import java.text.DateFormat
-import java.util.Date
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -221,10 +218,6 @@ fun RulesScreen() {
     // have added is simply absent, which looks exactly like the picker having
     // done nothing.
     var importError by remember { mutableStateOf<String?>(null) }
-    // Whether the list is narrowed to rows with a bad verdict. Off by default:
-    // the page's job is to show the rule set, and this filter is a lens on it,
-    // not its resting state.
-    var problemsOnly by remember { mutableStateOf(false) }
     // Set while a "disable every group" is waiting on a confirmation, holding the
     // exact key set the confirm button will write. The set is captured rather
     // than recomputed on confirm so that the dialog and the action can never
@@ -249,13 +242,6 @@ fun RulesScreen() {
         // ordinary path, which is one open, one read.
         if (!status.isRunning) {
             ipStats = null
-            // And drop the problem filter with it. Without verdict data the
-            // filter has nothing to judge by, and leaving it lit would either
-            // empty the list (a lie: nothing is known to be broken) or silently
-            // do nothing (a lie of a different shape). Clearing it means the
-            // chip is unselected exactly when it is disabled, so the two never
-            // contradict each other on screen.
-            problemsOnly = false
             return@LaunchedEffect
         }
         // Off the main thread on purpose: this is a JNI call that takes the
@@ -403,38 +389,12 @@ fun RulesScreen() {
 
     Column(Modifier.fillMaxSize()) {
         val current = index
-        // The two caption lines the header used to stack (enabled counts, then
-        // cache freshness) are folded into one subtitle joined by " · ". The
-        // header component gives a subtitle one line and one type scale, and
-        // that is a deliberate simplification: two near-identical grey lines
-        // under a title read as noise, and neither is worth a second row. The
-        // enabled count keeps the more prominent `labelMedium` because it is the
-        // line a person acts on; the cache timestamp rides along in the same
-        // line rather than being dropped, since "is this stale" is the first
-        // question anyone asks of a cached document.
-        val subtitle = current?.let { idx ->
-            val enabledSummary = stringResource(
-                R.string.rules_enabled_summary,
-                idx.groups.size - disabled.count { it.startsWith("g:") },
-                idx.groups.size,
-            )
-            val cache = RulesRepository.cacheFile(context)
-            val cacheInfo = if (cache.isFile) {
-                stringResource(
-                    R.string.rules_cache_info,
-                    cache.length() / 1024,
-                    DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
-                        .format(Date(cache.lastModified())),
-                )
-            } else {
-                null
-            }
-            listOfNotNull(enabledSummary, cacheInfo).joinToString(" · ")
-        }
-
+        // No subtitle (removed on request, 2026-10-17). It carried two facts: how
+        // many groups are enabled, and how old the cached document is. The first is
+        // already visible on every group switch below; the second is written to the
+        // log as a line each time the document is refreshed.
         DetourPageHeader(
             title = stringResource(R.string.rules_title),
-            subtitle = subtitle,
             actions = {
                 IconButton(
                     onClick = {
@@ -522,36 +482,17 @@ fun RulesScreen() {
             },
         )
 
-        // Search and the verdict lens share one row. Both narrow the tree that is
-        // already loaded; the source picker below swaps the document itself. Keeping
-        // those two kinds apart is what the old layout got right — putting each on a
-        // line of its own is what it got wrong.
-        Row(
+        // The search field owns the row now that the verdict chip is gone. It
+        // carries the page gutter itself, the way `DetourSearchField` expects the
+        // caller to (the component deliberately adds none of its own).
+        DetourSearchField(
+            value = query,
+            onValueChange = { query = it },
+            placeholder = stringResource(R.string.rules_search_hint),
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = spacing.screenH),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(spacing.sm),
-        ) {
-            DetourSearchField(
-                value = query,
-                onValueChange = { query = it },
-                placeholder = stringResource(R.string.rules_search_hint),
-                modifier = Modifier.weight(1f),
-            )
-            // One toggle instead of the 全部 / 只看有问题的 pair: "off" already means
-            // 全部, and the second chip was spending width to say so.
-            DetourFilterChip(
-                selected = problemsOnly,
-                onClick = { problemsOnly = !problemsOnly },
-                label = stringResource(R.string.rules_filter_problems),
-                // Disabled without verdict data: the filter's whole input is the
-                // kernel's verdict tables, so an enabled chip could only ever empty
-                // the list — a screen saying "no problems" when the truth is "no
-                // idea". The state is also cleared when the tunnel stops.
-                enabled = ipStats != null,
-            )
-        }
+        )
 
         Spacer(Modifier.height(spacing.sm))
 
@@ -672,60 +613,15 @@ fun RulesScreen() {
             current?.rows(query, expandedGroups, expandedDomains).orEmpty()
         }
 
-        // The verdict filter is only meaningful while there is a snapshot to read.
-        // Gating it here rather than only on the chip keeps the list honest if the
-        // two ever fall out of step.
-        val problemsOnlyActive = problemsOnly && ipStats != null
-        val visible = remember(searched, problemsOnlyActive, ipStats) {
-            val stats = ipStats
-            if (!problemsOnlyActive || stats == null) {
-                searched
-            } else {
-                // Filter the flattened rows, keeping a group if any of the
-                // domains it still claims holds a bad address. `rows` already
-                // narrowed a group's `domains` to the search hits, so a group
-                // kept here is kept for a reason the user can see once expanded —
-                // and a group that is collapsed still survives on the strength of
-                // its (unexpanded) domains, which is what lets the filter point
-                // at a problem without opening the whole tree.
-                searched.filter { node ->
-                    when (node) {
-                        is RuleIndex.Node.Group -> node.domains.any { domain ->
-                            domain.addresses.any { address ->
-                                stats.isProblem(domain.domain, address)
-                            }
-                        }
-                        is RuleIndex.Node.Domain -> node.addresses.any { address ->
-                            stats.isProblem(node.domain, address)
-                        }
-                        is RuleIndex.Node.Address -> stats.isProblem(node.domain, node.address)
-                    }
-                }
-            }
-        }
-
-        // An empty list is not one state but two, and they must not share a
-        // message. "没有匹配的条目" is about the query; the verdict copy is about
-        // the filter hiding rows the user already has. Telling someone to change
-        // their source when the answer is "turn the filter off" sends them to the
-        // wrong screen entirely — which is why `rules_empty_detail` ("换一个数据源…")
-        // is deliberately *not* shown on the search path: that hint is only true
-        // when there is no document at all (the `current == null` branch above),
-        // not when a query simply missed. Search is tested first because it runs
-        // first: if the query matched nothing, the filter never had anything to
-        // hide.
+        // One list, one reason it can be empty: the query. `rules_empty_detail`
+        // ("换一个数据源…") is deliberately not shown here — that hint is only true
+        // when there is no document at all (the `current == null` branch above).
+        val visible = searched
         if (visible.isEmpty()) {
-            if (searched.isEmpty()) {
-                DetourEmptyState(
-                    title = stringResource(R.string.rules_empty),
-                    detail = stringResource(R.string.rules_empty_search_detail),
-                )
-            } else {
-                DetourEmptyState(
-                    title = stringResource(R.string.rules_filter_problems_empty),
-                    detail = stringResource(R.string.rules_filter_problems_empty_detail),
-                )
-            }
+            DetourEmptyState(
+                title = stringResource(R.string.rules_empty),
+                detail = stringResource(R.string.rules_empty_search_detail),
+            )
             return@Column
         }
 

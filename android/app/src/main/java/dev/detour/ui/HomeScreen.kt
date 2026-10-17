@@ -79,6 +79,19 @@ import kotlinx.coroutines.launch
 import java.io.File
 
 /**
+ * 首页的两张明细卡（本次会话 / 规则状态）是否显示。
+ *
+ * 用户要求「先隐藏」（2026-10-17）：首页只留连接本身 —— 电源控件、状态、实时
+ * 上下行。代码保留而不是删掉，是因为这是「先隐藏」：改回 true 即恢复，不必回滚
+ * git 历史。
+ *
+ * 代价要说清楚：**会话流量总计**与**缓存有多旧**在别的页面没有等价展示
+ * （规则源在 设置 → 数据源 里能选，但看不到当前缓存文件的时间戳）。要查这两项
+ * 时，把这个常量改回 true 再看，而不是去别的页面找。
+ */
+private const val SHOW_HOME_DETAIL_CARDS = false
+
+/**
  * The hero screen: one control, and what it is doing.
  *
  * The information architecture is a single column on purpose. A tunnel is a
@@ -422,85 +435,87 @@ fun HomeScreen() {
             ProxyAddressCard(status.proxyPort)
         }
 
-        Spacer(Modifier.height(spacing.md))
+        if (SHOW_HOME_DETAIL_CARDS) {
+            Spacer(Modifier.height(spacing.md))
 
-        // The "rules hit" number has to come from whichever subsystem is actually
-        // running. Only VPN mode has the tunnel that `stats.dnsAnsweredLocally`
-        // describes; root mode and proxy mode have no tunnel at all, so that field
-        // is structurally zero there and reading it would print "0 rules hit"
-        // beside a byte total that is moving.
-        //
-        // Root mode is served by the TLS proxy, and only names the hosts rewrite
-        // covers ever reach it — so there `served` really is the rule-hit count.
-        // Proxy mode is not: it relays a domain no rule mentions through the
-        // system resolver rather than refusing it, so `served` counts everything
-        // the client sent and `matched` is the honest numerator.
-        val ruleHits = when (status.mode) {
-            KernelState.Mode.ROOT -> mitmStats?.served ?: 0L
-            KernelState.Mode.PROXY -> proxyStats?.matched ?: 0L
-            KernelState.Mode.VPN -> stats.dnsAnsweredLocally
-        }
-        SessionCard(stats, ruleHits, status.mode, developerView)
-
-        // Which rules are in force and how old they are. The home screen used to
-        // say nothing about the rule set at all, so "am I running last week's
-        // blocklist" could only be answered by opening another screen. Read from
-        // `Prefs`/the cache file rather than plumbed through the kernel: it is
-        // local configuration, not tunnel state.
-        //
-        // `forMode`, not `selectedSource`: in root mode the two differ, and this
-        // card answers "which document is running", so showing the user's stored
-        // choice there would name a document that is not loaded.
-        Spacer(Modifier.height(spacing.md))
-        val source = RuleSource.forMode(status.mode, prefs.selectedSource)
-        val sourceLabel = source.labelRes
-            ?.let { stringResource(it) }
-            ?: source.label
-        val cache = RulesRepository.cacheFile(context)
-        // The age label changes at minute granularity, so it gets its own slow
-        // clock rather than riding the 500 ms stats tick. The fast tick is gated
-        // on the tunnel running; this card is always visible, and with the tunnel
-        // off the fast tick never fires — which would freeze the age at whatever
-        // it read the last time anything else happened to recompose. A 30 s
-        // period keeps the text right in every state at 1/60th the cost of the
-        // fast tick.
-        var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-        LaunchedEffect(Unit) {
-            while (true) {
-                delay(30_000L)
-                now = System.currentTimeMillis()
+            // The "rules hit" number has to come from whichever subsystem is actually
+            // running. Only VPN mode has the tunnel that `stats.dnsAnsweredLocally`
+            // describes; root mode and proxy mode have no tunnel at all, so that field
+            // is structurally zero there and reading it would print "0 rules hit"
+            // beside a byte total that is moving.
+            //
+            // Root mode is served by the TLS proxy, and only names the hosts rewrite
+            // covers ever reach it — so there `served` really is the rule-hit count.
+            // Proxy mode is not: it relays a domain no rule mentions through the
+            // system resolver rather than refusing it, so `served` counts everything
+            // the client sent and `matched` is the honest numerator.
+            val ruleHits = when (status.mode) {
+                KernelState.Mode.ROOT -> mitmStats?.served ?: 0L
+                KernelState.Mode.PROXY -> proxyStats?.matched ?: 0L
+                KernelState.Mode.VPN -> stats.dnsAnsweredLocally
             }
-        }
-        // `formatAge` is `@Composable`, so the whole value has to be produced
-        // here in the composable body — it cannot be built inside a plain lambda.
-        val cacheValue = if (!cache.isFile) {
-            stringResource(R.string.home_rule_cache_none)
-        } else {
-            // Fresh means younger than one refresh interval. `refreshHours` is the
-            // user's own "how often should this update" answer, so it is the right
-            // yardstick for "is this stale" rather than a number picked here.
-            // The comparison and the age below read the *same* `now`: two separate
-            // clock reads could straddle the boundary and print "已过期" beside
-            // "刚刚" in the same row.
-            val freshRes = if (now - cache.lastModified() <
-                prefs.refreshHours * 3_600_000L
-            ) {
-                R.string.home_rule_cache_fresh
+            SessionCard(stats, ruleHits, status.mode, developerView)
+
+            // Which rules are in force and how old they are. The home screen used to
+            // say nothing about the rule set at all, so "am I running last week's
+            // blocklist" could only be answered by opening another screen. Read from
+            // `Prefs`/the cache file rather than plumbed through the kernel: it is
+            // local configuration, not tunnel state.
+            //
+            // `forMode`, not `selectedSource`: in root mode the two differ, and this
+            // card answers "which document is running", so showing the user's stored
+            // choice there would name a document that is not loaded.
+            Spacer(Modifier.height(spacing.md))
+            val source = RuleSource.forMode(status.mode, prefs.selectedSource)
+            val sourceLabel = source.labelRes
+                ?.let { stringResource(it) }
+                ?: source.label
+            val cache = RulesRepository.cacheFile(context)
+            // The age label changes at minute granularity, so it gets its own slow
+            // clock rather than riding the 500 ms stats tick. The fast tick is gated
+            // on the tunnel running; this card is always visible, and with the tunnel
+            // off the fast tick never fires — which would freeze the age at whatever
+            // it read the last time anything else happened to recompose. A 30 s
+            // period keeps the text right in every state at 1/60th the cost of the
+            // fast tick.
+            var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+            LaunchedEffect(Unit) {
+                while (true) {
+                    delay(30_000L)
+                    now = System.currentTimeMillis()
+                }
+            }
+            // `formatAge` is `@Composable`, so the whole value has to be produced
+            // here in the composable body — it cannot be built inside a plain lambda.
+            val cacheValue = if (!cache.isFile) {
+                stringResource(R.string.home_rule_cache_none)
             } else {
-                R.string.home_rule_cache_stale
+                // Fresh means younger than one refresh interval. `refreshHours` is the
+                // user's own "how often should this update" answer, so it is the right
+                // yardstick for "is this stale" rather than a number picked here.
+                // The comparison and the age below read the *same* `now`: two separate
+                // clock reads could straddle the boundary and print "已过期" beside
+                // "刚刚" in the same row.
+                val freshRes = if (now - cache.lastModified() <
+                    prefs.refreshHours * 3_600_000L
+                ) {
+                    R.string.home_rule_cache_fresh
+                } else {
+                    R.string.home_rule_cache_stale
+                }
+                // The " · " is punctuation, not prose, so it is built in Kotlin and
+                // not in a string resource that would then need translating.
+                "${stringResource(freshRes)} · " + stringResource(
+                    R.string.home_rule_cache_detail,
+                    formatBytes(cache.length()),
+                    formatAge(cache.lastModified(), now),
+                )
             }
-            // The " · " is punctuation, not prose, so it is built in Kotlin and
-            // not in a string resource that would then need translating.
-            "${stringResource(freshRes)} · " + stringResource(
-                R.string.home_rule_cache_detail,
-                formatBytes(cache.length()),
-                formatAge(cache.lastModified(), now),
-            )
-        }
-        DetourSectionCard(title = stringResource(R.string.home_rule_card_title)) {
-            DetourKeyValueRow(stringResource(R.string.home_rule_source_label), sourceLabel)
-            DetourDivider()
-            DetourKeyValueRow(stringResource(R.string.home_rule_cache_label), cacheValue)
+            DetourSectionCard(title = stringResource(R.string.home_rule_card_title)) {
+                DetourKeyValueRow(stringResource(R.string.home_rule_source_label), sourceLabel)
+                DetourDivider()
+                DetourKeyValueRow(stringResource(R.string.home_rule_cache_label), cacheValue)
+            }
         }
 
         // Only while the tunnel is up, and only in VPN mode: these counters are a

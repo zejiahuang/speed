@@ -68,7 +68,6 @@
     <!-- Rules -->
     <string name="rules_title">Rules</string>
     <string name="rules_search_hint">Search domains, addresses or groups</string>
-    <string name="rules_enabled_summary">%1$d of %2$d groups enabled</string>
     <string name="rules_refresh">Refresh rules</string>
     <string name="rules_source">Source</string>
     <!-- The rule sources are a list now (see RuleSource), not a fixed pair of
@@ -126,7 +125,6 @@
     <string name="rules_disabled_hint">Rules that are off never reach the kernel</string>
     <string name="rules_enable_all">Enable all</string>
     <string name="rules_disable_all">Disable all</string>
-    <string name="rules_cache_info">Cached %1$d KiB · %2$s</string>
     <string name="rules_switches_applied">%1$d switches applied</string>
 
     <!-- Logs -->
@@ -511,7 +509,6 @@
     <!-- The page's most practical question is "why does this one site not
          work", which is answered by the addresses the kernel has already judged
          bad. This filter brings them to the top level. -->
-    <string name="rules_filter_problems">Problems only</string>
     <!-- The verdict columns are a snapshot taken while the tunnel runs, so they
          are absent when it is down. A placeholder says "not yet" instead of
          leaving the user to read the absence as "this does not exist". -->
@@ -531,8 +528,6 @@
     <string name="rules_group_enabled">%1$d/%2$d enabled</string>
     <string name="rules_load_failed">Could not load the rules</string>
     <string name="rules_load_failed_detail">%1$s. Use refresh at the top right to retry</string>
-    <string name="rules_filter_problems_empty">No entries with an abnormal verdict</string>
-    <string name="rules_filter_problems_empty_detail">Only judged addresses count; unjudged and in-flight ones are not abnormal</string>
 
     <!-- The third empty state: a search that matched nothing. It had no detail
          line at all, which left the screen as one grey sentence with no way

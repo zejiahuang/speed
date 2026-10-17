@@ -77,7 +77,6 @@ EN: dict[str, str] = {
     # Rules
     "rules_title": "Rules",
     "rules_search_hint": "Search domains, addresses or groups",
-    "rules_enabled_summary": "%1$d of %2$d groups enabled",
     "rules_refresh": "Refresh rules",
     "rules_source": "Source",
     "rules_source_github_hosts": "github-hosts",
@@ -107,7 +106,6 @@ EN: dict[str, str] = {
     "rules_disabled_hint": "Rules that are off never reach the kernel",
     "rules_enable_all": "Enable all",
     "rules_disable_all": "Disable all",
-    "rules_cache_info": "Cached %1$d KiB · %2$s",
     "rules_switches_applied": "%1$d switches applied",
 
     # Logs
@@ -377,7 +375,6 @@ EN: dict[str, str] = {
     "logs_paused_empty_detail": "Resume to show new entries",
 
     # Rules, third batch
-    "rules_filter_problems": "Problems only",
     "rules_verdict_offline": "Connect to see address verdicts",
     "rules_empty_detail": "Switch to another source, or add a custom one in settings",
     "rules_menu_more": "More actions",
@@ -385,8 +382,6 @@ EN: dict[str, str] = {
     "rules_group_enabled": "%1$d/%2$d enabled",
     "rules_load_failed": "Could not load the rules",
     "rules_load_failed_detail": "%1$s. Use refresh at the top right to retry",
-    "rules_filter_problems_empty": "No entries with an abnormal verdict",
-    "rules_filter_problems_empty_detail": "Only judged addresses count; unjudged and in-flight ones are not abnormal",
     "rules_empty_search_detail": "Try a different keyword, or clear the search box to see every entry",
 
     # Data portability
