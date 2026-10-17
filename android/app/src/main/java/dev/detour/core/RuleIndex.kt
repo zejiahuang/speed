@@ -45,7 +45,17 @@ class RuleIndex private constructor(
          * `LazyColumn` treats a repeated key as a programming error and throws,
          * so the search that surfaced this row is what would crash the screen.
          */
-        data class Address(val address: String, val domain: String) : Node {
+        /**
+         * @param orphan true when this row was surfaced by a search rather than by
+         * expanding its domain. Such a row has no parent row above it, so the domain
+         * has to be drawn on the row itself — the search answer is "which domain is
+         * this address for", and a bare IP does not answer it.
+         */
+        data class Address(
+            val address: String,
+            val domain: String,
+            val orphan: Boolean = false,
+        ) : Node {
             override val key: String get() = "address:$domain:$address"
         }
     }
@@ -126,7 +136,7 @@ class RuleIndex private constructor(
             val addressHits = group.domains.flatMap { domain ->
                 domain.addresses
                     .filter { it.contains(needle) }
-                    .map { Node.Address(it, domain.domain) }
+                    .map { Node.Address(it, domain.domain, orphan = true) }
             }
             if (addressHits.isNotEmpty()) result += addressHits
         }

@@ -216,12 +216,30 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.foundation:foundation")
 
-    // Version from the BOM, not pinned. The BOM resolves this to material3
-    // 1.4.0. In 1.4.0 the expressive theme API is `internal`, so the app builds
-    // its theme on the standard `MaterialTheme`; pinning a different version
-    // would only add a value that can drift from the BOM for no benefit.
-    implementation("androidx.compose.material3:material3")
-    implementation("androidx.compose.material3:material3-window-size-class")
+    // **Pinned to `1.5.0-alpha18`, and that version is chosen rather than drifted
+    // into.** The BOM resolves material3 to `1.4.0`, where `MaterialExpressiveTheme`,
+    // `MotionScheme` and the `ExperimentalMaterial3ExpressiveApi` marker are all
+    // `internal` — the expressive API is in the jar but the compiler refuses every
+    // reference to it. The first line where it is public is `1.5.0`, and that line
+    // has a hard edge in the middle:
+    //
+    // * `alpha01`–`alpha18` declare `minCompileSdk=35` and drag Compose
+    //   `1.11.0-beta02` (also 35) — this module compiles against 36 with AGP
+    //   8.13.2, so the whole closure fits.
+    // * `alpha19` and later, `beta01` included, declare `minCompileSdk=37` **and**
+    //   `minAndroidGradlePluginVersion=9.1.0` — out of reach without moving to
+    //   AGP 9, which is the same ceiling that pins `backdrop` to 1.0.6.
+    //
+    // So `alpha18` is the newest release whose closure fits *and* whose expressive
+    // API is public; everything between it and stable is unreachable rather than
+    // merely unchosen.
+    //
+    // The cost is that this is an alpha, and material3 is not a leaf: every `Card`,
+    // `TextField`, `FilterChip` and `SegmentedButton` in the app comes from it, so a
+    // bump can move metrics that were previously measured. Anything that depends on
+    // those numbers has to be re-measured on device, not assumed.
+    implementation("androidx.compose.material3:material3:1.5.0-alpha18")
+    implementation("androidx.compose.material3:material3-window-size-class:1.5.0-alpha18")
 
     // The backdrop sampler the frosted glass draws with. Compose has no built-in
     // way to read the pixels *behind* a composable — `Modifier.blur` blurs the

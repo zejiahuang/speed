@@ -10,6 +10,7 @@ import dev.detour.core.Disclaimer
 import dev.detour.core.Kernel
 import dev.detour.core.KernelState
 import dev.detour.core.LogArchive
+import dev.detour.core.Optimise
 import dev.detour.core.Prefs
 import dev.detour.core.RootHelper
 import dev.detour.core.RulesRepository
@@ -146,6 +147,16 @@ class DetourApp : Application() {
                     )
                 }
         }
+
+        // One measurement a day, whatever mode is in force.
+        //
+        // After the prefetch on purpose: the pass measures the candidates in the
+        // document the prefetch just put on disk, and running it first would make it
+        // parse a document that is about to be replaced. `start` returns as soon as
+        // the pass is launched, so this does not hold the launch path either way.
+        //
+        // The gate and the root-mode caveat are in [Optimise.maybeRunDaily].
+        scope.launch { Optimise.maybeRunDaily(this@DetourApp) }
 
         // One silent update check at startup.
         //

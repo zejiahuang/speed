@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -23,6 +24,9 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -197,6 +201,13 @@ fun RulesScreen() {
 
     var index by remember { mutableStateOf<RuleIndex?>(null) }
     var loading by remember { mutableStateOf(true) }
+    // Why the last parse failed, when it did. Kept apart from `index == null` so the
+    // page can tell "there is no document" from "the document could not be read":
+    // they used to share one empty state, which told the user to change source when
+    // the real answer was "the fetch failed".
+    var loadError by remember { mutableStateOf<String?>(null) }
+    var menuOpen by remember { mutableStateOf(false) }
+    var sourceMenuOpen by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
     // Two levels of expansion, because the tree has two levels below the group:
     // a group opens onto domains, a domain onto addresses. Held as sets of keys
@@ -273,9 +284,11 @@ fun RulesScreen() {
     val loadIndex: () -> Unit = {
         scope.launch {
             loading = true
+            loadError = null
             index = withContext(Dispatchers.IO) {
                 runCatching { RuleIndex.parse(context) }
                     .onFailure {
+                        loadError = it.message ?: context.getString(R.string.common_unknown)
                         KernelState.log(
                             context,
                             KernelState.LogEntry.Level.ERROR,
@@ -343,6 +356,24 @@ fun RulesScreen() {
         DetourVpnService.reloadRulesIfRunning()
     }
 
+    /**
+     * The group switch is a master, not another row.
+     *
+     * On restores the whole group — its own key *and* every child key — because a
+     * switch that says "on" has to mean the group routes. Off writes only the group
+     * key: the per-domain choices underneath are kept, so turning the group back on
+     * is one tap and not a re-do of the tree.
+     *
+     * The child keys are passed in because only the row knows its own tree, and the
+     * one write is `replaceDisabledRules` rather than N calls to `setRuleEnabled`:
+     * each of those is a store write, and N of them would be N reloads.
+     */
+    val applyGroupSwitch: (String, Set<String>, Boolean) -> Unit = { key, children, on ->
+        val next = if (on) prefs.disabledRules - key - children else prefs.disabledRules + key
+        prefs.replaceDisabledRules(next)
+        DetourVpnService.reloadRulesIfRunning()
+    }
+
     // The one write behind "全部关闭", shared by the immediate path and the
     // confirmed one so the two can never drift apart.
     val disableAllGroups: (Set<String>) -> Unit = { groups ->
@@ -352,9 +383,11 @@ fun RulesScreen() {
 
     LaunchedEffect(Unit) {
         loading = true
+        loadError = null
         index = withContext(Dispatchers.IO) {
             runCatching { RuleIndex.parse(context) }
                 .onFailure {
+                    loadError = it.message ?: context.getString(R.string.common_unknown)
                     KernelState.log(
                         context,
                         KernelState.LogEntry.Level.ERROR,
@@ -403,47 +436,6 @@ fun RulesScreen() {
             title = stringResource(R.string.rules_title),
             subtitle = subtitle,
             actions = {
-                // Switching 21 groups on one at a time is the kind of thing that
-                // makes a settings screen feel hostile. One action puts every
-                // group back, which is also the state most people want after
-                // experimenting.
-                //
-                // Only the disabling direction confirms. Re-enabling is the safe
-                // direction — it cannot lose anyone a route they wanted — so it
-                // stays immediate. Disabling confirms whenever it would actually
-                // switch off at least one group, no matter how few: this used to
-                // run silently below a threshold of five, which made it a
-                // destructive action with no confirmation precisely when it was
-                // hardest to notice. The page shows a switch per group and no
-                // total, so nothing on screen says how much a silent "全部关闭"
-                // just stopped routing; the dialog is the only place that fact is
-                // ever stated, and it now always gets the chance.
-                val anyDisabled = disabled.any { it.startsWith("g:") }
-                IconButton(
-                    onClick = {
-                        val groups = index?.groups.orEmpty().map { "g:${it.name}" }.toSet()
-                        when {
-                            anyDisabled -> {
-                                prefs.replaceDisabledRules(emptySet())
-                                DetourVpnService.reloadRulesIfRunning()
-                            }
-                            // isNotEmpty(), not a size threshold: one group is
-                            // still a real change to what the kernel routes.
-                            groups.isNotEmpty() -> pendingDisableAll = groups
-                            // No document, so nothing to disable — a no-op rather
-                            // than a dialog that would confirm turning off zero
-                            // groups.
-                            else -> Unit
-                        }
-                    },
-                ) {
-                    Icon(
-                        if (anyDisabled) Icons.Filled.Check else Icons.Filled.Clear,
-                        contentDescription = stringResource(
-                            if (anyDisabled) R.string.rules_enable_all else R.string.rules_disable_all,
-                        ),
-                    )
-                }
                 IconButton(
                     onClick = {
                         scope.launch {
@@ -460,45 +452,127 @@ fun RulesScreen() {
                         contentDescription = stringResource(R.string.rules_refresh),
                     )
                 }
+                // Everything that is not "look at the tree" moves in here. The two
+                // that were worst as icons are the ones that mattered most: 全部关闭
+                // reversed its own meaning in place (Clear ↔ Check at the same
+                // coordinate, no label), and the import/add pair both had to be a
+                // plus, which made them indistinguishable on screen.
+                Box {
+                    IconButton(onClick = { menuOpen = true }) {
+                        Icon(
+                            Icons.Filled.MoreVert,
+                            contentDescription = stringResource(R.string.rules_menu_more),
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = menuOpen,
+                        onDismissRequest = { menuOpen = false },
+                    ) {
+                        val anyDisabled = disabled.any { it.startsWith("g:") }
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    stringResource(
+                                        if (anyDisabled) R.string.rules_enable_all
+                                        else R.string.rules_disable_all,
+                                    ),
+                                )
+                            },
+                            onClick = {
+                                menuOpen = false
+                                val groups = index?.groups.orEmpty()
+                                    .map { "g:${it.name}" }.toSet()
+                                when {
+                                    // Re-enabling is the safe direction: it cannot
+                                    // lose anyone a route they wanted.
+                                    anyDisabled -> {
+                                        prefs.replaceDisabledRules(emptySet())
+                                        DetourVpnService.reloadRulesIfRunning()
+                                    }
+                                    // isNotEmpty(), not a size threshold: one group
+                                    // is still a real change to what the kernel
+                                    // routes, and the dialog is the only place that
+                                    // fact is ever stated.
+                                    groups.isNotEmpty() -> pendingDisableAll = groups
+                                    else -> Unit
+                                }
+                            },
+                        )
+                        // Root mode pins the document, so neither of these can take
+                        // effect there — and a menu item that cannot act is worse
+                        // than an absent one.
+                        if (status.mode != KernelState.Mode.ROOT) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.rules_import_local)) },
+                                onClick = {
+                                    menuOpen = false
+                                    rulesImportPicker.launch(arrayOf("*/*"))
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.rules_add_source)) },
+                                onClick = {
+                                    menuOpen = false
+                                    showAddSource = true
+                                },
+                            )
+                        }
+                    }
+                }
             },
         )
 
-        DetourSearchField(
-            value = query,
-            onValueChange = { query = it },
-            placeholder = stringResource(R.string.rules_search_hint),
-            // The field carries no horizontal padding of its own; the page's
-            // gutter comes from here, the same 20dp the header and the list use.
-            modifier = Modifier.padding(horizontal = spacing.screenH),
-        )
-
-        Spacer(Modifier.height(spacing.sm))
-
+        // Search and the verdict lens share one row. Both narrow the tree that is
+        // already loaded; the source picker below swaps the document itself. Keeping
+        // those two kinds apart is what the old layout got right — putting each on a
+        // line of its own is what it got wrong.
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = spacing.screenH, end = spacing.sm),
+                .padding(horizontal = spacing.screenH),
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(spacing.sm),
         ) {
-            // One chip per source, generated from the stored list. The old row was
-            // three hard-coded values, two of which named the same document, which
-            // is how one document came to be displayed as two chips.
-            //
-            // The chips scroll and the add button does not. A source list is data
-            // now, so it can grow past the width of the screen, and a plain row
-            // would push the button that adds sources off the edge — the control
-            // that fixes an over-long list would be the first casualty of one.
-            //
-            // **Root mode has no chips**, and the reason is stronger here than on
-            // the settings screen: this row is the page's own answer to "which
-            // rules am I looking at", so a chip that cannot change the document
-            // would not merely fail to act, it would make the list below
-            // misattributed. What is drawn instead is the source that is in force
-            // — the same value the settings screen states — and no add or import
-            // entry point, since neither can take effect in this mode either.
-            if (status.mode == KernelState.Mode.ROOT) {
-                val pinned = RuleSource.forMode(status.mode, prefs.selectedSource)
-                Column(Modifier.weight(1f)) {
+            DetourSearchField(
+                value = query,
+                onValueChange = { query = it },
+                placeholder = stringResource(R.string.rules_search_hint),
+                modifier = Modifier.weight(1f),
+            )
+            // One toggle instead of the 全部 / 只看有问题的 pair: "off" already means
+            // 全部, and the second chip was spending width to say so.
+            DetourFilterChip(
+                selected = problemsOnly,
+                onClick = { problemsOnly = !problemsOnly },
+                label = stringResource(R.string.rules_filter_problems),
+                // Disabled without verdict data: the filter's whole input is the
+                // kernel's verdict tables, so an enabled chip could only ever empty
+                // the list — a screen saying "no problems" when the truth is "no
+                // idea". The state is also cleared when the tunnel stops.
+                enabled = ipStats != null,
+            )
+        }
+
+        Spacer(Modifier.height(spacing.sm))
+
+        // The document picker: one control instead of a scrolling chip row plus two
+        // buttons. The source list is data now and can grow, and a row of chips that
+        // pushes the control that fixes it off the edge is the layout this replaces.
+        if (status.mode == KernelState.Mode.ROOT) {
+            val pinned = RuleSource.forMode(status.mode, prefs.selectedSource)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = spacing.screenH, vertical = spacing.xs),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    stringResource(R.string.rules_source),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.width(spacing.sm))
+                Column {
                     Text(
                         pinned.labelRes?.let { stringResource(it) } ?: pinned.label,
                         style = MaterialTheme.typography.bodyMedium,
@@ -509,82 +583,85 @@ fun RulesScreen() {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-            } else {
-                Row(
-                    modifier = Modifier
-                        .weight(1f)
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(spacing.sm),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    prefs.ruleSources.forEach { source ->
-                        DetourFilterChip(
-                            selected = source.id == prefs.ruleSourceId,
-                            onClick = { selectSource(source.id) },
-                            label = source.labelRes?.let { stringResource(it) } ?: source.label,
-                            // `usable` is false for a source with neither an address
-                            // nor an imported copy — see RuleSource.usable. No
-                            // built-in is in that state since `s302` was deleted, and
-                            // an imported source never is, so this guard only ever
-                            // hides a row that could not load.
-                            enabled = source.usable,
+            }
+        } else {
+            val currentSource = prefs.ruleSources.firstOrNull { it.id == prefs.ruleSourceId }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = spacing.screenH),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    stringResource(R.string.rules_source),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.width(spacing.sm))
+                Box {
+                    TextButton(onClick = { sourceMenuOpen = true }) {
+                        Text(
+                            currentSource?.labelRes?.let { stringResource(it) }
+                                ?: currentSource?.label
+                                ?: stringResource(R.string.rules_source_none),
                         )
+                        Icon(Icons.Filled.KeyboardArrowDown, contentDescription = null)
                     }
-                }
-                // A labelled text button rather than a second icon. Two icon-only
-                // buttons would both have to be a plus: `material-icons-core` is the
-                // only icon artifact this app ships and it has no document glyph, so
-                // the pair would be indistinguishable on screen — the one place where
-                // reusing the plus, which is fine on the settings screen's labelled
-                // rows, stops being fine.
-                TextButton(onClick = { rulesImportPicker.launch(arrayOf("*/*")) }) {
-                    Text(stringResource(R.string.rules_import_local))
-                }
-                IconButton(onClick = { showAddSource = true }) {
-                    Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.rules_add_source))
+                    DropdownMenu(
+                        expanded = sourceMenuOpen,
+                        onDismissRequest = { sourceMenuOpen = false },
+                    ) {
+                        prefs.ruleSources.forEach { source ->
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        source.labelRes?.let { stringResource(it) }
+                                            ?: source.label,
+                                    )
+                                },
+                                // `usable` is false for a source with neither an
+                                // address nor an imported copy; a row that could not
+                                // load is offered disabled rather than hidden, so the
+                                // list still says it exists.
+                                enabled = source.usable,
+                                onClick = {
+                                    sourceMenuOpen = false
+                                    selectSource(source.id)
+                                },
+                                trailingIcon = if (source.id == prefs.ruleSourceId) {
+                                    { Icon(Icons.Filled.Check, contentDescription = null) }
+                                } else {
+                                    null
+                                },
+                            )
+                        }
+                    }
                 }
             }
         }
 
         Spacer(Modifier.height(spacing.sm))
 
-        // The verdict filter, on its own line below the sources: it is a lens on
-        // the *document*, while the row above chooses which document. Mixing the
-        // two into one scrollable row would read as if "只看有问题的" were another
-        // source. Left-aligned and inset to the same 20.dp gutter as everything
-        // else, so it lines up with the search field and the list.
-        Row(
-            modifier = Modifier.padding(horizontal = spacing.screenH),
-            horizontalArrangement = Arrangement.spacedBy(spacing.sm),
-        ) {
-            DetourFilterChip(
-                selected = !problemsOnly,
-                onClick = { problemsOnly = false },
-                label = stringResource(R.string.rules_filter_all),
-            )
-            DetourFilterChip(
-                selected = problemsOnly,
-                onClick = { problemsOnly = true },
-                label = stringResource(R.string.rules_filter_problems),
-                // Disabled without verdict data. The filter's whole input is the
-                // kernel's verdict tables; with no tunnel there is nothing to
-                // judge, so an enabled chip could only ever empty the list — a
-                // screen saying "no problems" when the truth is "no idea". The
-                // state is also cleared when the tunnel stops (see the ipStats
-                // effect above), so a disabled chip is never left selected.
-                enabled = ipStats != null,
-            )
-        }
-
         if (loading) {
             LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = spacing.screenH))
         }
 
         if (current == null && !loading) {
-            DetourEmptyState(
-                title = stringResource(R.string.rules_empty),
-                detail = stringResource(R.string.rules_empty_detail),
-            )
+            // Two states, two answers. The old code drew the "no document" copy for
+            // both, so a failed fetch was reported as an empty rule set and the
+            // suggested fix (change source) was the wrong one.
+            val reason = loadError
+            if (reason != null) {
+                DetourEmptyState(
+                    title = stringResource(R.string.rules_load_failed),
+                    detail = stringResource(R.string.rules_load_failed_detail, reason),
+                )
+            } else {
+                DetourEmptyState(
+                    title = stringResource(R.string.rules_empty),
+                    detail = stringResource(R.string.rules_empty_detail),
+                )
+            }
             return@Column
         }
 
@@ -675,12 +752,6 @@ fun RulesScreen() {
             // 8dp read as cards touching.
             verticalArrangement = Arrangement.spacedBy(spacing.md),
         ) {
-            // Above the tree, and it is the one control here that changes what
-            // every mode dials first: the pass reorders the very candidates the
-            // tree below shows, in the document all three modes read.
-            item(key = "optimise") {
-                OptimiseRow()
-            }
             items(visible, key = { it.key }) { node ->
                 // A Box carrying the animation, so the three row types below stay
                 // untouched. Expanding a group then fades the new rows in and
@@ -699,6 +770,7 @@ fun RulesScreen() {
                             },
                             disabled = disabled,
                             onToggle = applySwitch,
+                            onToggleGroup = applyGroupSwitch,
                             ipStats = ipStats,
                         )
                         is RuleIndex.Node.Domain -> DomainRow(
@@ -779,48 +851,14 @@ fun RulesScreen() {
 }
 
 /**
- * The CDN-optimisation row.
+ * The CDN-optimisation row lives on the settings screen now.
  *
- * On this screen because the document it measures is the one this screen draws:
- * the pass reorders the candidates the tree below shows, so the tree is where a
- * user would look to see that it did anything. It sits above the tree rather than
- * inside it because it is a property of the whole document, not of a group.
- *
- * The hint is three different sentences, and they are three different states
- * rather than one sentence with the numbers swapped: a pass in flight, a document
- * that has never been measured, and a result. "还没测过" has to be tellable from
- * "measured and nothing was reachable", and a bare count of zero cannot do it.
+ * It used to sit above this tree, on the argument that the pass reorders the
+ * candidates the tree shows. In practice that made it a control in the middle of a
+ * document browser — it is a maintenance action on the rule document, not a way to
+ * read it — and it was the only thing on this page that was not the tree. See
+ * `SettingsScreen`'s connection page.
  */
-@Composable
-private fun OptimiseRow() {
-    val context = LocalContext.current
-    val progress by Optimise.progress.collectAsState()
-    // Read from disk, so re-read when a pass ends — `progress` returning to null
-    // is that moment, and nothing else on this screen changes when it does.
-    val summary = remember(progress) { Optimise.summary(context) }
-    val measuredAt = remember(progress) { Optimise.measuredAt(context) }
-    val running = progress
-    DetourActionRow(
-        label = stringResource(R.string.rules_optimise),
-        hint = when {
-            running != null ->
-                stringResource(R.string.rules_optimise_running, running.done, running.total)
-            measuredAt == 0L -> stringResource(R.string.rules_optimise_hint)
-            else -> stringResource(
-                R.string.rules_optimise_measured,
-                formatAge(measuredAt),
-                summary.first,
-                summary.second,
-            )
-        },
-        actionLabel = stringResource(
-            if (running != null) R.string.rules_optimise_cancel else R.string.rules_optimise_action,
-        ),
-        onAction = {
-            if (running != null) Optimise.cancel() else Optimise.start(context)
-        },
-    )
-}
 
 @Composable
 private fun GroupCard(
@@ -829,10 +867,20 @@ private fun GroupCard(
     onToggleExpand: () -> Unit,
     disabled: Set<String>,
     onToggle: (String, Boolean) -> Unit,
+    onToggleGroup: (String, Set<String>, Boolean) -> Unit,
     ipStats: Kernel.IpStats?,
 ) {
     val spacing = LocalDetourSpacing.current
     val key = "g:${group.name}"
+    // The switch's truth, derived from the children rather than from the group key
+    // alone. With the key on and every domain off the group routes nothing, and a
+    // switch that still said "on" was the most misleading element on the page.
+    val childKeys = group.domains.flatMap { domain ->
+        listOf("d:${domain.domain}") + domain.addresses.map { "a:$it" }
+    }
+    val groupOn = key !in disabled
+    val enabledChildren = childKeys.count { it !in disabled }
+    val totalChildren = childKeys.size
     DetourCard(style = DetourCardStyle.Glass) {
         Row(
             modifier = Modifier
@@ -859,6 +907,25 @@ private fun GroupCard(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                // How much of the group is actually on, when it is not all of it.
+                // Only the partial states get a line: a healthy group already says
+                // so with its switch, and a line on every group would drown the one
+                // that is not.
+                if (totalChildren > 0 && enabledChildren < totalChildren) {
+                    Text(
+                        stringResource(
+                            R.string.rules_group_enabled,
+                            enabledChildren,
+                            totalChildren,
+                        ),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (groupOn) {
+                            MaterialTheme.colorScheme.tertiary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                }
                 // The group-level rollup: the one line that answers "which group
                 // is broken" without opening anything. Sits inside the same
                 // clickable Column as the title, so tapping it still expands the
@@ -890,8 +957,8 @@ private fun GroupCard(
                 }
             }
             DetourSwitch(
-                checked = key !in disabled,
-                onCheckedChange = { on -> onToggle(key, on) },
+                checked = groupOn && (totalChildren == 0 || enabledChildren > 0),
+                onCheckedChange = { on -> onToggleGroup(key, childKeys.toSet(), on) },
             )
             IconButton(onClick = onToggleExpand) {
                 Icon(
@@ -1006,6 +1073,17 @@ private fun AddressRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
+            // Only for a row that arrived from a search: with no domain row above it,
+            // the IP alone does not answer the question the search was asking.
+            if (node.orphan) {
+                Text(
+                    node.domain,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
             Text(
                 node.address,
                 style = MaterialTheme.typography.bodySmall,

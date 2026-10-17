@@ -60,6 +60,7 @@ import dev.detour.core.BuildFlags
 import dev.detour.core.DetourVpnService
 import dev.detour.core.Kernel
 import dev.detour.core.KernelState
+import dev.detour.core.Optimise
 import dev.detour.core.Prefs
 import dev.detour.core.RuleSource
 import dev.detour.core.RulesRepository
@@ -695,6 +696,24 @@ fun SettingsScreen(
                 },
             )
         }
+
+        // The CDN-optimisation row lives here now, not above the rule tree. It is a
+        // maintenance action on the document chosen just above — it measures and
+        // reorders that document's candidates — so it belongs beside the document,
+        // not inside the browser that draws it.
+        val optimiseLabel = stringResource(R.string.rules_optimise)
+        add(
+            SettingsRow(
+                SettingsPage.CONNECTION,
+                listOf(
+                    optimiseLabel,
+                    stringResource(R.string.rules_optimise_action),
+                    stringResource(R.string.rules_optimise_hint),
+                ),
+            ) {
+                OptimiseRow()
+            },
+        )
 
         val refreshLabel = stringResource(R.string.settings_refresh_interval)
         add(
@@ -2332,4 +2351,50 @@ private fun RuleSourceRow(
             }
         }
     }
+}
+
+/**
+ * The CDN-optimisation row.
+ *
+ * Moved here from the rules screen: the pass measures and reorders the candidates
+ * of the document chosen on this page, so it is a maintenance action on that
+ * document rather than a way to browse it.
+ *
+ * The hint is three different sentences, and they are three different states
+ * rather than one sentence with the numbers swapped: a pass in flight, a document
+ * that has never been measured, and a result. "还没测过" has to be tellable from
+ * "measured and nothing was reachable", and a bare count of zero cannot do it.
+ *
+ * The daily launch-time pass (`Optimise.maybeRunDaily`) writes the same file, so
+ * the timestamp shown here is whichever pass ran last.
+ */
+@Composable
+private fun OptimiseRow() {
+    val context = LocalContext.current
+    val progress by Optimise.progress.collectAsState()
+    // Read from disk, so re-read when a pass ends — `progress` returning to null
+    // is that moment, and nothing else on this screen changes when it does.
+    val summary = remember(progress) { Optimise.summary(context) }
+    val measuredAt = remember(progress) { Optimise.measuredAt(context) }
+    val running = progress
+    DetourActionRow(
+        label = stringResource(R.string.rules_optimise),
+        hint = when {
+            running != null ->
+                stringResource(R.string.rules_optimise_running, running.done, running.total)
+            measuredAt == 0L -> stringResource(R.string.rules_optimise_hint)
+            else -> stringResource(
+                R.string.rules_optimise_measured,
+                formatAge(measuredAt),
+                summary.first,
+                summary.second,
+            )
+        },
+        actionLabel = stringResource(
+            if (running != null) R.string.rules_optimise_cancel else R.string.rules_optimise_action,
+        ),
+        onAction = {
+            if (running != null) Optimise.cancel() else Optimise.start(context)
+        },
+    )
 }

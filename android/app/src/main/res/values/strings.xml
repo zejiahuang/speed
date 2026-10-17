@@ -140,7 +140,21 @@
     <string name="logs_empty">还没有日志</string>
     <string name="logs_filter_all">全部</string>
     <string name="logs_filter_session">会话</string>
-    <string name="logs_filter_error">错误</string>
+    <string name="logs_filter_warn">警告及以上</string>
+    <string name="logs_paused_subtitle">已暂停 · %1$d 行</string>
+    <string name="logs_paused_banner">已暂停，新日志不会进入列表</string>
+    <string name="logs_menu_more">更多操作</string>
+    <string name="logs_copy_view">复制当前视图（%1$d 行）</string>
+    <string name="logs_export_archive">导出全部历史</string>
+    <string name="logs_day_today">今天</string>
+    <string name="logs_day_yesterday">昨天</string>
+    <string name="log_tag_connection">连接</string>
+    <string name="log_tag_tunnel">隧道</string>
+    <string name="log_tag_dns">DNS</string>
+    <string name="log_tag_rules">规则</string>
+    <string name="log_tag_app">启动</string>
+    <string name="log_tag_kernel">内核</string>
+    <string name="log_tag_root">Root</string>
     <string name="logs_filter_dns">DNS</string>
     <string name="logs_archived_days">归档 %1$d 天</string>
     <string name="logs_no_archive">还没有归档</string>
@@ -363,7 +377,6 @@
     <!-- Logs, second batch. The archive file had no way in from the UI at all. -->
     <string name="logs_copy">复制</string>
     <string name="logs_copied">已复制</string>
-    <string name="logs_export_all">导出全部日志</string>
     <string name="logs_export_share_title">导出日志</string>
     <string name="logs_export_empty">还没有可导出的日志</string>
     <string name="logs_export_done">日志已导出</string>
@@ -495,7 +508,6 @@
     <string name="logs_paused_empty_detail">恢复后显示新日志</string>
 
     <!-- Rules. -->
-    <string name="rules_filter_all">全部</string>
     <!-- The page's most practical question is "why does this one site not
          work", which is answered by the addresses the kernel has already judged
          bad. This filter brings them to the top level. -->
@@ -514,6 +526,11 @@
          on purpose: `UNPROBED` and in-flight addresses are deliberately not
          counted as problems, so a user who sees "no problems" while most
          addresses are unjudged is not being lied to. -->
+    <string name="rules_menu_more">更多操作</string>
+    <string name="rules_source_none">未选择</string>
+    <string name="rules_group_enabled">启用 %1$d/%2$d</string>
+    <string name="rules_load_failed">规则加载失败</string>
+    <string name="rules_load_failed_detail">%1$s。点右上角刷新重试</string>
     <string name="rules_filter_problems_empty">没有判定异常的条目</string>
     <string name="rules_filter_problems_empty_detail">只统计已判定的地址；未判定与进行中的不算异常</string>
 

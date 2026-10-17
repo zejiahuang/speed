@@ -8,6 +8,8 @@ import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -21,9 +23,14 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -38,10 +45,13 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import dev.detour.R
 import dev.detour.core.KernelState
@@ -99,6 +109,11 @@ fun LogsScreen() {
     var filter by remember { mutableStateOf(Filter.ALL) }
     var query by remember { mutableStateOf("") }
     var confirmClear by remember { mutableStateOf(false) }
+    // The header's overflow menu and the filter menu. Two flags rather than one
+    // enum: they are anchored to different controls and can never be open together,
+    // but sharing a single value would also couple their dismissal behaviour.
+    var menuOpen by remember { mutableStateOf(false) }
+    var filterMenuOpen by remember { mutableStateOf(false) }
 
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -165,6 +180,12 @@ fun LogsScreen() {
         if (needle.isEmpty()) byFilter else byFilter.filter { it.matchesQuery(needle) }
     }
 
+    // Midnight of each visible line's day, computed once per list rather than per
+    // row: a `Calendar` inside `LogRow` would be an allocation per visible line on
+    // a screen that recomposes twice a second, which is exactly the cost the
+    // `todayStart` note below avoids for the same reason.
+    val dayStarts = remember(visible) { visible.map { startOfDay(it.atMillis) } }
+
     // Copies the current view, not the whole buffer. The text shape matches the
     // single-line copy above, so copying one line and copying all of them
     // produce the same line for the same entry.
@@ -189,6 +210,62 @@ fun LogsScreen() {
         ).show()
     }
 
+    // Lifted out of the header's share button when the actions moved into a menu:
+    // the body is unchanged, it just has a name now.
+    val exportLogs: () -> Unit = export@{
+        val out = java.io.File(context.cacheDir, "logs-export.txt")
+        // Prefer the archive — the full history that survives a restart — and fall
+        // back to the in-memory list, which is only what is on screen and is
+        // capped at 500 lines.
+        val archive = LogArchive.file(context)
+        val fromArchive = archive.isFile && archive.length() > 0
+        if (!fromArchive && KernelState.logs.value.isEmpty()) {
+            Toast.makeText(context, exportEmpty, Toast.LENGTH_SHORT).show()
+            return@export
+        }
+        runCatching {
+            if (fromArchive) {
+                archive.copyTo(out, overwrite = true)
+            } else {
+                // Same `atMillis<TAB>level<TAB>tag<TAB>message` shape as the archive
+                // writes, so the two sources produce interchangeable files.
+                out.writeText(
+                    KernelState.logs.value.joinToString(
+                        separator = "\n",
+                        postfix = "\n",
+                    ) {
+                        "${it.atMillis}\t${it.level.name}\t${it.tag}\t${it.message}"
+                    },
+                )
+            }
+            // A FileProvider rather than `EXTRA_TEXT`: the archive can reach 2 MB
+            // (`LogArchive.MAX_BYTES`), and an Intent extra over ~1 MB dies with
+            // `TransactionTooLargeException`. The authority must match the
+            // manifest's `${applicationId}.fileprovider`.
+            val uri = FileProvider.getUriForFile(
+                context,
+                context.packageName + ".fileprovider",
+                out,
+            )
+            val send = Intent(Intent.ACTION_SEND)
+                .setType("text/plain")
+                .putExtra(Intent.EXTRA_STREAM, uri)
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            context.startActivity(Intent.createChooser(send, exportShareTitle))
+        }.onSuccess {
+            Toast.makeText(context, exportDone, Toast.LENGTH_SHORT).show()
+        }.onFailure {
+            Toast.makeText(
+                context,
+                context.getString(
+                    R.string.logs_export_failed,
+                    it.message ?: context.getString(R.string.common_unknown),
+                ),
+                Toast.LENGTH_SHORT,
+            ).show()
+        }
+    }
+
     Column(Modifier.fillMaxSize()) {
         // The same header geometry the hand-rolled row used (start 20, end 8,
         // top 12), so the page does not move. The count in the subtitle is the
@@ -197,7 +274,16 @@ fun LogsScreen() {
         // copy-all acts on.
         DetourPageHeader(
             title = stringResource(R.string.logs_title),
-            subtitle = stringResource(R.string.logs_count, visible.size),
+            // The count is the visible one, not the buffer's: after a filter or a
+            // search, "how many lines am I looking at" is the useful number. When
+            // paused it also says so — the icon swap alone was the only signal that
+            // new lines were being withheld, and a list that has stopped moving
+            // looks exactly like a service that has stopped logging.
+            subtitle = if (paused) {
+                stringResource(R.string.logs_paused_subtitle, visible.size)
+            } else {
+                stringResource(R.string.logs_count, visible.size)
+            },
             actions = {
                 IconButton(
                     onClick = {
@@ -221,127 +307,132 @@ fun LogsScreen() {
                         )
                     }
                 }
-                // Disabled rather than hidden with nothing to copy: the button
-                // staying put keeps the four actions in the same places as the
-                // filter empties and refills the list, so the next tap lands
-                // where the last one did.
-                IconButton(onClick = copyAll, enabled = visible.isNotEmpty()) {
-                    Icon(
-                        DetourIcons.Copy,
-                        contentDescription = stringResource(R.string.logs_copy_all),
-                    )
-                }
-                // Clearing is the only action here that cannot be undone, and
-                // the header announces the icons by glyph alone. A confirmation
-                // is the cheap half of that problem — a tooltip would explain
-                // the button but not protect the data.
-                //
-                // The `error` tint is the other half, and it is the half that
-                // makes the row scannable: four glyphs at one weight read as four
-                // equals, so the one that discards data looked exactly like the
-                // one that pauses the list. Colour is not carrying the meaning on
-                // its own — the glyph is a bin and the dialog says what happens —
-                // it only stops the destructive action from being the same shape
-                // as its neighbours. It also survives the palette being dynamic:
-                // `error` is a role, not a red.
-                IconButton(onClick = { confirmClear = true }) {
-                    Icon(
-                        Icons.Filled.Delete,
-                        contentDescription = stringResource(R.string.logs_clear),
-                        tint = MaterialTheme.colorScheme.error,
-                    )
-                }
-                IconButton(
-                    onClick = {
-                        val out = java.io.File(context.cacheDir, "logs-export.txt")
-                        // Prefer the archive — the full history that survives a
-                        // restart — and fall back to the in-memory list, which is
-                        // only what is on screen and is capped at 500 lines.
-                        val archive = LogArchive.file(context)
-                        val fromArchive = archive.isFile && archive.length() > 0
-                        if (!fromArchive && KernelState.logs.value.isEmpty()) {
-                            Toast.makeText(context, exportEmpty, Toast.LENGTH_SHORT).show()
-                            return@IconButton
-                        }
-                        runCatching {
-                            if (fromArchive) {
-                                archive.copyTo(out, overwrite = true)
-                            } else {
-                                // Same `atMillis<TAB>level<TAB>tag<TAB>message` shape
-                                // as the archive writes, so the two sources produce
-                                // interchangeable files.
-                                out.writeText(
-                                    KernelState.logs.value.joinToString(
-                                        separator = "\n",
-                                        postfix = "\n",
-                                    ) {
-                                        "${it.atMillis}\t${it.level.name}\t${it.tag}\t${it.message}"
-                                    },
+                // Pause stays in the header; the other three move into a menu.
+                // Pause is the one control used *while reading*, so burying it a
+                // tap deeper would cost on the common path. The other three are
+                // occasional, and two of them are destructive or wide in scope —
+                // exactly the kind of thing a menu can label in words.
+                Box {
+                    IconButton(onClick = { menuOpen = true }) {
+                        Icon(
+                            Icons.Filled.MoreVert,
+                            contentDescription = stringResource(R.string.logs_menu_more),
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = menuOpen,
+                        onDismissRequest = { menuOpen = false },
+                    ) {
+                        // The scope is in the label, because the two copy/export
+                        // actions disagree about it: this one is the filtered view,
+                        // the next is the whole archive. Adjacent icons never said
+                        // which was which.
+                        DropdownMenuItem(
+                            text = {
+                                Text(stringResource(R.string.logs_copy_view, visible.size))
+                            },
+                            enabled = visible.isNotEmpty(),
+                            onClick = {
+                                menuOpen = false
+                                copyAll()
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.logs_export_archive)) },
+                            onClick = {
+                                menuOpen = false
+                                exportLogs()
+                            },
+                        )
+                        HorizontalDivider()
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    stringResource(R.string.logs_clear),
+                                    color = MaterialTheme.colorScheme.error,
                                 )
-                            }
-                            // A FileProvider rather than `EXTRA_TEXT`: the archive
-                            // can reach 2 MB (`LogArchive.MAX_BYTES`), and an Intent
-                            // extra over ~1 MB dies with
-                            // `TransactionTooLargeException`. The authority must
-                            // match the manifest's `${applicationId}.fileprovider`.
-                            val uri = FileProvider.getUriForFile(
-                                context,
-                                context.packageName + ".fileprovider",
-                                out,
-                            )
-                            val send = Intent(Intent.ACTION_SEND)
-                                .setType("text/plain")
-                                .putExtra(Intent.EXTRA_STREAM, uri)
-                                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                            context.startActivity(Intent.createChooser(send, exportShareTitle))
-                        }.onSuccess {
-                            Toast.makeText(context, exportDone, Toast.LENGTH_SHORT).show()
-                        }.onFailure {
-                            // The format argument is only known here, at failure
-                            // time, so `getString` rather than a captured
-                            // `stringResource`.
-                            Toast.makeText(
-                                context,
-                                context.getString(
-                                    R.string.logs_export_failed,
-                                    it.message ?: context.getString(R.string.common_unknown),
-                                ),
-                                Toast.LENGTH_SHORT,
-                            ).show()
-                        }
-                    },
-                ) {
-                    Icon(
-                        Icons.Filled.Share,
-                        contentDescription = stringResource(R.string.logs_export_all),
-                    )
+                            },
+                            onClick = {
+                                menuOpen = false
+                                confirmClear = true
+                            },
+                        )
+                    }
                 }
             },
         )
 
-        // Under the header and above the chips: the search narrows what the chips
-        // already narrowed, so it reads as the second, finer control. The shared
-        // field carries no horizontal inset of its own, so the page gutter is
-        // supplied here — see [DetourSearchField].
-        DetourSearchField(
-            value = query,
-            onValueChange = { query = it },
-            placeholder = stringResource(R.string.logs_search_hint),
-            modifier = Modifier.padding(horizontal = spacing.screenH),
-        )
+        // The paused state, said out loud. A banner rather than a tint or a badge:
+        // the consequence of pausing is that the list stops changing, and the one
+        // thing a stopped list cannot do is tell you why it stopped.
+        if (paused) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = spacing.screenH, vertical = spacing.xs),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    DetourIcons.Pause,
+                    contentDescription = null,
+                    modifier = Modifier.size(spacing.lg),
+                    tint = MaterialTheme.colorScheme.tertiary,
+                )
+                Spacer(Modifier.width(spacing.sm))
+                Text(
+                    stringResource(R.string.logs_paused_banner),
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                TextButton(onClick = { paused = false }) {
+                    Text(stringResource(R.string.logs_resume))
+                }
+            }
+        }
 
-        Spacer(Modifier.height(spacing.sm))
-
+        // Search and the filter share one row. They narrow the same list, so they
+        // are one control group; the chips used to take a row of their own for
+        // four values, and the search box below them read as a second, unrelated
+        // control rather than the finer pass over what the chips left.
         Row(
-            modifier = Modifier.padding(horizontal = spacing.screenH),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = spacing.screenH),
+            verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(spacing.sm),
         ) {
-            Filter.entries.forEach { option ->
+            DetourSearchField(
+                value = query,
+                onValueChange = { query = it },
+                placeholder = stringResource(R.string.logs_search_hint),
+                modifier = Modifier.weight(1f),
+            )
+            Box {
                 DetourFilterChip(
-                    selected = filter == option,
-                    onClick = { filter = option },
-                    label = stringResource(option.labelRes),
+                    selected = filter != Filter.ALL,
+                    onClick = { filterMenuOpen = true },
+                    label = stringResource(filter.labelRes),
                 )
+                DropdownMenu(
+                    expanded = filterMenuOpen,
+                    onDismissRequest = { filterMenuOpen = false },
+                ) {
+                    Filter.entries.forEach { option ->
+                        DropdownMenuItem(
+                            text = { Text(stringResource(option.labelRes)) },
+                            onClick = {
+                                filter = option
+                                filterMenuOpen = false
+                            },
+                            trailingIcon = if (filter == option) {
+                                { Icon(Icons.Filled.Check, contentDescription = null) }
+                            } else {
+                                null
+                            },
+                        )
+                    }
+                }
             }
         }
 
@@ -408,7 +499,14 @@ fun LogsScreen() {
                 // key. Position is unique by construction and stable for a given
                 // snapshot, which is all the list needs: entries only ever arrive at
                 // the front or the whole list is replaced.
-                itemsIndexed(visible, key = { position, _ -> position }) { _, entry ->
+                itemsIndexed(visible, key = { position, _ -> position }) { index, entry ->
+                    // A day header before the first line of each day. The list is
+                    // newest-first, so the headers read top-down as today, then
+                    // yesterday — the direction someone scrolling for "where did
+                    // today start" is already moving.
+                    if (dayStarts[index] != dayStarts.getOrNull(index - 1)) {
+                        DayHeader(dayStarts[index], todayStart)
+                    }
                     LogRow(
                         entry,
                         isToday = entry.atMillis >= todayStart,
@@ -482,15 +580,23 @@ fun LogsScreen() {
 private enum class Filter(val labelRes: Int) {
     ALL(R.string.logs_filter_all),
     SESSION(R.string.logs_filter_session),
-    ERROR(R.string.logs_filter_error),
+    // Named WARN, not ERROR, because that is what it selects: the chip used to say
+    // 「错误」 while matching `ERROR || WARN`, so picking it showed warnings under a
+    // label that promised errors. The label moved to the predicate, not the other
+    // way round — a warning is a thing a person debugging wants to see.
+    WARN(R.string.logs_filter_warn),
     DNS(R.string.logs_filter_dns);
 
     fun matches(entry: KernelState.LogEntry): Boolean = when (this) {
         ALL -> true
         SESSION -> entry.tag == "DetourVpn" || entry.tag == "DetourTunnel"
-        ERROR -> entry.level == KernelState.LogEntry.Level.ERROR ||
+        WARN -> entry.level == KernelState.LogEntry.Level.ERROR ||
             entry.level == KernelState.LogEntry.Level.WARN
-        DNS -> entry.message.contains("DNS") || entry.tag.contains("Dns", ignoreCase = true)
+        // Tag only. The old predicate also matched `message.contains("DNS")`, which
+        // pulled in every line that mentioned DNS in passing — a connect log that
+        // says "DNS 已就绪" is not a DNS event, and it made this chip mean "lines
+        // containing the word" rather than "lines from the resolver".
+        DNS -> entry.tag.contains("dns", ignoreCase = true)
     }
 }
 
@@ -517,24 +623,97 @@ private fun KernelState.LogEntry.matchesQuery(needle: String): Boolean =
  */
 private val timeFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
 private val dateTimeFormat = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US)
+private val dayFormat = SimpleDateFormat("MM-dd", Locale.US)
+
+/**
+ * Width of the severity strip on a log row.
+ *
+ * A drawing dimension, not a spacing step: it is not a gap between two things, so
+ * it does not belong on the spacing scale — the same reasoning that keeps
+ * `DetourEmptyState`'s 48 dp circle and the console's 180 dp height off it.
+ */
+private val LEVEL_BAR_WIDTH = 3.dp
 
 private fun stamp(entry: KernelState.LogEntry, isToday: Boolean): String =
     (if (isToday) timeFormat else dateTimeFormat).format(Date(entry.atMillis))
 
 /**
- * Midnight of the current day, local time, in epoch millis.
+ * Midnight of [millis]'s day, local time, in epoch millis.
  *
- * `Calendar` rather than a fixed offset from `System.currentTimeMillis()`, which
- * is the tempting shortcut and is wrong twice: it ignores the device's time zone,
- * and it would break on a day that is not 24 hours long (a DST transition), which
- * is precisely the day someone is most likely to be reading a log across.
+ * `Calendar` rather than a fixed offset from the timestamp, which is the tempting
+ * shortcut and is wrong twice: it ignores the device's time zone, and it would
+ * break on a day that is not 24 hours long (a DST transition), which is precisely
+ * the day someone is most likely to be reading a log across.
  */
-private fun startOfToday(): Long = Calendar.getInstance().apply {
+private fun startOfDay(millis: Long): Long = Calendar.getInstance().apply {
+    timeInMillis = millis
     set(Calendar.HOUR_OF_DAY, 0)
     set(Calendar.MINUTE, 0)
     set(Calendar.SECOND, 0)
     set(Calendar.MILLISECOND, 0)
 }.timeInMillis
+
+private fun startOfToday(): Long = startOfDay(System.currentTimeMillis())
+
+/**
+ * The day separator between two runs of log lines.
+ *
+ * `今天` / `昨天` rather than a date, because those are the two the reader is
+ * actually locating; anything older gets `MM-dd`, which is the same shape the
+ * per-line stamp uses once a line is not from today.
+ *
+ * "Yesterday" is derived as `startOfDay(todayStart - 1)` rather than
+ * `todayStart - 86_400_000`: on a DST day the two differ, and subtracting a day of
+ * milliseconds lands on 23:00 the previous day, which then floors to the same
+ * previous day only by luck.
+ */
+@Composable
+private fun DayHeader(dayStart: Long, todayStart: Long) {
+    val spacing = LocalDetourSpacing.current
+    val label = when (dayStart) {
+        todayStart -> stringResource(R.string.logs_day_today)
+        startOfDay(todayStart - 1) -> stringResource(R.string.logs_day_yesterday)
+        else -> dayFormat.format(Date(dayStart))
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = spacing.sm, bottom = spacing.xs),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.width(spacing.sm))
+        HorizontalDivider(
+            modifier = Modifier.weight(1f),
+            color = MaterialTheme.colorScheme.outlineVariant,
+        )
+    }
+}
+
+/**
+ * The tag as a person reads it.
+ *
+ * The stored tag is the emitting class (`DetourVpn`, `DnsRedirect`), which is the
+ * right identifier to put in a copied log and the wrong thing to put in a column of
+ * a list: it is noise on every line, and it is the same width as the message.
+ * Unknown tags are shown as themselves — the set belongs to the app, not to this
+ * build, and a new one should be legible before it is translated.
+ */
+@Composable
+private fun tagLabel(tag: String): String = when (tag) {
+    "DetourVpn" -> stringResource(R.string.log_tag_connection)
+    "DetourTunnel" -> stringResource(R.string.log_tag_tunnel)
+    "DnsRedirect" -> stringResource(R.string.log_tag_dns)
+    "Rules" -> stringResource(R.string.log_tag_rules)
+    "DetourApp" -> stringResource(R.string.log_tag_app)
+    "DetourKernel" -> stringResource(R.string.log_tag_kernel)
+    "DetourRoot" -> stringResource(R.string.log_tag_root)
+    else -> tag
+}
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -548,6 +727,17 @@ private fun LogRow(
         KernelState.LogEntry.Level.ERROR -> MaterialTheme.colorScheme.error
         KernelState.LogEntry.Level.WARN -> MaterialTheme.colorScheme.tertiary
         else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    // A second, non-colour channel for the severity. The tint alone carries the
+    // level, which is fine for someone who can tell the two hues apart and useless
+    // for someone who cannot — and this is the one screen where a person scans for
+    // "what went wrong" rather than reads top to bottom. The bar is additive: the
+    // tint stays exactly as it was, and INFO gets no bar at all, so the two levels
+    // that matter are the two that stand out.
+    val bar: Color? = when (entry.level) {
+        KernelState.LogEntry.Level.ERROR -> MaterialTheme.colorScheme.error
+        KernelState.LogEntry.Level.WARN -> MaterialTheme.colorScheme.tertiary
+        else -> null
     }
     DetourCard(
         // Long-press rather than tap: the row is a wall of text and a tap has no
@@ -587,7 +777,13 @@ private fun LogRow(
         // two separators use `md` (12 dp), which is the gap the old row's single
         // zero-size `Spacer` with 6 dp horizontal padding actually produced.
         Row(
-            modifier = Modifier.padding(horizontal = spacing.md, vertical = spacing.sm),
+            modifier = Modifier
+                // Drawn before the padding, so the strip sits on the card's own left
+                // edge rather than at the start of the text.
+                .drawBehind {
+                    bar?.let { drawRect(it, size = Size(LEVEL_BAR_WIDTH.toPx(), size.height)) }
+                }
+                .padding(horizontal = spacing.md, vertical = spacing.sm),
             verticalAlignment = Alignment.Top,
         ) {
             Text(
@@ -597,7 +793,7 @@ private fun LogRow(
             )
             Spacer(Modifier.width(spacing.md))
             Text(
-                entry.tag,
+                tagLabel(entry.tag),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

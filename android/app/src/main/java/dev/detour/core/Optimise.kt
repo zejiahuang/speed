@@ -106,6 +106,15 @@ object Optimise {
     /** The port a candidate is measured on when its entry does not name one. */
     private const val DEFAULT_PORT = 443
 
+    /**
+     * How old a measurement may be before launch starts a fresh pass.
+     *
+     * 24 h, matching "一天一次": the point of the daily run is that yesterday's
+     * numbers are stale by tomorrow, and a shorter window would re-measure on every
+     * cold start — the cost this gate exists to avoid.
+     */
+    private const val DAY_MS = 24L * 60 * 60 * 1000
+
     /** Parsed once, refreshed by [run]. `load` reads it on every call. */
     @Volatile
     private var cache: Map<String, Probe>? = null
@@ -156,6 +165,34 @@ object Optimise {
         running?.cancel()
         running = null
         _progress.value = null
+    }
+
+    /**
+     * One pass per day, on launch, whatever mode is in force.
+     *
+     * The gate is the measurement timestamp already on disk ([measuredAt]), not a
+     * new preference: "when was this last measured" is the fact the decision needs,
+     * and a second copy of it could only disagree with the file the reorder reads.
+     * A missing or unreadable file answers `0`, which is "never measured" and
+     * therefore runs.
+     *
+     * **Runs in every mode on purpose, and that is only partly useful.** Root mode
+     * rewrites `/etc/hosts` so the rule's own names resolve to `127.0.0.2`; [probe]
+     * skips candidates that resolve to loopback, because measuring our own proxy
+     * says nothing about the address behind it. So in root mode the named
+     * candidates are skipped and only the literal `!<address>` ones are measured.
+     * The pass still runs — the daily cadence is the user's ask, and the alternative
+     * (silently doing nothing in root mode) would be indistinguishable from a pass
+     * that found everything unreachable. How many were skipped is in the log line
+     * the pass already writes.
+     *
+     * @return true when a pass was started.
+     */
+    fun maybeRunDaily(context: Context): Boolean {
+        val last = measuredAt(context)
+        val now = System.currentTimeMillis()
+        if (last != 0L && now - last < DAY_MS) return false
+        return start(context)
     }
 
     /** The measurements on disk, or an empty map. */

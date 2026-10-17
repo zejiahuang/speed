@@ -140,7 +140,21 @@
     <string name="logs_empty">No log entries yet</string>
     <string name="logs_filter_all">All</string>
     <string name="logs_filter_session">Session</string>
-    <string name="logs_filter_error">Errors</string>
+    <string name="logs_filter_warn">Warnings and errors</string>
+    <string name="logs_paused_subtitle">Paused · %1$d lines</string>
+    <string name="logs_paused_banner">Paused — new lines are not added to the list</string>
+    <string name="logs_menu_more">More actions</string>
+    <string name="logs_copy_view">Copy this view (%1$d lines)</string>
+    <string name="logs_export_archive">Export full history</string>
+    <string name="logs_day_today">Today</string>
+    <string name="logs_day_yesterday">Yesterday</string>
+    <string name="log_tag_connection">Connection</string>
+    <string name="log_tag_tunnel">Tunnel</string>
+    <string name="log_tag_dns">DNS</string>
+    <string name="log_tag_rules">Rules</string>
+    <string name="log_tag_app">Startup</string>
+    <string name="log_tag_kernel">Kernel</string>
+    <string name="log_tag_root">Root</string>
     <string name="logs_filter_dns">DNS</string>
     <string name="logs_archived_days">%1$d days archived</string>
     <string name="logs_no_archive">Nothing archived yet</string>
@@ -363,7 +377,6 @@
     <!-- Logs, second batch. The archive file had no way in from the UI at all. -->
     <string name="logs_copy">Copy</string>
     <string name="logs_copied">Copied</string>
-    <string name="logs_export_all">Export all logs</string>
     <string name="logs_export_share_title">Export logs</string>
     <string name="logs_export_empty">No logs to export yet</string>
     <string name="logs_export_done">Logs exported</string>
@@ -495,7 +508,6 @@
     <string name="logs_paused_empty_detail">Resume to show new entries</string>
 
     <!-- Rules. -->
-    <string name="rules_filter_all">All</string>
     <!-- The page's most practical question is "why does this one site not
          work", which is answered by the addresses the kernel has already judged
          bad. This filter brings them to the top level. -->
@@ -514,6 +526,11 @@
          on purpose: `UNPROBED` and in-flight addresses are deliberately not
          counted as problems, so a user who sees "no problems" while most
          addresses are unjudged is not being lied to. -->
+    <string name="rules_menu_more">More actions</string>
+    <string name="rules_source_none">None selected</string>
+    <string name="rules_group_enabled">%1$d/%2$d enabled</string>
+    <string name="rules_load_failed">Could not load the rules</string>
+    <string name="rules_load_failed_detail">%1$s. Use refresh at the top right to retry</string>
     <string name="rules_filter_problems_empty">No entries with an abnormal verdict</string>
     <string name="rules_filter_problems_empty_detail">Only judged addresses count; unjudged and in-flight ones are not abnormal</string>
 
