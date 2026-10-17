@@ -593,6 +593,14 @@ object RootHelper {
                     // trusted root for the whole device.
                     add("cp -a $APEX_CACERTS/. $STAGE/apex/")
                     add("cp -f ${caFile.absolutePath} $STAGE/apex/$hash.0")
+                    // 644, and this one is not a repeat of the /system store's
+                    // chmod. The CA file is created by the app, which writes it
+                    // 0600 — so `cp -f` lands 0600 here, and a trust anchor the
+                    // unprivileged client cannot open is one it will never read
+                    // (Conscrypt runs in the caller's uid). `/system` had a chmod
+                    // since the beginning; the APEX mirror never did, and it is the
+                    // store Android 14 actually reads.
+                    add("chmod 644 $STAGE/apex/$hash.0")
                     // `cp -a` does **not** carry the SELinux label across
                     // filesystems here — measured, the mirror came out
                     // `shell_data_file`. Conscrypt reads these as

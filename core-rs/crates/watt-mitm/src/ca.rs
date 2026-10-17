@@ -68,11 +68,22 @@ const CA_ORGANIZATION: &str = "speed";
 
 /// A leaf certificate is signed for this long.
 ///
-/// Comfortably under the 398-day ceiling browsers enforce, and long enough that
-/// a session never outlives its own leaf. The window is anchored at the moment
-/// the leaf is minted — see [`leaf_window`] — not at a date written here, so a
-/// hardcoded year cannot make every leaf expire at once.
-const LEAF_DAYS: i64 = 397;
+/// **The number is measured, not chosen, and it is much shorter than the
+/// 398-day ceiling a browser is supposed to allow.** On an Android 14 WebView
+/// (Chromium 146) a leaf spanning 398 days — the ceiling exactly — was rejected
+/// with `net_error -213`, `ERR_CERT_VALIDITY_TOO_LONG`, even though the chain was
+/// trusted and everything else about the leaf was fine. Shortening it did not
+/// clear the error at 397, 301 or 181 days either; **91 and 181 days both
+/// passed**, 301 did not. The exact edge was not bisected — what matters is that
+/// this value sits on the passing side with room to spare.
+///
+/// A shorter window costs nothing here, which is why it is the right answer
+/// rather than a workaround: leaves are never persisted (see the module doc) and
+/// are re-minted per process, so a leaf only has to outlive one session.
+///
+/// Anchored at the moment the leaf is minted — see [`leaf_window`] — not at a
+/// date written here, so a hardcoded year cannot make every leaf expire at once.
+const LEAF_DAYS: i64 = 180;
 
 /// How long the CA certificate is valid.
 ///
@@ -265,8 +276,8 @@ fn generate() -> io::Result<(String, String)> {
 /// certificate and parsing it back. `not_before` is backdated by
 /// [`CLOCK_SKEW_DAYS`] so a device whose clock lags the minter still sees a
 /// certificate that has already become valid, and `not_after` is [`LEAF_DAYS`]
-/// ahead. The two span `LEAF_DAYS + CLOCK_SKEW_DAYS` — exactly the 398-day
-/// ceiling clients are entitled to demand, and no more.
+/// ahead. The two span `LEAF_DAYS + CLOCK_SKEW_DAYS` = 181 days — see
+/// [`LEAF_DAYS`] for why that is far below the 398-day ceiling clients advertise.
 fn leaf_window(now: OffsetDateTime) -> (OffsetDateTime, OffsetDateTime) {
     (
         now - Duration::days(CLOCK_SKEW_DAYS),
@@ -407,13 +418,15 @@ mod tests {
         // valid, and a session must not outlive it.
         assert!(not_before < now, "the window must start before the mint");
         assert!(now < not_after, "and end after it");
-        // Clients are entitled to reject a validity period longer than 398 days,
-        // and the whole window is that period — a hardcoded decade-wide window
-        // was both too long here and expired all at once in 2030.
+        // Chromium rejects a leaf whose span reaches the 398-day ceiling, not only
+        // one that exceeds it — measured as `net_error -213`
+        // (`ERR_CERT_VALIDITY_TOO_LONG`) against a leaf of exactly 398 days. So
+        // this asserts a strict margin rather than `<=`, which is what the code
+        // shipped with before that measurement.
         let span = not_after - not_before;
         assert!(
-            span <= Duration::days(398),
-            "a leaf window of {span:?} exceeds the 398-day ceiling"
+            span < Duration::days(398),
+            "a leaf window of {span:?} reaches the 398-day ceiling"
         );
     }
 }
