@@ -28,6 +28,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.Icon
@@ -2178,9 +2179,17 @@ private fun SettingsGroupPage(
         ) {
             DetourPageHeader(
                 title = stringResource(page.titleFor(mode)),
+                // An icon, not a word. Every other page's header action is a 48dp
+                // `IconButton`, and `DetourPageHeader` centres its row — a taller
+                // text button pushed this page's title 13px lower than the same
+                // title on 连接/规则/日志/设置. Matching the control fixes the
+                // geometry and the visual language in one change.
                 actions = {
-                    DetourButton(onClick = onClose, variant = DetourButtonVariant.Text) {
-                        Text(stringResource(R.string.settings_back))
+                    IconButton(onClick = onClose) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.settings_back),
+                        )
                     }
                 },
             )

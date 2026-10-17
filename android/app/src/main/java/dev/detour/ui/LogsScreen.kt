@@ -268,22 +268,13 @@ fun LogsScreen() {
 
     Column(Modifier.fillMaxSize()) {
         // The same header geometry the hand-rolled row used (start 20, end 8,
-        // top 12), so the page does not move. The count in the subtitle is the
-        // visible one, not the buffer's: after a filter or a search, "how many
-        // lines am I looking at" is the useful number, and it is the same number
-        // copy-all acts on.
+        // top 12), so the page does not move. No subtitle (removed on request,
+        // 2026-10-17): the line count was a second grey line under the title for a
+        // number that is already visible by counting, and the paused state it used
+        // to carry is now said by the banner under the header, which is louder and
+        // appears exactly when it is true.
         DetourPageHeader(
             title = stringResource(R.string.logs_title),
-            // The count is the visible one, not the buffer's: after a filter or a
-            // search, "how many lines am I looking at" is the useful number. When
-            // paused it also says so — the icon swap alone was the only signal that
-            // new lines were being withheld, and a list that has stopped moving
-            // looks exactly like a service that has stopped logging.
-            subtitle = if (paused) {
-                stringResource(R.string.logs_paused_subtitle, visible.size)
-            } else {
-                stringResource(R.string.logs_count, visible.size)
-            },
             actions = {
                 IconButton(
                     onClick = {

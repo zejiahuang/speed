@@ -494,6 +494,23 @@ fun HomeScreen() {
 
         Spacer(Modifier.height(spacing.lg))
 
+        // Shown only while the proxy is actually listening: `proxyPort` is 0 until
+        // the listener is up, and `127.0.0.1:0` is not an address anyone can use.
+        // Under TUN_ONLY there is no listener at all, which is why the flag is the
+        // first test.
+        //
+        // Above the rate row rather than below it: this card is what the user has
+        // to act on (copy the address into another app), and the rates are a
+        // readout. Action before readout, and the readout keeps the bottom edge.
+        if (!BuildFlags.TUN_ONLY &&
+            status.isRunning &&
+            status.mode == KernelState.Mode.PROXY &&
+            status.proxyPort > 0
+        ) {
+            ProxyAddressCard(status.proxyPort)
+            Spacer(Modifier.height(spacing.md))
+        }
+
         // Hidden rather than shown as "0 B/s". The row exists to answer "is it
         // moving", and a pair of zeros answers that question wrongly — it reads as
         // a stalled tunnel. Turning the setting off removes the question.
@@ -536,19 +553,6 @@ fun HomeScreen() {
                     )
                 }
             }
-        }
-
-        // Shown only while the proxy is actually listening: `proxyPort` is 0 until
-        // the listener is up, and `127.0.0.1:0` is not an address anyone can use.
-        // Under TUN_ONLY there is no listener at all, which is why the flag is the
-        // first test.
-        if (!BuildFlags.TUN_ONLY &&
-            status.isRunning &&
-            status.mode == KernelState.Mode.PROXY &&
-            status.proxyPort > 0
-        ) {
-            Spacer(Modifier.height(spacing.md))
-            ProxyAddressCard(status.proxyPort)
         }
 
         if (SHOW_HOME_DETAIL_CARDS) {

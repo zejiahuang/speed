@@ -18,6 +18,10 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -179,9 +183,15 @@ fun AboutScreen(onClose: () -> Unit) {
         ) {
             DetourPageHeader(
                 title = stringResource(R.string.about_title),
+                // Same reason as the settings group pages: an icon keeps the
+                // header row the height the other four pages have, so the title
+                // lands on the same line instead of 13px lower.
                 actions = {
-                    DetourButton(onClick = onClose, variant = DetourButtonVariant.Text) {
-                        Text(stringResource(R.string.about_close))
+                    IconButton(onClick = onClose) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.about_close),
+                        )
                     }
                 },
             )

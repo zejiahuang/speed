@@ -139,7 +139,6 @@
     <string name="logs_filter_all">All</string>
     <string name="logs_filter_session">Session</string>
     <string name="logs_filter_warn">Warnings and errors</string>
-    <string name="logs_paused_subtitle">Paused · %1$d lines</string>
     <string name="logs_paused_banner">Paused — new lines are not added to the list</string>
     <string name="logs_menu_more">More actions</string>
     <string name="logs_copy_view">Copy this view (%1$d lines)</string>
@@ -456,7 +455,6 @@
 
     <!-- The header's count. The unit cannot live in Kotlin: it is Chinese, and a
          bare number as a subtitle reads as a bug rather than as a count. -->
-    <string name="logs_count">%1$d lines</string>
 
     <!-- Shown when there *are* logs but the search or the filter chips hid them
          all. `logs_empty` ("还没有日志") is a lie in that case — the user has
