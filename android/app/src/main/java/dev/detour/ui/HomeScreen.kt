@@ -6,6 +6,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -197,12 +198,14 @@ fun HomeScreen() {
     // being read, which is the same as not showing it.
     var showRootConsent by remember { mutableStateOf(false) }
 
-    // The column is scrollable because the hero control plus the rate cards are
-    // taller than the viewport on a short screen (a landscape phone, or any device
-    // with the system font enlarged); without this the last row is clipped rather
-    // than reachable. `weight` is deliberately not used anywhere on this column: a
-    // weighted child inside a `verticalScroll` is measured with an unbounded height
-    // and throws, so the gaps are fixed instead.
+    // No scroll container: the page is a fixed-height column — header, hero, and
+    // whatever sits under the hero (rate row, proxy address, the optional detail
+    // cards) — and the hero is the only flexible child. `weight(1f)` on it is what
+    // centres the control in the space that is actually left, and `weight` is
+    // illegal inside a `verticalScroll`: a weighted child there is measured with an
+    // unbounded height and throws. The page therefore has to fit, which is why the
+    // control scales with both the window width and its height rather than being a
+    // fixed 168dp.
     //
     // Adaptive sizing, read from the window rather than from a `BoxWithConstraints`:
     // this column is the only consumer, and a constraints wrapper would have to be
@@ -220,14 +223,19 @@ fun HomeScreen() {
     // a 320dp phone so the control never crowds the rate cards, 208dp on a tablet
     // so it stays the subject of the page. A fixed size does none of that — it ate
     // half a narrow screen and read as a button among cards on a wide one.
+    // Capped by height as well as width: with the control centred rather than
+    // pinned under the header, a short window (landscape) would otherwise push the
+    // rate row off the bottom. 0.34 of the window height leaves room for the
+    // header, the status line and the rate row at the sizes measured on this
+    // device; on a normal portrait window it never binds (0.34 × 800dp = 272dp).
     val powerDiameter = (
         POWER_REFERENCE_DIAMETER * (contentWidth / POWER_REFERENCE_WIDTH)
     ).coerceIn(132.dp, 208.dp)
+        .coerceAtMost((LocalConfiguration.current.screenHeightDp.dp * 0.34f).coerceAtLeast(120.dp))
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
             .padding(horizontal = sideGutter),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -383,76 +391,108 @@ fun HomeScreen() {
             )
         }
 
-        Spacer(Modifier.height(spacing.xl))
-
-        PowerControl(
-            status = status,
-            diameter = powerDiameter,
-            onToggle = {
-                if (status.isRunning) {
-                    // Read here rather than captured, so toggling the setting takes
-                    // effect on the very next tap.
-                    if (prefs.confirmDisconnect) {
-                        showDisconnectConfirm = true
-                    } else {
-                        KernelState.onDisconnect?.invoke()
-                    }
-                } else {
-                    KernelState.onConnect?.invoke(context, status.mode)
-                }
-            },
-        )
-
-        Spacer(Modifier.height(spacing.lg))
-
-        Text(
-            text = statusText(status),
-            style = MaterialTheme.typography.titleLarge,
-            textAlign = TextAlign.Center,
-        )
-
-        if (failure != null) {
-            Spacer(Modifier.height(spacing.sm))
-            Text(
-                text = failure,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-                textAlign = TextAlign.Center,
-            )
-            // The kernel's message is precise and assumes a reader who knows what
-            // a rule document is. The line under it is the sentence for everyone
-            // else — and it is chosen by the cause the service recorded, not by
-            // matching that message, so translating either one cannot break it.
-            //
-            // The sentence and the report button now share one line: the sentence
-            // is the explanation, the button is the action, and stacking them spent
-            // a row a failing screen has no room for. The sentence takes the
-            // leftover width (`weight(1f)`) so a long suggestion wraps inside its
-            // own column instead of pushing the button off the edge; the button
-            // keeps its natural width on the right.
-            Spacer(Modifier.height(spacing.xs))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = stringResource(
-                        status.failure?.let { ErrorReport.suggestionRes(it) } ?: R.string.home_error_hint,
-                    ),
-                    modifier = Modifier.weight(1f),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+        // The hero owns everything between the header and the rate row, and
+        // centres itself in it. That is the difference between "a big button near
+        // the top" and "the thing this screen is about": on a tall phone the two
+        // sit about 100dp apart, and the control is the one element that should
+        // never look like it is drifting upward.
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            // The circle is sized against the height this hero actually got,
+            // not against the window: on a landscape phone the rate row and the
+            // floating bar leave ~180dp here, and a width-derived 153dp circle
+            // would push the status line out of the column entirely (Compose
+            // clips rather than shrinks). The reserve is what the text under the
+            // circle needs — one line normally, the suggestion plus its button
+            // when the last attempt failed.
+            BoxWithConstraints(
+                modifier = Modifier.fillMaxWidth(),
+                contentAlignment = Alignment.Center,
+            ) {
+                val reserve = if (failure != null) 132.dp else 56.dp
+                val heroDiameter = minOf(
+                    powerDiameter,
+                    (maxHeight - reserve).coerceAtLeast(96.dp),
                 )
-                // Only when a report was actually written. A button that opened
-                // nothing would be the same "control that does nothing" the mode
-                // picker's root row used to be.
-                val report = status.reportPath
-                if (report != null) {
-                    TextButton(onClick = { shareErrorReport(context, report) }) {
-                        Text(stringResource(R.string.error_report_share))
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    PowerControl(
+                        status = status,
+                        diameter = heroDiameter,
+                        onToggle = {
+                            if (status.isRunning) {
+                                // Read here rather than captured, so toggling the setting
+                                // takes effect on the very next tap.
+                                if (prefs.confirmDisconnect) {
+                                    showDisconnectConfirm = true
+                                } else {
+                                    KernelState.onDisconnect?.invoke()
+                                }
+                            } else {
+                                KernelState.onConnect?.invoke(context, status.mode)
+                            }
+                        },
+                    )
+
+                    Spacer(Modifier.height(spacing.lg))
+
+                    Text(
+                        text = statusText(status),
+                        style = MaterialTheme.typography.titleLarge,
+                        textAlign = TextAlign.Center,
+                    )
+
+                    if (failure != null) {
+                        Spacer(Modifier.height(spacing.sm))
+                        Text(
+                            text = failure,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            textAlign = TextAlign.Center,
+                        )
+                        // The kernel's message is precise and assumes a reader who knows
+                        // what a rule document is. The line under it is the sentence for
+                        // everyone else — and it is chosen by the cause the service
+                        // recorded, not by matching that message, so translating either
+                        // one cannot break it.
+                        //
+                        // The sentence and the report button share one line: the sentence
+                        // is the explanation, the button is the action, and stacking them
+                        // spends a row a failing screen has no room for. The sentence
+                        // takes the leftover width (`weight(1f)`) so a long suggestion
+                        // wraps inside its own column instead of pushing the button off
+                        // the edge; the button keeps its natural width on the right.
+                        Spacer(Modifier.height(spacing.xs))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = stringResource(
+                                    status.failure?.let { ErrorReport.suggestionRes(it) }
+                                        ?: R.string.home_error_hint,
+                                ),
+                                modifier = Modifier.weight(1f),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            // Only when a report was actually written. A button that
+                            // opened nothing would be the same "control that does
+                            // nothing" the mode picker's root row used to be.
+                            val report = status.reportPath
+                            if (report != null) {
+                                TextButton(onClick = { shareErrorReport(context, report) }) {
+                                    Text(stringResource(R.string.error_report_share))
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
 
-        Spacer(Modifier.height(spacing.xl))
+        Spacer(Modifier.height(spacing.lg))
 
         // Hidden rather than shown as "0 B/s". The row exists to answer "is it
         // moving", and a pair of zeros answers that question wrongly — it reads as
