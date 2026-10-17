@@ -31,6 +31,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -54,6 +55,9 @@ import dev.detour.ui.components.DetourSegmentedRow
 import dev.detour.ui.components.DetourToggleRow
 import dev.detour.ui.components.MarkdownText
 import dev.detour.ui.theme.LocalDetourSpacing
+import androidx.compose.ui.draw.drawBehind
+import dev.detour.ui.theme.LocalDetourBackground
+import dev.detour.ui.theme.drawDetourBackground
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -62,18 +66,19 @@ import kotlinx.coroutines.withContext
  * 关于: a second-level page over the whole app, opened from 设置 and closed back
  * to it.
  *
- * **It is opaque, and that is a consequence of where it sits rather than a
- * style choice.** The app body draws this page as a sibling of the floating bar
- * and *outside* the node marked with `layerBackdrop`, so there is no backdrop
- * within reach here. A `DetourCardStyle.Glass` surface on this page would
- * therefore take `drawGlass`'s fallback branch — the flat tint with a specular
- * border — and read as "the glass is broken" rather than "this page has no
- * glass". So the page paints `colorScheme.surface` across the whole screen and
- * no glass is used anywhere inside it. (The section cards come from
- * [DetourSectionCard], which is the app's one group-card shape and does bake in
- * the glass style; with no backdrop it degrades to the same flat tint, which on
- * an opaque page reads as an ordinary card. That is the honest limit of reusing
- * the shared row vocabulary outside the backdrop scope.)
+ * **It paints the app's own background rather than one of its own.** This page is
+ * a sibling of the floating bar and sits outside the node marked with
+ * `layerBackdrop`, so neither the decorative layer nor the `Scaffold` is above
+ * it. An opaque `surface` (which this page used to paint) gave it a background
+ * of its own, which read as a different app the moment it slid in; a transparent
+ * page would show the settings page it is covering. So it draws the same
+ * background itself, from [LocalDetourBackground].
+ *
+ * A `DetourCardStyle.Glass` surface inside still takes `drawGlass`'s fallback
+ * branch — the tint and the lit edge, without the blur — and [DetourSectionCard]
+ * bakes in that same style, so the cards here are translucent. That is the honest
+ * limit of reusing the shared row vocabulary outside the backdrop scope, and a
+ * far smaller inconsistency than a second background.
  *
  * **Why the safe-area insets are taken here and not from the `Scaffold`.** Every
  * other screen is laid out by the app body's `Scaffold`, which hands its content
@@ -162,12 +167,17 @@ fun AboutScreen(onClose: () -> Unit) {
         if (abi != null) append(" · ").append(abi)
     }
 
+    val background = LocalDetourBackground.current
+    val scheme = MaterialTheme.colorScheme
     Surface(
-        modifier = Modifier.fillMaxSize(),
-        // Opaque, and it has to be — see the class comment. `surface` rather
-        // than a named colour so the page follows 主题色 and dark mode with the
-        // rest of the app.
-        color = MaterialTheme.colorScheme.surface,
+        modifier = Modifier
+            .fillMaxSize()
+            .drawBehind { drawDetourBackground(scheme, background) },
+        // Transparent over a background this page draws itself — see the class
+        // comment. The content colour is pinned because `contentColorFor` has no
+        // answer for a transparent fill.
+        color = Color.Transparent,
+        contentColor = scheme.onSurface,
     ) {
         Column(
             modifier = Modifier

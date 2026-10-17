@@ -73,6 +73,9 @@ import dev.detour.ui.components.LocalBottomBarClearance
 import dev.detour.ui.components.LocalLayerBackdrop
 import dev.detour.ui.components.UpdateAvailableDialog
 import dev.detour.ui.openInBrowser
+import dev.detour.ui.theme.DetourBackgroundSpec
+import dev.detour.ui.theme.LocalDetourBackground
+import dev.detour.ui.theme.drawDetourBackground
 import dev.detour.ui.theme.DetourTheme
 import dev.detour.ui.theme.LocalDetourMotion
 import kotlin.math.max
@@ -402,7 +405,7 @@ private fun DetourAppBody(onRequestNotifications: () -> Unit = {}) {
                 modifier = Modifier
                     .fillMaxSize()
                     .layerBackdrop(backdrop)
-                    .drawBehind { drawDetourBackground(scheme, wallpaper, scrim) },
+                    .drawBehind { drawDetourBackground(scheme, DetourBackgroundSpec(wallpaper, scrim)) },
             )
 
             CompositionLocalProvider(
@@ -539,11 +542,12 @@ private fun DetourAppBody(onRequestNotifications: () -> Unit = {}) {
         // the bar is deliberately left outside that scope (see `barBackdrop`),
         // and 关于 covers the bar, so it belongs out here with it. The
         // consequence has to be honoured rather than worked around: this page is
-        // *outside* the backdrop scope, so any glass drawn in it would have
-        // nothing to sample and would silently fall back to a flat tint — a
-        // surface that still looks like glass but refracts nothing. 关于
-        // therefore paints an opaque background and uses no glass at all; see
-        // `AboutScreen`'s own note.
+        // *outside* the backdrop scope, so any glass drawn in it has nothing to
+        // sample and falls back to a tint — a surface that still looks like a card
+        // but refracts nothing. What it must not do is paint a second background:
+        // the wallpaper and the blobs are drawn by a sibling *below* this one, so
+        // 关于 and the settings group pages are transparent and let that show
+        // through; see `AboutScreen`'s own note.
         //
         // **Why it is not a new `Destination`.** `FloatingGlassBar` renders
         // every `Destination.entries` value as a tab and sizes its sliding
@@ -553,6 +557,13 @@ private fun DetourAppBody(onRequestNotifications: () -> Unit = {}) {
         // that is not a peer of 连接/规则/日志/设置. 关于 is a second-level page
         // reached from 设置, and it returns there; that is a different kind of
         // thing from a tab, so it gets a different kind of state.
+        // Both pages below paint the app's background themselves (see
+        // `LocalDetourBackground`): they are siblings of the decorative layer, so
+        // they cannot inherit it, and a transparent page would show the list it is
+        // covering rather than the wallpaper.
+        CompositionLocalProvider(
+            LocalDetourBackground provides DetourBackgroundSpec(wallpaper, scrim),
+        ) {
         // A settings group's own page. Drawn here, beside 关于, for every reason
         // spelled out above: it covers the content *and* the bar, so it has to be
         // a sibling of both, and it is not a `Destination` because it is reached
@@ -670,6 +681,8 @@ private fun DetourAppBody(onRequestNotifications: () -> Unit = {}) {
                     AboutScreen(onClose = { showAbout = false })
                 }
             }
+        }
+
         }
 
         // The "a new version is available" dialog, drawn near the end and beside 关于.
@@ -792,101 +805,6 @@ private fun DetourAppBody(onRequestNotifications: () -> Unit = {}) {
             )
         }
     }
-}
-
-/**
- * The decorative background: the user's photo, or the app's own soft brand
- * gradient and a few light blobs when there is none.
- *
- * The no-wallpaper path is drawn from the live [ColorScheme] rather than fixed
- * colours, so it follows the theme colour and the dark-mode setting. With a
- * wallpaper set the layer is the user's photo instead, and the glass refracts
- * that rather than *this app's* palette — which is the point of the feature. In
- * both cases everything is soft on purpose: it sits under the whole UI, so it
- * must read as light falling on the screen and never compete with the text on
- * top of it.
- *
- * **This used to be the bar's whole world, and is not any more.** The content
- * is no longer padded above the bar — it scrolls under it and is sampled by the
- * bar's `barBackdrop` along with this layer — so the bar refracts the wallpaper
- * *and* whatever the user has scrolled into it. What this layer still owns is
- * the other half: it is what the content's own glass cards sample, and it is
- * what shows through wherever the content is transparent.
- */
-private fun DrawScope.drawDetourBackground(
-    scheme: ColorScheme,
-    wallpaper: ImageBitmap?,
-    scrimPercent: Int,
-) {
-    if (wallpaper != null) {
-        // Centre-crop: scale the photo so it *covers* the box on both axes, then
-        // centre it, so a photo of any aspect ratio fills the screen with no
-        // letterboxing. The offset is negative on the axis that overflows, which
-        // is what centres it; the canvas clips the overhang.
-        val scale = max(size.width / wallpaper.width, size.height / wallpaper.height)
-        val drawnWidth = (wallpaper.width * scale).roundToInt()
-        val drawnHeight = (wallpaper.height * scale).roundToInt()
-        drawImage(
-            image = wallpaper,
-            dstOffset = IntOffset(
-                (size.width.toInt() - drawnWidth) / 2,
-                (size.height.toInt() - drawnHeight) / 2,
-            ),
-            dstSize = IntSize(drawnWidth, drawnHeight),
-        )
-
-        // The scrim, tinted with `scheme.surface` and NOT with black. The text
-        // drawn over this layer is `onSurface`, which is dark in light theme and
-        // light in dark theme — so a scrim that is always dark would guarantee
-        // contrast in one theme and destroy it in the other. Tinting with the
-        // theme's own surface keeps text legible in both, and follows 主题色 for
-        // free. The strength is the user's (0..100) because only they can see
-        // how busy their photo is.
-        drawRect(color = scheme.surface.copy(alpha = scrimPercent.coerceIn(0, 100) / 100f))
-        return
-    }
-
-    // No wallpaper: the app's own decorative layer, unchanged. The blobs are
-    // this app's stand-in for "something for the glass to refract" and are
-    // deliberately *not* drawn over a photo — two decorative layers on top of
-    // each other is a fight, not a design.
-    // The base. A two-stop gradient rather than a flat fill, so the light the
-    // glass refracts has a direction to it.
-    drawRect(
-        brush = Brush.verticalGradient(
-            colors = listOf(scheme.surface, scheme.surfaceContainer),
-        ),
-    )
-
-    val width = size.width
-    val height = size.height
-    val minSide = size.minDimension
-
-    // Three blobs in the brand hues, at fixed relative positions rather than
-    // random ones: the layer is re-recorded often, and a random position would
-    // shimmer.
-    blob(scheme.primary.copy(alpha = 0.18f), Offset(width * 0.18f, height * 0.12f), minSide * 0.55f)
-    blob(scheme.tertiary.copy(alpha = 0.14f), Offset(width * 0.88f, height * 0.32f), minSide * 0.45f)
-    blob(scheme.primary.copy(alpha = 0.10f), Offset(width * 0.55f, height * 0.92f), minSide * 0.60f)
-}
-
-/**
- * One soft radial highlight, fading to transparent at its edge.
- *
- * The transparent outer stop is what makes it a light *blob* rather than a disc:
- * without it the circle would have a hard rim, which is the one thing a light
- * source never has.
- */
-private fun DrawScope.blob(color: Color, center: Offset, radius: Float) {
-    drawCircle(
-        brush = Brush.radialGradient(
-            colors = listOf(color, Color.Transparent),
-            center = center,
-            radius = radius,
-        ),
-        radius = radius,
-        center = center,
-    )
 }
 
 @Preview

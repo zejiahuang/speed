@@ -48,6 +48,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -90,6 +91,9 @@ import dev.detour.ui.components.DetourStepperRow
 import dev.detour.ui.components.DetourToggleRow
 import dev.detour.ui.theme.LocalDetourMotion
 import dev.detour.ui.theme.LocalDetourSpacing
+import androidx.compose.ui.draw.drawBehind
+import dev.detour.ui.theme.LocalDetourBackground
+import dev.detour.ui.theme.drawDetourBackground
 import dev.detour.ui.theme.supportsDynamicColor
 import java.io.IOException
 import java.time.LocalDateTime
@@ -2122,14 +2126,20 @@ private fun SettingsList(
 /**
  * One group, as a page of its own.
  *
- * **It is opaque, and that is a consequence of where it sits rather than a style
- * choice.** The app body draws this page as a sibling of the floating bar, over
- * it, and therefore outside the node marked with `layerBackdrop` — so there is no
- * backdrop within reach here, and a glass card would take `drawGlass`'s fallback
- * branch and read as "the glass is broken" rather than "this page has no glass".
- * The page paints `colorScheme.surface` instead; the cards inside it come from
- * the shared vocabulary and degrade to a flat tint on an opaque page, which reads
- * as an ordinary card. `AboutScreen` is drawn the same way for the same reason.
+ * **It paints the app's own background rather than one of its own.** This page
+ * is a sibling of the floating bar, so it sits outside both the `Scaffold` and
+ * the decorative layer the body draws under it. Two ways to cover that gap are
+ * wrong: an opaque `surface` gives the settings section a background of its own
+ * (which it used to have, and which read as a different app the moment a row was
+ * tapped), and a transparent page shows the list it is covering rather than the
+ * wallpaper. So it draws the same background itself, from
+ * [LocalDetourBackground] — one implementation, not two that look alike.
+ *
+ * The cards inside still take `drawGlass`'s fallback branch — the tint and the
+ * lit edge, without the blur — because there is no backdrop within reach to
+ * sample. That is the honest limit of reusing the card vocabulary out here, and
+ * a far smaller inconsistency than a second background. `AboutScreen` is drawn
+ * the same way for the same reason.
  *
  * The safe-area insets are taken here rather than from the app body's `Scaffold`,
  * for that same reason: this page covers that `Scaffold` rather than sitting
@@ -2161,9 +2171,17 @@ private fun SettingsGroupPage(
 
     val spacing = LocalDetourSpacing.current
 
+    val background = LocalDetourBackground.current
+    val scheme = MaterialTheme.colorScheme
     Surface(
-        modifier = Modifier.fillMaxSize(),
-        color = MaterialTheme.colorScheme.surface,
+        modifier = Modifier
+            .fillMaxSize()
+            .drawBehind { drawDetourBackground(scheme, background) },
+        // Transparent over a background this page draws itself, and the content
+        // colour is pinned because `contentColorFor` has no answer for a
+        // transparent fill.
+        color = Color.Transparent,
+        contentColor = scheme.onSurface,
     ) {
         Column(
             modifier = Modifier
