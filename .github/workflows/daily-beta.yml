@@ -11,9 +11,6 @@ on:
     # 排队延迟可以到十几分钟，而「11:17」和「12:03」对使用者没有区别。
     - cron: "17 3 * * *"
   workflow_dispatch:
-  # TEMP-VERIFY: 临时触发，用来把整条链路真跑一次。验证完在下一次提交里删除。
-  push:
-    branches: [main]
 
 # 默认的 GITHUB_TOKEN 是只读的，而这里要建标签、创建 Release 并上传附件。
 permissions:
