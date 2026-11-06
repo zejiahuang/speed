@@ -24,7 +24,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::io;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, SocketAddr};
 use std::os::unix::io::RawFd;
 use std::time::{Duration, Instant};
 
@@ -32,9 +32,7 @@ use smoltcp::iface::{Config as IfaceConfig, Interface, Route, SocketHandle, Sock
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::socket::tcp;
 use smoltcp::time::Instant as SmolInstant;
-use smoltcp::wire::{
-    HardwareAddress, IpAddress, IpCidr, IpListenEndpoint, Ipv4Address, Ipv6Address,
-};
+use smoltcp::wire::{HardwareAddress, IpAddress, IpCidr, IpListenEndpoint};
 
 use watt_rules::{Family, Outcome};
 
@@ -127,10 +125,9 @@ struct OwnedRxToken {
 impl RxToken for OwnedRxToken {
     fn consume<R, F>(self, f: F) -> R
     where
-        F: FnOnce(&mut [u8]) -> R,
+        F: FnOnce(&[u8]) -> R,
     {
-        let mut packet = self.packet;
-        f(&mut packet)
+        f(&self.packet)
     }
 }
 
@@ -2362,24 +2359,28 @@ impl TcpRelay {
 }
 
 /// Convert a standard address into the wire crate's representation.
+///
+/// Since smoltcp 0.13 the wire addresses *are* `core::net`'s types, so this is a
+/// variant mapping rather than a byte-array conversion.
 pub fn to_smoltcp_addr(addr: IpAddr) -> IpAddress {
     match addr {
-        IpAddr::V4(v4) => IpAddress::Ipv4(Ipv4Address::from_bytes(&v4.octets())),
-        IpAddr::V6(v6) => IpAddress::Ipv6(Ipv6Address::from_bytes(&v6.octets())),
+        IpAddr::V4(v4) => IpAddress::Ipv4(v4),
+        IpAddr::V6(v6) => IpAddress::Ipv6(v6),
     }
 }
 
 /// Convert a wire address back into the standard representation.
 pub fn from_smoltcp_addr(addr: IpAddress) -> IpAddr {
     match addr {
-        IpAddress::Ipv4(v4) => IpAddr::V4(Ipv4Addr::from(v4.0)),
-        IpAddress::Ipv6(v6) => IpAddr::V6(Ipv6Addr::from(v6.0)),
+        IpAddress::Ipv4(v4) => IpAddr::V4(v4),
+        IpAddress::Ipv6(v6) => IpAddr::V6(v6),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::{Ipv4Addr, Ipv6Addr};
     use crate::config::StackConfig;
     use crate::planner::Planner;
     use crate::upstream::NoProtector;

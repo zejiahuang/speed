@@ -5,13 +5,14 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+publish.workspace = true
 
 [dependencies]
 # `libc` rather than `std::net`: the upstream descriptor has to be handed to the
 # platform before it connects, so `VpnService.protect` can exempt it from the
 # tunnel. `std::net` gives no access to the raw descriptor before connecting.
 libc = "0.2"
-smoltcp = { version = "0.11.0", default-features = false, features = ["std", "medium-ip", "proto-ipv4", "proto-ipv6", "socket-tcp", "socket-udp", "socket-icmp"] }
+smoltcp = { version = "0.14.0", default-features = false, features = ["std", "medium-ip", "proto-ipv4", "proto-ipv6", "socket-tcp", "socket-udp", "socket-icmp"] }
 watt-net = { workspace = true }
 watt-rules = { workspace = true }
 # Diagnostics through `log` so the Android shell can route them to logcat.
@@ -20,8 +21,8 @@ log = "0.4"
 # the latter needs cmake and a full C toolchain, which the Android NDK does not
 # provide, and the two providers are interchangeable here. Both ABIs the app
 # ships were verified to build and link with this pairing before it was added.
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 # Trust anchors, compiled in. The device's own store is not reachable from a
 # library that has no platform TLS, and a resolver that cannot verify its
 # endpoint is a resolver that can be impersonated.
-webpki-roots = "0.26"
+webpki-roots = "1.0.11"

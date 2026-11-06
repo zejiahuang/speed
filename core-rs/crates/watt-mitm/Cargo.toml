@@ -5,6 +5,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+publish.workspace = true
 
 [dependencies]
 watt-rules = { workspace = true }
@@ -12,7 +13,7 @@ log = "0.4"
 # The listener's own transport. `ring` rather than the default `aws-lc-rs` for
 # the same reason `watt-stack` chose it: the latter needs cmake and a full C
 # toolchain, which the Android NDK does not provide.
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 # Issuing the CA and the per-name leaf certificates. The `ring` backend is
 # selected explicitly: rcgen's default feature set also pulls `ring`, but naming
 # it keeps that from changing under us if the default is ever revised.

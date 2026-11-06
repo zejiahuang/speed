@@ -97,6 +97,15 @@ jobs:
         run: cargo test --workspace --locked
         working-directory: core-rs
 
+      # 依赖树也是发布物的一部分。`core-rs/deny.toml` 决定什么可以进来：
+      # 公告库、许可证、来源和通配符版本。这一步失败意味着树里多了一个
+      # 不该有的东西，而不是构建本身有问题。
+      - name: 供应链检查
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check
+          manifest-path: core-rs/Cargo.toml
+
       # 三个 ABI 在同一个 job 里编，然后交给 Gradle 的 ABI 拆分。
       # 之所以不按 ABI 拆成三个并行 job：拆分的输入是 `jniLibs/` 里实际存在的
       # 库，只放一个 ABI 的库进去，另一个 ABI 的分包就可能因为「没有原生库」而
@@ -132,6 +141,24 @@ jobs:
           WATT_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           WATT_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: bash scripts/app-build.sh :app:testDebugUnitTest :app:lintDebug assembleRelease -PabiSplits
+
+      # 体积是有预算的：当前每个 ABI 的包约 2.5 MB（内核 .so 占大头），
+      # 上限放在 3.2 MiB 左右，留约三成余量。数字写死是故意的——包突然变大
+      # 应该是一个需要有人做决定的事件，而不是一天天悄悄长上去没人发现。
+      - name: 检查安装包体积
+        run: |
+          set -euo pipefail
+          budget=3400000
+          failed=0
+          for apk in android/app/build/outputs/apk/release/*.apk; do
+            size=$(stat -c %s "$apk")
+            printf '%s: %.2f MB\n' "$(basename "$apk")" "$(awk -v s="$size" 'BEGIN { print s / 1048576 }')"
+            if [ "$size" -gt "$budget" ]; then
+              echo "::error::$(basename "$apk") 超过体积预算（${budget} 字节）" >&2
+              failed=1
+            fi
+          done
+          exit "$failed"
 
       # 把「产物是不是我们要的那个」变成构建的一部分，而不是发布之后靠人看。
       # 这里最容易出的错是「标签打了 v0.1.0，但 versionName 忘了改」——那种包

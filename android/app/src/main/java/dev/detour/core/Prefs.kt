@@ -24,7 +24,7 @@ import org.json.JSONObject
  * developer view is off because most people do not want a cooling counter on
  * their home screen.
  */
-class Prefs private constructor(private val store: SharedPreferences) {
+class Prefs internal constructor(private val store: SharedPreferences) {
 
     var proxyPort by mutableStateOf(store.getInt(KEY_PROXY_PORT, DEFAULT_PROXY_PORT))
         private set
@@ -947,7 +947,7 @@ class Prefs private constructor(private val store: SharedPreferences) {
      *   the translation, and the two old keys are deleted in the same step rather
      *   than left in the initialiser's fallback path forever.
      */
-    private fun migrate() {
+    internal fun migrate() {
         val version = store.getInt(KEY_VERSION, 1)
 
         if (version < 3) {

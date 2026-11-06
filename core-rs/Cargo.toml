@@ -5,9 +5,17 @@ members = ["crates/watt-rules", "crates/watt-net", "crates/watt-stack", "crates/
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.75"
+# Floor comes from smoltcp 0.14, which declares 1.91. Every crate here is
+# compiled with the host toolchain and the Android targets, so the floor is
+# shared by the workspace rather than raised per crate.
+rust-version = "1.91"
 license = "GPL-3.0-only"
 repository = "https://github.com/zejiahuang/speed"
+# Nothing here is a crates.io package: the crates are the kernel's internal
+# layers. Saying so is what makes `cargo-deny`'s wildcard lint treat the
+# cross-crate path dependencies as local instead of as unpublished crates.io
+# requirements.
+publish = false
 
 [workspace.dependencies]
 watt-rules = { path = "crates/watt-rules" }

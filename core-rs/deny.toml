@@ -1,0 +1,57 @@
+# cargo-deny: what the dependency tree is allowed to contain.
+#
+# The C ABI this workspace builds is shipped inside an APK that installs a VPN,
+# so a dependency is part of that trust boundary. This file is the policy; the
+# `deny` job in `.github/workflows/release.yml` is the gate.
+
+[graph]
+# Check the host and the three Android targets the APK ships. A dependency that
+# is only reachable on one target still ends up in that ABI's `.so`.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-linux-android",
+    "armv7-linux-androideabi",
+    "x86_64-linux-android",
+]
+all-features = true
+
+[advisories]
+version = 2
+# No ignores yet. An advisory is a fact about a dependency, not noise to be
+# silenced; if one has to be ignored it should be a dated line with a reason.
+ignore = []
+
+[licenses]
+version = 2
+# Compatibility with this project's GPL-3.0-only licence is decided here once,
+# rather than in a comment on every dependency. The list is exactly what the
+# current tree uses; a new licence is a deliberate edit, not something that
+# slides in with an update.
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "CDLA-Permissive-2.0",
+    "GPL-3.0-only",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Unlicense",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+# A wildcard requirement cannot be reasoned about and cannot be pinned.
+wildcards = "deny"
+# The workspace crates depend on each other by path (`{ workspace = true }`),
+# which cargo-deny sees as a wildcard. Those paths are this repository, so they
+# are not the risk this lint is for; a real `*` version requirement still fails.
+allow-wildcard-paths = true
+
+[sources]
+# Everything must come from crates.io. A git dependency or a second registry is
+# a source that can change under a lockfile, which is the opposite of the point.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
