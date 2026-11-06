@@ -1,14 +1,20 @@
-// Plugin versions live here and are applied in :app, so the two cannot drift.
-//
-// Library versions come from the Compose BOM declared in app/build.gradle.kts.
-// The BOM resolves material3 to 1.4.0. In 1.4.0 the expressive *theme* API
-// (`MaterialExpressiveTheme`, `MotionScheme`, `ExperimentalMaterial3ExpressiveApi`)
-// is `internal` and cannot be called from an app module, so the app builds its
-// theme on the standard `MaterialTheme` and supplies its own shapes and springs.
-// Nothing is pinned here; the module inherits the version from the BOM.
+// Plugin and library versions live in gradle/libs.versions.toml. Plugins are
+// applied in :app, so the root and the module cannot drift.
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        // AGP 9 ships Kotlin 2.2.10 as its built-in Kotlin baseline. The Compose
+        // compiler plugin is 2.4.20 and must run against the same KGP, so raise
+        // KGP explicitly. Keep this in sync with `kotlin` in the version catalog.
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.4.20")
+    }
+}
 plugins {
     alias(libs.plugins.android.application) apply false
-    alias(libs.plugins.kotlin.android) apply false
+    // AGP 9 compiles Kotlin itself, so there is no `kotlin.android` plugin here.
     // The Compose compiler ships with Kotlin 2.x and is applied by this plugin.
     // Without it the build fails with a message about a missing compiler plugin.
     alias(libs.plugins.kotlin.compose) apply false

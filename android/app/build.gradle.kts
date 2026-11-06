@@ -2,15 +2,15 @@ import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
+    // Kotlin compilation comes from AGP 9's built-in Kotlin support.
     alias(libs.plugins.kotlin.compose)
 }
 
 /**
  * Where the first-launch disclaimer is materialised as a resource.
  *
- * Declared out here because two places need the same path — the `res.srcDir`
- * inside the `android` block and the task below that fills it — and a path
+ * Declared out here because two places need the same path — the `Sync` task
+ * that fills it and the variant API registration that consumes it — and a path
  * written twice is a path that drifts.
  */
 val disclaimerResDir = layout.buildDirectory.dir("generated/disclaimer/res")
@@ -50,7 +50,7 @@ val appVersionCode: Int = providers.gradleProperty("appVersionCode").orNull?.toI
 
 android {
     namespace = "dev.detour"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "dev.detour"
@@ -167,10 +167,12 @@ android {
     }
 
     // The kernel is a Rust `cdylib` built by `scripts/android-build.sh`. It is
-    // copied in rather than built here: Gradle has no business driving cargo,
-    // and keeping the two apart means the Rust build can be run and debugged on
-    // its own.
-    sourceSets["main"].jniLibs.srcDirs("src/main/jniLibs")
+    // copied into the default `src/main/jniLibs` rather than built here: Gradle
+    // has no business driving cargo, and keeping the two apart means the Rust
+    // build can be run and debugged on its own.
+    //
+    // No explicit `jniLibs.srcDirs` is needed — that is AGP's default — and the
+    // new SourceSet API deprecates passing paths to it.
 
     // --- the disclaimer the app shows on first launch -----------------------
     //
@@ -184,7 +186,6 @@ android {
     // for three times with values that outlived what they described. And a build
     // step that writes into the source tree dirties the working tree, which is
     // how a stray file ends up in the next `git add`.
-    sourceSets["main"].res.srcDir(disclaimerResDir)
 }
 
 /**
@@ -213,6 +214,17 @@ val syncDisclaimer = tasks.register<Sync>("syncDisclaimer") {
     into(disclaimerResDir)
 }
 
+// AGP 9 rejects `Provider` values in the SourceSet API because it cannot tell
+// generated from static inputs. Register the directory per variant instead;
+// this also wires the task dependency without naming a merge task.
+androidComponents {
+    onVariants { variant ->
+        variant.sources.res?.addGeneratedSourceDirectory(syncDisclaimer) {
+            it.destinationDirectory
+        }
+    }
+}
+
 tasks.named("preBuild") {
     dependsOn(syncDisclaimer)
 }
@@ -232,28 +244,19 @@ dependencies {
     implementation(libs.compose.ui.tooling.preview)
     implementation(libs.compose.foundation)
 
-    // **Pinned to `1.5.0-alpha18`, and that version is chosen rather than drifted
-    // into.** The BOM resolves material3 to `1.4.0`, where `MaterialExpressiveTheme`,
-    // `MotionScheme` and the `ExperimentalMaterial3ExpressiveApi` marker are all
-    // `internal` — the expressive API is in the jar but the compiler refuses every
-    // reference to it. The first line where it is public is `1.5.0`, and that line
-    // has a hard edge in the middle:
+    // **Pinned instead of taken from the BOM.** The BOM resolves material3 to the
+    // stable 1.4.x line, where `MaterialExpressiveTheme`, `MotionScheme` and the
+    // `ExperimentalMaterial3ExpressiveApi` marker are `internal` — the expressive
+    // API is in the jar but the compiler refuses every reference to it. 1.5.0-rc01
+    // is the newest published release on that line and the first whose expressive
+    // API is public; it declares `minCompileSdk=37` and
+    // `minAndroidGradlePluginVersion=9.1.0`, both satisfied by the AGP 9.5.1 /
+    // compileSdk 37 build.
     //
-    // * `alpha01`–`alpha18` declare `minCompileSdk=35` and drag Compose
-    //   `1.11.0-beta02` (also 35) — this module compiles against 36 with AGP
-    //   8.13.2, so the whole closure fits.
-    // * `alpha19` and later, `beta01` included, declare `minCompileSdk=37` **and**
-    //   `minAndroidGradlePluginVersion=9.1.0` — out of reach without moving to
-    //   AGP 9, which is the same ceiling that pins `backdrop` to 1.0.6.
-    //
-    // So `alpha18` is the newest release whose closure fits *and* whose expressive
-    // API is public; everything between it and stable is unreachable rather than
-    // merely unchosen.
-    //
-    // The cost is that this is an alpha, and material3 is not a leaf: every `Card`,
-    // `TextField`, `FilterChip` and `SegmentedButton` in the app comes from it, so a
-    // bump can move metrics that were previously measured. Anything that depends on
-    // those numbers has to be re-measured on device, not assumed.
+    // material3 is not a leaf: every `Card`, `TextField`, `FilterChip` and
+    // `SegmentedButton` in the app comes from it, so a bump can move metrics that
+    // were previously measured. Anything that depends on those numbers has to be
+    // re-measured on device, not assumed.
     implementation(libs.material3)
     implementation(libs.material3.wsc)
 
@@ -265,21 +268,14 @@ dependencies {
     // Apache-2.0 and `minSdk 21`, so it does not move our 26 floor, and it pulls
     // in `io.github.kyant0:shapes`, which the lens effect reads corner radii from.
     //
-    // **1.0.6, and not the latest (2.0.1). This is a compileSdk ceiling, not a
-    // preference.** 2.0.1 fails `:app:checkDebugAarMetadata` with 22 issues: the
-    // AAR itself declares `minCompileSdk=37`, it drags `shapes` to 1.2.1 (also 37),
-    // and it drags Compose to 1.12.0 (also 37) — while this module compiles
-    // against 36 and the AGP in use (8.13.2) tops out at 36. Raising compileSdk to
-    // 37 would mean AGP 9.1.0 and Gradle 9, a blast radius far larger than the
-    // feature. 1.0.6 is the newest release whose whole closure fits:
-    // `backdrop-android` 36, `shapes-android` 1.2.0 36, Compose 1.10.3 35.
+    // 2.0.1 is the newest release and its closure fits now that the module
+    // compiles against 37: the AAR declares `minCompileSdk=37`, `shapes` is 1.2.1
+    // and Compose is 1.12.
     //
-    // The API cost of the downgrade is one pair of helpers. 2.0.1 adds
-    // `PlatformKt.isRenderEffectSupported()` / `isRuntimeShaderSupported()`, which
-    // 1.0.6 does not have; `LiquidGlass.kt` inlines them as `SDK_INT` tests. Every
-    // other signature used there — `drawBackdrop`, `rememberLayerBackdrop`,
-    // `layerBackdrop`, `blur`, `lens`, `vibrancy`, and all their parameter names —
-    // is byte-for-byte identical between the two versions.
+    // 2.0.1 also adds `PlatformKt.isRenderEffectSupported()` and
+    // `isRuntimeShaderSupported()`; `LiquidGlass.kt` still inlines those as
+    // `SDK_INT` tests, which is equivalent and avoids another Compose-version
+    // dependency in that file.
     implementation(libs.backdrop)
 
     // Not brought in by material3 transitively; the navigation bar icons need it.
@@ -298,17 +294,14 @@ dependencies {
     // The `-m3` artifact carries Material 3 colours, typography and components, so
     // the output follows the app's theme instead of arriving with its own palette.
     //
-    // **0.41.0, and not the latest (0.45.0). This is a compileSdk ceiling, not a
-    // preference** — the same wall `backdrop` hit above. 0.42.0 and later declare
-    // `minCompileSdk=37` in their AAR metadata, so `:app:checkDebugAarMetadata`
-    // refuses them: this module compiles against 36 and AGP 8.13.2 tops out there.
-    // 0.41.0 is the newest release that declares 36. Check the AAR's
-    // `META-INF/com/android/build/gradle/aar-metadata.properties` before bumping,
-    // not the version number.
+    // 0.46.0 is the newest release. 0.42.0 and later declare `minCompileSdk=37` in
+    // their AAR metadata, which is exactly why this was held at 0.41.0 before the
+    // AGP 9 / compileSdk 37 migration. Check the AAR's
+    // `META-INF/com/android/build/gradle/aar-metadata.properties` before the next
+    // bump, not the version number.
     //
     // It pulls `org.jetbrains:markdown` (the parser) and does **not** move Compose:
-    // with it on the classpath, `androidx.compose.ui:ui` still resolves to 1.10.3
-    // from the BOM above.
+    // `androidx.compose.ui:ui` still resolves from the BOM above.
     implementation(libs.markdown.renderer.m3)
 
     // `material-icons-extended` is not pulled in. It was deprecated and the icons

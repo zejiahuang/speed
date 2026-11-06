@@ -123,8 +123,8 @@ jobs:
       - name: 缓存 Gradle 发行包
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: ~/.cache/gradle-8.14.3
-          key: gradle-8.14.3
+          path: ~/.cache/gradle-9.8.2
+          key: gradle-9.8.2
 
       - name: 缓存 cargo 与内核中间产物
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
@@ -154,7 +154,7 @@ jobs:
       - name: 安装 Android SDK
         uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
         with:
-          packages: "platform-tools platforms;android-36 build-tools;36.0.0"
+          packages: "platform-tools platforms;android-37.0 build-tools;36.0.0"
 
       - name: 指向 runner 自带的 SDK
         run: |
@@ -195,10 +195,10 @@ jobs:
           printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
           echo "WATT_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
 
-      # 单元测试与打包放在同一次 Gradle 调用里。测试比正式发布那条路径多这一道，
-      # 是因为这个工作流无人值守：没人按下的发布按钮，应该由测试替他把门。
-      # 测试失败时后面的发布步骤不会执行，工作流变红。
-      - name: 跑单元测试并打包签名（按 ABI 拆分）
+      # 单元测试、lint 与打包放在同一次 Gradle 调用里。这个工作流无人值守：
+      # 没人按下的发布按钮，应该由测试和 lint 替他把门。
+      # 任一失败时后面的发布步骤不会执行，工作流变红。
+      - name: 跑单元测试和 lint，打包并签名（按 ABI 拆分）
         env:
           SKIP_NATIVE: "1"
           BETA_VERSION: ${{ needs.plan.outputs.version }}
@@ -207,7 +207,7 @@ jobs:
           WATT_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          bash scripts/app-build.sh :app:testDebugUnitTest assembleRelease \
+          bash scripts/app-build.sh :app:testDebugUnitTest :app:lintDebug assembleRelease \
             -PabiSplits -PappVersionName="$BETA_VERSION"
 
       # 与 `release.yml` 同样的校验：包内 versionName 必须等于标签，且三个 ABI 各一个包。

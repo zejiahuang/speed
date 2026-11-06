@@ -1,21 +1,22 @@
 # Single source of truth for plugin and library versions.
 #
-# The Compose BOM still decides the versions of the `androidx.compose.*` artifacts
-# that carry no `version.ref` below. Only modules whose version is deliberately
-# chosen (or pinned by a compileSdk ceiling) appear with an explicit version.
+# The Compose BOM decides the versions of the `androidx.compose.*` artifacts that
+# carry no `version.ref` below. Modules pinned on purpose — because the BOM does
+# not manage them, or because a specific release is required — carry an explicit
+# version.
 
 [versions]
-agp = "8.13.2"
+agp = "9.5.1"
 kotlin = "2.4.20"
-composeBom = "2025.12.01"
+composeBom = "2026.09.00"
 coreKtx = "1.15.0"
 activityCompose = "1.10.1"
 lifecycle = "2.8.7"
 navigation = "2.8.5"
-material3 = "1.5.0-alpha18"
+material3 = "1.5.0-rc01"
 materialIcons = "1.7.8"
-backdrop = "1.0.6"
-markdownRenderer = "0.41.0"
+backdrop = "2.0.1"
+markdownRenderer = "0.46.0"
 junit = "4.13.2"
 
 [libraries]
@@ -44,5 +45,6 @@ junit = { module = "junit:junit", version.ref = "junit" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
-kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+# AGP 9 has built-in Kotlin, so `org.jetbrains.kotlin.android` is no longer
+# applied. The Compose compiler plugin is still required and still tracks Kotlin.
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }

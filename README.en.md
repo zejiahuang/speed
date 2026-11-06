@@ -309,7 +309,7 @@ but this does not promise the third party does not log the download. If you do n
 ## Build from source
 
 You need: Rust (with the `aarch64-linux-android`, `armv7-linux-androideabi` and `x86_64-linux-android` targets),
-Android NDK r30, the Android SDK (platform 36 + build-tools 36.0.0), and JDK 17.
+Android NDK r30, the Android SDK (platform 37.0 + build-tools 36.0.0), and JDK 17.
 
 Two commands are enough (run from the repository root):
 
@@ -334,7 +334,7 @@ something goes wrong:
 - **`--features jni-bridge` cannot be omitted**: without it `System.loadLibrary` still succeeds, but every call
   throws `UnsatisfiedLinkError`.
 - **There is no Gradle wrapper in the repository**: a binary nobody can regenerate is worse than one download, so
-  the script fetches the distribution into `~/.cache/gradle-8.14.3`.
+  the script fetches the distribution into `~/.cache/gradle-9.8.2`.
 - **Signing is driven entirely by the environment, and no key is in the repository**: set `WATT_KEYSTORE`,
   `WATT_KEYSTORE_PASSWORD`, `WATT_KEY_ALIAS` and `WATT_KEY_PASSWORD` and the build produces a signed package;
   leave them unset and it stops unsigned — a deliberate stopping point, not an oversight.

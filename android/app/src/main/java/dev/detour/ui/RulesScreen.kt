@@ -48,6 +48,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
@@ -190,6 +191,10 @@ private fun Modifier.hierarchyRail(x: Dp, color: Color): Modifier = drawBehind {
 @Composable
 fun RulesScreen() {
     val context = LocalContext.current
+    // The load paths below report failures from inside coroutines, where
+    // `stringResource` is not callable. `LocalResources` is configuration-aware,
+    // unlike a `Context` captured by a long-lived lambda.
+    val resources = LocalResources.current
     val prefs = Prefs.of(context)
     val scope = rememberCoroutineScope()
     // The page's gutter, read once: the header, the search field, the source row,
@@ -274,7 +279,7 @@ fun RulesScreen() {
             index = withContext(Dispatchers.IO) {
                 runCatching { RuleIndex.parse(context) }
                     .onFailure {
-                        loadError = it.message ?: context.getString(R.string.common_unknown)
+                        loadError = it.message ?: resources.getString(R.string.common_unknown)
                         KernelState.log(
                             context,
                             KernelState.LogEntry.Level.ERROR,
@@ -373,7 +378,7 @@ fun RulesScreen() {
         index = withContext(Dispatchers.IO) {
             runCatching { RuleIndex.parse(context) }
                 .onFailure {
-                    loadError = it.message ?: context.getString(R.string.common_unknown)
+                    loadError = it.message ?: resources.getString(R.string.common_unknown)
                     KernelState.log(
                         context,
                         KernelState.LogEntry.Level.ERROR,

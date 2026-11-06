@@ -50,6 +50,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
@@ -343,6 +344,11 @@ fun SettingsScreen(
     onOpenAbout: () -> Unit,
 ) {
     val context = LocalContext.current
+    // The file pickers and dialogs below report their outcome from callbacks and
+    // coroutines, where `stringResource` is not callable. `LocalResources` is the
+    // configuration-aware entry point; a `Context` captured by such a lambda would
+    // keep the configuration it was taken from.
+    val resources = LocalResources.current
     val prefs = Prefs.of(context)
     val status by KernelState.status.collectAsState()
     // `pending` is a question about the *running* engine, so it is only asked while
@@ -417,18 +423,18 @@ fun SettingsScreen(
                           context.contentResolver.openOutputStream(uri)?.use { stream ->
                               stream.write(SettingsBackup.export(context).toByteArray())
                           } ?: throw IOException(
-                              context.getString(R.string.common_output_stream_failed),
+                              resources.getString(R.string.common_output_stream_failed),
                           )
                     }
                 }
                 // `stringResource` is not callable from a click handler, so the
                 // toast text comes from the context directly.
                 val message = outcome.fold(
-                    onSuccess = { context.getString(R.string.settings_export_done) },
+                    onSuccess = { resources.getString(R.string.settings_export_done) },
                       onFailure = {
-                          context.getString(
+                          resources.getString(
                               R.string.settings_export_failed,
-                              it.message ?: context.getString(R.string.common_unknown),
+                              it.message ?: resources.getString(R.string.common_unknown),
                           )
                       },
                 )
@@ -454,7 +460,7 @@ fun SettingsScreen(
                                   context.contentResolver.openInputStream(uri)?.use { stream ->
                                       stream.bufferedReader().readText()
                                   } ?: throw IOException(
-                                      context.getString(R.string.common_input_stream_failed),
+                                      resources.getString(R.string.common_input_stream_failed),
                                   )
                             }
                         }
@@ -463,11 +469,11 @@ fun SettingsScreen(
                                 val result = SettingsBackup.import(context, json)
                                 when (result.failure) {
                                     SettingsBackup.ImportResult.Failure.NOT_JSON ->
-                                        context.getString(R.string.settings_import_bad_json)
+                                        resources.getString(R.string.settings_import_bad_json)
                                     SettingsBackup.ImportResult.Failure.NOT_OURS ->
-                                        context.getString(R.string.settings_import_not_ours)
+                                        resources.getString(R.string.settings_import_not_ours)
                                     SettingsBackup.ImportResult.Failure.TOO_NEW ->
-                                        context.getString(R.string.settings_import_too_new)
+                                        resources.getString(R.string.settings_import_too_new)
                                     null -> {
                                         // An import can change the rule source, and the
                                         // kernel keeps serving the old table until it is
@@ -477,9 +483,9 @@ fun SettingsScreen(
                                         RulesRepository.invalidate(context)
                                         DetourVpnService.reloadRulesIfRunning()
                                         if (result.ignored == 0) {
-                                            context.getString(R.string.settings_import_done, result.applied)
+                                            resources.getString(R.string.settings_import_done, result.applied)
                                         } else {
-                                            context.getString(
+                                            resources.getString(
                                                 R.string.settings_import_done_ignored,
                                                 result.applied,
                                                 result.ignored,
@@ -489,9 +495,9 @@ fun SettingsScreen(
                                 }
                             },
                               onFailure = {
-                                  context.getString(
+                                  resources.getString(
                                       R.string.settings_import_read_failed,
-                                      it.message ?: context.getString(R.string.common_unknown),
+                                      it.message ?: resources.getString(R.string.common_unknown),
                                   )
                               },
                         )
@@ -523,11 +529,11 @@ fun SettingsScreen(
                 val message = withContext(Dispatchers.IO) {
                     when (val outcome = RulesRepository.importLocal(context, uri)) {
                         is RulesRepository.LocalImport.Added ->
-                            context.getString(R.string.rules_import_done, outcome.source.label)
+                            resources.getString(R.string.rules_import_done, outcome.source.label)
                         is RulesRepository.LocalImport.AlreadyPresent ->
-                            context.getString(R.string.rules_import_already, outcome.source.label)
+                            resources.getString(R.string.rules_import_already, outcome.source.label)
                         is RulesRepository.LocalImport.Failed ->
-                            context.getString(R.string.rules_import_failed, outcome.reason)
+                            resources.getString(R.string.rules_import_failed, outcome.reason)
                     }
                 }
                 Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
@@ -1916,7 +1922,7 @@ fun SettingsScreen(
                         // the toast text comes from the context directly.
                         Toast.makeText(
                             context,
-                            context.getString(R.string.settings_restore_done),
+                            resources.getString(R.string.settings_restore_done),
                             Toast.LENGTH_SHORT,
                         ).show()
                         showRestoreConfirm = false

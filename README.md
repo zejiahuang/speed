@@ -271,7 +271,7 @@ root 模式把域名劫持到本机终结 TLS 的代理，代理要**重新发�
 ## 从源码构建
 
 需要：Rust（含 `aarch64-linux-android`、`armv7-linux-androideabi` 与 `x86_64-linux-android` target）、
-Android NDK r30、Android SDK（platform 36 + build-tools 36.0.0）、JDK 17。
+Android NDK r30、Android SDK（platform 37.0 + build-tools 36.0.0）、JDK 17。
 
 两条命令就够了（在仓库根目录执行）：
 
@@ -292,7 +292,7 @@ SKIP_NATIVE=1 bash scripts/app-build.sh assembleRelease -PabiSplits
 - **`--features jni-bridge` 不能省**：少了它 `System.loadLibrary` 照样成功，但每次调用都抛
   `UnsatisfiedLinkError`。
 - **仓库里没有 Gradle wrapper**：一份没人能重新生成的二进制比一次下载更糟，发行包由脚本取到
-  `~/.cache/gradle-8.14.3`。
+  `~/.cache/gradle-9.8.2`。
 - **签名完全由环境驱动，仓库里没有任何密钥**：设好 `WATT_KEYSTORE`、`WATT_KEYSTORE_PASSWORD`、
   `WATT_KEY_ALIAS`、`WATT_KEY_PASSWORD` 后产出已签名包；不设则停在未签名状态——这是刻意的停止点，
   不是遗漏。

@@ -14,7 +14,7 @@
 #
 # Environment:
 #   ANDROID_HOME   SDK location      (default: ~/android-sdk)
-#   GRADLE_VERSION distribution      (default: 8.14.3)
+#   GRADLE_VERSION distribution      (default: 9.8.2)
 #   SKIP_NATIVE    1 to reuse the existing .so
 
 set -uo pipefail
@@ -22,11 +22,11 @@ set -uo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ANDROID_DIR="$REPO_DIR/android"
 ANDROID_HOME="${ANDROID_HOME:-$HOME/android-sdk}"
-GRADLE_VERSION="${GRADLE_VERSION:-8.14.3}"
+GRADLE_VERSION="${GRADLE_VERSION:-9.8.2}"
 GRADLE_HOME="$HOME/.cache/gradle-$GRADLE_VERSION"
 
 if [ ! -d "$ANDROID_HOME/platforms" ]; then
-  echo "app-build: no SDK at $ANDROID_HOME — install the Android SDK (platform 36 +" >&2
+  echo "app-build: no SDK at $ANDROID_HOME — install the Android SDK (platform 37.0 +" >&2
   echo "app-build: build-tools 36.0.0) and point ANDROID_HOME at it" >&2
   exit 1
 fi

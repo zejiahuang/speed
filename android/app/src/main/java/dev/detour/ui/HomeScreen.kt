@@ -51,6 +51,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -144,6 +145,10 @@ fun HomeScreen() {
     val mitmStats by KernelState.mitmStats.collectAsState()
     val proxyStats by KernelState.proxyStats.collectAsState()
     val context = LocalContext.current
+    // Resource lookups that happen in a click handler cannot use `stringResource`,
+    // and a `Context` captured in a lambda keeps the configuration it was taken
+    // from. `LocalResources` is the configuration-aware entry point.
+    val resources = LocalResources.current
     val prefs = Prefs.of(context)
     // The shared spacing scale. Read once here rather than per component, so the
     // page's rhythm is one list of tiers instead of a scatter of literals.
@@ -326,7 +331,7 @@ fun HomeScreen() {
                         if (status.isRunning) {
                             Toast.makeText(
                                 context,
-                                context.getString(R.string.home_mode_locked),
+                                resources.getString(R.string.home_mode_locked),
                                 Toast.LENGTH_SHORT,
                             ).show()
                         } else {

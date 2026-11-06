@@ -49,6 +49,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -104,6 +105,10 @@ import kotlinx.coroutines.launch
 @Composable
 fun LogsScreen() {
     val context = LocalContext.current
+    // Read in composition and captured by the click handlers below: `stringResource`
+    // is not callable from a handler, and a `Context` captured there would carry the
+    // configuration it was taken from.
+    val resources = LocalResources.current
     val all by KernelState.logs.collectAsState()
     var paused by remember { mutableStateOf(false) }
     var filter by remember { mutableStateOf(Filter.ALL) }
@@ -205,7 +210,7 @@ fun LogsScreen() {
         // because it is only known here, at click time.
         Toast.makeText(
             context,
-            context.getString(R.string.logs_copied_all, visible.size),
+            resources.getString(R.string.logs_copied_all, visible.size),
             Toast.LENGTH_SHORT,
         ).show()
     }
@@ -257,9 +262,9 @@ fun LogsScreen() {
         }.onFailure {
             Toast.makeText(
                 context,
-                context.getString(
+                resources.getString(
                     R.string.logs_export_failed,
-                    it.message ?: context.getString(R.string.common_unknown),
+                    it.message ?: resources.getString(R.string.common_unknown),
                 ),
                 Toast.LENGTH_SHORT,
             ).show()

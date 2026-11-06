@@ -42,6 +42,7 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -260,6 +261,9 @@ private fun DetourAppBody(onRequestNotifications: () -> Unit = {}) {
     val destinations = Destination.entries
     val scheme = MaterialTheme.colorScheme
     val context = LocalContext.current
+    // The battery log line below is written from a lifecycle callback, where
+    // `stringResource` is not callable; this is the configuration-aware Resources.
+    val resources = LocalResources.current
     val prefs = Prefs.of(context)
 
     // The first-launch consent gate.
@@ -335,9 +339,9 @@ private fun DetourAppBody(onRequestNotifications: () -> Unit = {}) {
                 },
                 "MainActivity",
                 if (unrestricted) {
-                    context.getString(R.string.log_battery_unrestricted)
+                    resources.getString(R.string.log_battery_unrestricted)
                 } else {
-                    context.getString(R.string.log_battery_restricted)
+                    resources.getString(R.string.log_battery_restricted)
                 },
             )
         }
