@@ -7,9 +7,9 @@
 // theme on the standard `MaterialTheme` and supplies its own shapes and springs.
 // Nothing is pinned here; the module inherits the version from the BOM.
 plugins {
-    id("com.android.application") version "8.13.2" apply false
-    id("org.jetbrains.kotlin.android") version "2.4.20" apply false
+    alias(libs.plugins.android.application) apply false
+    alias(libs.plugins.kotlin.android) apply false
     // The Compose compiler ships with Kotlin 2.x and is applied by this plugin.
     // Without it the build fails with a message about a missing compiler plugin.
-    id("org.jetbrains.kotlin.plugin.compose") version "2.4.20" apply false
+    alias(libs.plugins.kotlin.compose) apply false
 }

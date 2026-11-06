@@ -16,3 +16,13 @@ watt-stack = { path = "crates/watt-stack" }
 watt-daemon = { path = "crates/watt-daemon" }
 watt-proxy = { path = "crates/watt-proxy" }
 watt-mitm = { path = "crates/watt-mitm" }
+
+# Release builds land inside the APK: the kernel is a ~1.9 MB `.so` per ABI.
+# Thin LTO and one codegen unit trade build time for a smaller, faster library;
+# symbols are stripped because nothing on device reads them. `opt-level` stays
+# at the default (3) until TCP throughput has been measured — `"z"` would trade
+# throughput for size, and that trade has not been measured here.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

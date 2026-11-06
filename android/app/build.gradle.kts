@@ -1,9 +1,9 @@
 import java.util.Properties
 
 plugins {
-    id("com.android.application")
-    id("org.jetbrains.kotlin.android")
-    id("org.jetbrains.kotlin.plugin.compose")
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.kotlin.compose)
 }
 
 /**
@@ -116,10 +116,17 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // The release build is the one users install. R8 removes code no path
+            // reaches and renames what remains, so the kernel's JNI surface is
+            // kept by name in `proguard-rules.pro` — that surface is resolved at
+            // runtime, not through a compile-time reference.
+            isMinifyEnabled = true
             // Left unsignable on purpose: a release build without a keystore is a
             // deliberate stopping point, not an oversight.
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
             if (releaseKeystorePath != null) {
                 signingConfig = signingConfigs.getByName("release")
             }
@@ -136,6 +143,15 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    // A correctness error from lint stops the build instead of becoming a line in
+    // a log nobody reads. Warnings stay warnings: this tree has not had a
+    // warning-free lint baseline yet, and `warningsAsErrors = true` before that
+    // baseline would block releases for pre-existing style findings.
+    lint {
+        abortOnError = true
+        checkReleaseBuilds = true
     }
 
     kotlin {
@@ -202,19 +218,19 @@ tasks.named("preBuild") {
 }
 
 dependencies {
-    val composeBom = platform("androidx.compose:compose-bom:2025.12.01")
+    val composeBom = platform(libs.compose.bom)
     implementation(composeBom)
 
-    implementation("androidx.core:core-ktx:1.15.0")
-    implementation("androidx.activity:activity-compose:1.10.1")
-    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
-    implementation("androidx.navigation:navigation-compose:2.8.5")
+    implementation(libs.core.ktx)
+    implementation(libs.activity.compose)
+    implementation(libs.lifecycle.runtime.compose)
+    implementation(libs.lifecycle.viewmodel.compose)
+    implementation(libs.navigation.compose)
 
-    implementation("androidx.compose.ui:ui")
-    implementation("androidx.compose.ui:ui-graphics")
-    implementation("androidx.compose.ui:ui-tooling-preview")
-    implementation("androidx.compose.foundation:foundation")
+    implementation(libs.compose.ui)
+    implementation(libs.compose.ui.graphics)
+    implementation(libs.compose.ui.tooling.preview)
+    implementation(libs.compose.foundation)
 
     // **Pinned to `1.5.0-alpha18`, and that version is chosen rather than drifted
     // into.** The BOM resolves material3 to `1.4.0`, where `MaterialExpressiveTheme`,
@@ -238,8 +254,8 @@ dependencies {
     // `TextField`, `FilterChip` and `SegmentedButton` in the app comes from it, so a
     // bump can move metrics that were previously measured. Anything that depends on
     // those numbers has to be re-measured on device, not assumed.
-    implementation("androidx.compose.material3:material3:1.5.0-alpha18")
-    implementation("androidx.compose.material3:material3-window-size-class:1.5.0-alpha18")
+    implementation(libs.material3)
+    implementation(libs.material3.wsc)
 
     // The backdrop sampler the frosted glass draws with. Compose has no built-in
     // way to read the pixels *behind* a composable — `Modifier.blur` blurs the
@@ -264,10 +280,10 @@ dependencies {
     // other signature used there — `drawBackdrop`, `rememberLayerBackdrop`,
     // `layerBackdrop`, `blur`, `lens`, `vibrancy`, and all their parameter names —
     // is byte-for-byte identical between the two versions.
-    implementation("io.github.kyant0:backdrop:1.0.6")
+    implementation(libs.backdrop)
 
     // Not brought in by material3 transitively; the navigation bar icons need it.
-    implementation("androidx.compose.material:material-icons-core:1.7.8")
+    implementation(libs.material.icons.core)
 
     // Markdown rendering, for the first-launch disclaimer and the release notes.
     //
@@ -293,12 +309,12 @@ dependencies {
     // It pulls `org.jetbrains:markdown` (the parser) and does **not** move Compose:
     // with it on the classpath, `androidx.compose.ui:ui` still resolves to 1.10.3
     // from the BOM above.
-    implementation("com.mikepenz:multiplatform-markdown-renderer-m3:0.41.0")
+    implementation(libs.markdown.renderer.m3)
 
     // `material-icons-extended` is not pulled in. It was deprecated and the icons
     // this app needs are all in `material-icons-core`, which `material3` already
     // brings.
-    debugImplementation("androidx.compose.ui:ui-tooling")
+    debugImplementation(libs.compose.ui.tooling)
 
     // Unit tests for the pure logic that has no Android dependency — today, just
     // `Version`'s ordering. JUnit 4 rather than 5 because AGP's default `test`
@@ -311,5 +327,5 @@ dependencies {
     // on the emulator. An instrumentation harness would add a second, weaker way
     // to check the same things, and a weaker test that passes is worse than no
     // test, because it is believed.
-    testImplementation("junit:junit:4.13.2")
+    testImplementation(libs.junit)
 }

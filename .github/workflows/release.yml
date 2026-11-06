@@ -28,19 +28,19 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: 检出
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # 本仓库不提交 Gradle wrapper —— 一个仓库里没有任何东西能重新生成的二进制
       # 比一次下载更糟。`scripts/app-build.sh` 首次运行会把发行包取到 ~/.cache，
       # 所以缓存的是那个目录，而不是让每个标签都重新下一次。
       - name: 缓存 Gradle 发行包
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.cache/gradle-8.14.3
           key: gradle-8.14.3
 
       - name: 缓存 cargo 与内核中间产物
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry
@@ -50,7 +50,7 @@ jobs:
           restore-keys: cargo-${{ runner.os }}-
 
       - name: 安装 JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: temurin
           java-version: "17"
@@ -61,7 +61,7 @@ jobs:
       # 表现为「安装 Android SDK」这一步就红了，与我们的构建毫无关系。
       # 这里换成真实存在的包，并且一次把它该装的装完，省得再去猜它的 PATH。
       - name: 安装 Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
         with:
           packages: "platform-tools platforms;android-36 build-tools;36.0.0"
 
@@ -87,9 +87,15 @@ jobs:
           echo "NDK_DIR=$HOME/android/android-ndk-r30" >> "$GITHUB_ENV"
 
       - name: 安装 Rust 与 Android target
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      # 标签发布不能跳过测试。daily-beta 已经在打测试包前跑过 app 单测，
+      # 正式发布没有理由更宽松；内核的测试同理，先把 `cargo test` 跑通再编。
+      - name: 测试内核
+        run: cargo test --workspace --locked
+        working-directory: core-rs
 
       # 三个 ABI 在同一个 job 里编，然后交给 Gradle 的 ABI 拆分。
       # 之所以不按 ABI 拆成三个并行 job：拆分的输入是 `jniLibs/` 里实际存在的
@@ -122,7 +128,7 @@ jobs:
           WATT_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           WATT_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           WATT_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        run: bash scripts/app-build.sh assembleRelease -PabiSplits
+        run: bash scripts/app-build.sh :app:testDebugUnitTest assembleRelease -PabiSplits
 
       # 把「产物是不是我们要的那个」变成构建的一部分，而不是发布之后靠人看。
       # 这里最容易出的错是「标签打了 v0.1.0，但 versionName 忘了改」——那种包
@@ -170,7 +176,7 @@ jobs:
           done
 
       - name: 上传产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: apks
           path: android/app/build/outputs/apk/release/*.apk
@@ -184,10 +190,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: 检出（取 CHANGELOG.md）
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: 下载产物
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: apks
           path: apks
@@ -252,7 +258,7 @@ jobs:
       # SemVer places the prerelease identifiers after a hyphen (`v0.2.4-beta.1`),
       # so a hyphen anywhere in the tag is the signal. A plain `v0.2.3` has none.
       - name: 创建 Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           body_path: notes.md
           files: out/*.apk

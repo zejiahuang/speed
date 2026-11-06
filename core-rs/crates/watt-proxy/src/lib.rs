@@ -1502,8 +1502,11 @@ mod tests {
     fn a_rule_port_overrides_the_requested_one() {
         // A rule naming port 8443 describes where the service lives, so the
         // fallback has to aim there rather than at whatever the client asked for.
+        // `127.0.0.1`, not `localhost`: the name resolves to `::1` as well on
+        // hosts whose `/etc/hosts` maps both families, and this test is about
+        // which *port* wins, not about the resolver's candidate list.
         assert_eq!(
-            fallback_targets("localhost", 1234, Some(8443)).unwrap(),
+            fallback_targets("127.0.0.1", 1234, Some(8443)).unwrap(),
             vec![SocketAddr::from(([127, 0, 0, 1], 8443))]
         );
     }
@@ -1511,7 +1514,7 @@ mod tests {
     #[test]
     fn without_a_rule_port_the_client_port_is_used() {
         assert_eq!(
-            fallback_targets("localhost", 443, None).unwrap(),
+            fallback_targets("127.0.0.1", 443, None).unwrap(),
             vec![SocketAddr::from(([127, 0, 0, 1], 443))]
         );
     }

@@ -47,6 +47,19 @@ if [ ! -x "$GRADLE_HOME/bin/gradle" ]; then
     echo "app-build: could not download $url" >&2
     exit 1
   }
+
+  # The repository deliberately has no wrapper jar, so this download is the one
+  # place the Gradle binary enters the build. Verify it against the checksum
+  # published next to the distribution rather than trusting the transport alone.
+  expected="$(curl -fsSL "$url.sha256")" || {
+    echo "app-build: could not fetch $url.sha256" >&2
+    exit 1
+  }
+  actual="$(sha256sum "$tmp/gradle.zip" | cut -d' ' -f1)"
+  if [ "$actual" != "$expected" ]; then
+    echo "app-build: Gradle checksum mismatch: expected $expected, got $actual" >&2
+    exit 1
+  fi
   unzip -q "$tmp/gradle.zip" -d "$HOME/.cache"
   rm -rf "$tmp"
 fi
