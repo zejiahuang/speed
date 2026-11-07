@@ -39,11 +39,14 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -95,6 +98,7 @@ import dev.detour.ui.theme.LocalDetourSpacing
 import androidx.compose.ui.draw.drawBehind
 import dev.detour.ui.theme.LocalDetourBackground
 import dev.detour.ui.theme.drawDetourBackground
+import kotlinx.coroutines.delay
 import dev.detour.ui.theme.supportsDynamicColor
 import java.io.IOException
 import java.time.LocalDateTime
@@ -945,11 +949,20 @@ fun SettingsScreen(
             prefs.dnsUpstreamUrl.isEmpty() -> ""
             else -> "custom"
         }
+        // The fields show a local draft rather than the stored value: writing on
+        // every keystroke means one settings commit per character, and on a slow
+        // device the text visibly stutters as each character is written and read
+        // back. See [rememberResolverDraft] for when the draft is committed.
+        val resolver = rememberResolverDraft(
+            storedUrl = prefs.dnsUpstreamUrl,
+            storedAddress = prefs.dnsUpstreamAddress,
+        ) { url, address -> prefs.updateDnsUpstream(url, address) }
         // "There is text and it is not an endpoint". An empty field is not an
         // error — it is the state every install starts in — and marking it red
         // would greet every user with a complaint about a setting they have not
-        // touched.
-        val resolverWrong = prefs.dnsUpstreamUrl.isNotEmpty() && !prefs.dnsUpstreamConfigured
+        // touched. Read from the draft, so the answer appears as they type rather
+        // than a commit later.
+        val resolverWrong = resolver.url.isNotEmpty() && !Prefs.isDohEndpoint(resolver.url, resolver.address)
         val resolverSupport: (@Composable () -> Unit)? = if (resolverWrong) {
             { Text(resolverUrlBad) }
         } else {
@@ -997,8 +1010,8 @@ fun SettingsScreen(
                     },
                 )
                 OutlinedTextField(
-                    value = prefs.dnsUpstreamUrl,
-                    onValueChange = { prefs.updateDnsUpstream(it, prefs.dnsUpstreamAddress) },
+                    value = resolver.url,
+                    onValueChange = { resolver.url = it },
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = spacing.lg),
@@ -1014,8 +1027,8 @@ fun SettingsScreen(
                 // fingers as they typed the authority — the one moment they need
                 // to see where it goes. The hint says when it matters.
                 OutlinedTextField(
-                    value = prefs.dnsUpstreamAddress,
-                    onValueChange = { prefs.updateDnsUpstream(prefs.dnsUpstreamUrl, it) },
+                    value = resolver.address,
+                    onValueChange = { resolver.address = it },
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(start = spacing.lg, end = spacing.lg, top = spacing.sm),
@@ -2263,6 +2276,76 @@ private fun PendingCard(onRestart: () -> Unit, modifier: Modifier = Modifier) {
         }
     }
 }
+
+/**
+ * The two resolver fields, held locally while they are typed.
+ *
+ * `Prefs` stays the source of truth, but writing on every keystroke means one
+ * settings commit per character — and since the field's value is read back from
+ * that same store, a slow device renders each letter a commit late.
+ *
+ * **Both fields commit together, after a pause.** They are one setting: a URL
+ * with the address that was stored when the *other* field last committed is a
+ * half-written endpoint, and committing them separately lets a fast edit of both
+ * leave the pair mismatched.
+ *
+ * **Adopting outside changes.** A preset chip and "restore defaults" write
+ * directly, so the draft takes the stored pair whenever it differs — that is
+ * also how a completed commit comes back, and it is why the two are compared
+ * rather than blindly assigned (assigning on every recomposition would undo
+ * whatever was just typed).
+ *
+ * **Leaving flushes.** The row leaves composition when it scrolls out or the
+ * page closes, and a debounce that is still waiting at that moment would throw
+ * away what was typed. The flush makes the pause an optimisation, not a window
+ * in which text can be lost.
+ */
+@Composable
+private fun rememberResolverDraft(
+    storedUrl: String,
+    storedAddress: String,
+    commit: (url: String, address: String) -> Unit,
+): ResolverDraft {
+    val draft = remember { ResolverDraft(storedUrl, storedAddress) }
+
+    LaunchedEffect(storedUrl, storedAddress) {
+        if (draft.url == storedUrl && draft.address == storedAddress) return@LaunchedEffect
+        draft.url = storedUrl
+        draft.address = storedAddress
+    }
+
+    LaunchedEffect(draft.url, draft.address) {
+        if (draft.url == storedUrl && draft.address == storedAddress) return@LaunchedEffect
+        delay(RESOLVER_COMMIT_DELAY_MILLIS)
+        commit(draft.url, draft.address)
+    }
+
+    val latestCommit by rememberUpdatedState(commit)
+    val latestStored by rememberUpdatedState(storedUrl to storedAddress)
+    DisposableEffect(Unit) {
+        onDispose {
+            if (draft.url != latestStored.first || draft.address != latestStored.second) {
+                latestCommit(draft.url, draft.address)
+            }
+        }
+    }
+
+    return draft
+}
+
+/** The editable state [rememberResolverDraft] hands back to its two fields. */
+private class ResolverDraft(url: String, address: String) {
+    var url by mutableStateOf(url)
+    var address by mutableStateOf(address)
+}
+
+/**
+ * How long typing has to stop before the resolver is written.
+ *
+ * Long enough to cover the gap between keystrokes on a slow keyboard, short
+ * enough that leaving the field feels like it took effect.
+ */
+private const val RESOLVER_COMMIT_DELAY_MILLIS = 300L
 
 /**
  * A group card without its heading.

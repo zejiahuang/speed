@@ -75,7 +75,26 @@ const DEADLINE: Duration = Duration::from_secs(5);
 
 /// Pause between attempts. Short: the point is to step over a lost request, not
 /// to wait out an outage, and the endpoint's own failures are per-request.
+/// Doubled per attempt (capped by [`DEADLINE`]), so a second attempt that also
+/// times out does not spend the whole budget on the same wait.
 const BACKOFF: Duration = Duration::from_millis(150);
+
+/// Consecutive failed *resolutions* before the endpoint is treated as unhealthy.
+///
+/// One failed resolution is a lost request; three in a row, with no answer in
+/// between, is an endpoint that is not reachable from here. At that point trying
+/// every attempt again for every client question turns a DNS outage into a
+/// handshake storm — the client has already timed out, and the extra sessions
+/// buy nothing.
+const FAILURES_BEFORE_COOLDOWN: u64 = 3;
+
+/// First cooldown after an endpoint is considered unhealthy. Doubles with every
+/// further consecutive failure, up to [`MAX_COOLDOWN`], so a long outage settles
+/// down instead of staying at the initial rate.
+const FIRST_COOLDOWN: Duration = Duration::from_secs(5);
+
+/// Longest time an unhealthy endpoint is still only tried once per resolution.
+const MAX_COOLDOWN: Duration = Duration::from_secs(60);
 
 /// How many resolutions may be in flight at once.
 ///
@@ -265,6 +284,95 @@ struct Counters {
     overflowed: AtomicU64,
 }
 
+/// What the outcome of one resolution did to the endpoint's health.
+///
+/// Returned so the caller can log *changes* rather than every failure: an
+/// unreachable endpoint would otherwise write a line per client question, which
+/// is the log equivalent of the handshake storm this exists to stop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HealthChange {
+    /// Nothing worth a line: a failure while already unhealthy, or a success
+    /// while healthy.
+    None,
+    /// The first failure after a healthy period.
+    FirstFailure,
+    /// Enough consecutive failures to stop retrying every attempt.
+    EnteredCooldown,
+    /// A success after one or more failures.
+    Recovered,
+}
+
+/// Tracks whether the endpoint is answering, so resolutions can back off.
+///
+/// A `streak` of zero means healthy. Once [`FAILURES_BEFORE_COOLDOWN`] is
+/// reached, `open_until` holds the end of the cooldown and further consecutive
+/// failures widen it exponentially. The endpoint is never disabled: every
+/// resolution still makes one encrypted attempt, so it recovers on its own.
+#[derive(Default)]
+struct Health {
+    streak: AtomicU64,
+    open_until: Mutex<Option<Instant>>,
+}
+
+impl Health {
+    /// Attempts one resolution gets right now.
+    ///
+    /// One during cooldown. Not zero: the endpoint may have recovered a second
+    /// ago, and the first question after a recovery should get an answer rather
+    /// than be forwarded in plaintext because a breaker said so.
+    fn attempts(&self) -> usize {
+        match self.open_until.lock() {
+            // A poisoned lock means a thread panicked holding it. Treat the
+            // endpoint as healthy rather than as permanently degraded.
+            Ok(open) if open.is_some_and(|end| end > Instant::now()) => 1,
+            _ => ATTEMPTS,
+        }
+    }
+
+    /// The cooldown still to run, if the endpoint is unhealthy.
+    ///
+    /// Test-only: production code asks [`attempts`](Self::attempts), which is
+    /// what the resolution loop needs. Keeping this lets the cooldown's growth
+    /// be asserted without sleeping through it.
+    #[cfg(test)]
+    fn remaining(&self) -> Option<Duration> {
+        let open = self.open_until.lock().ok()?;
+        let end = (*open)?;
+        Some(end.saturating_duration_since(Instant::now()))
+    }
+
+    fn record_success(&self) -> HealthChange {
+        let streak = self.streak.swap(0, Ordering::Relaxed);
+        if let Ok(mut open) = self.open_until.lock() {
+            *open = None;
+        }
+        if streak == 0 { HealthChange::None } else { HealthChange::Recovered }
+    }
+
+    fn record_failure(&self) -> HealthChange {
+        let streak = self.streak.fetch_add(1, Ordering::Relaxed) + 1;
+        if streak == 1 {
+            return HealthChange::FirstFailure;
+        }
+        if streak < FAILURES_BEFORE_COOLDOWN {
+            return HealthChange::None;
+        }
+
+        // 5s, 10s, 20s, ... capped. The exponent is bounded before the shift so
+        // a very long outage cannot overflow it.
+        let doublings = (streak - FAILURES_BEFORE_COOLDOWN).min(4) as u32;
+        let cooldown = (FIRST_COOLDOWN * (1u32 << doublings)).min(MAX_COOLDOWN);
+        if let Ok(mut open) = self.open_until.lock() {
+            *open = Some(Instant::now() + cooldown);
+        }
+        if streak == FAILURES_BEFORE_COOLDOWN {
+            HealthChange::EnteredCooldown
+        } else {
+            HealthChange::None
+        }
+    }
+}
+
 #[derive(Default)]
 struct State {
     /// Answers that have come back and not yet been handed to a client.
@@ -279,6 +387,7 @@ pub struct DohResolver {
     config: Arc<ClientConfig>,
     state: Arc<Mutex<State>>,
     counters: Arc<Counters>,
+    health: Arc<Health>,
 }
 
 impl std::fmt::Debug for DohResolver {
@@ -311,6 +420,7 @@ impl DohResolver {
             config,
             state: Arc::new(Mutex::new(State::default())),
             counters: Arc::new(Counters::default()),
+            health: Arc::new(Health::default()),
         }
     }
 
@@ -345,19 +455,41 @@ impl DohResolver {
         let config = Arc::clone(&self.config);
         let state = Arc::clone(&self.state);
         let counters = Arc::clone(&self.counters);
+        let health = Arc::clone(&self.health);
         let query = query.to_vec();
 
         let spawned = std::thread::Builder::new()
             .name("watt-doh".to_string())
             .spawn(move || {
-                let outcome = attempt_all(&endpoint, &config, &query, &counters);
+                // Read before the first attempt: once the endpoint is in
+                // cooldown this resolution gets one attempt instead of three.
+                let attempts = health.attempts();
+                let outcome = attempt_all(&endpoint, &config, &query, &counters, attempts);
                 match &outcome {
                     Ok(_) => {
                         counters.answered.fetch_add(1, Ordering::Relaxed);
+                        if health.record_success() == HealthChange::Recovered {
+                            log::info!("watt: doh {} is answering again", endpoint.describe());
+                        }
                     }
                     Err(reason) => {
-                        log::info!("watt: doh {} failed: {}", endpoint.describe(), reason);
                         counters.failed.fetch_add(1, Ordering::Relaxed);
+                        // Only state changes are logged. A resolution per client
+                        // question would otherwise fill the log for as long as
+                        // the outage lasts, which is what the cooldown is for.
+                        match health.record_failure() {
+                            HealthChange::FirstFailure => {
+                                log::info!("watt: doh {} failed: {}", endpoint.describe(), reason);
+                            }
+                            HealthChange::EnteredCooldown => {
+                                log::warn!(
+                                    "watt: doh {} failed {} times in a row; trying once per query",
+                                    endpoint.describe(),
+                                    FAILURES_BEFORE_COOLDOWN
+                                );
+                            }
+                            HealthChange::None | HealthChange::Recovered => {}
+                        }
                     }
                 }
                 if let Ok(mut state) = state.lock() {
@@ -407,14 +539,18 @@ fn attempt_all(
     config: &Arc<ClientConfig>,
     query: &[u8],
     counters: &Counters,
+    attempts: usize,
 ) -> Result<Vec<u8>, &'static str> {
     let started = Instant::now();
     let mut last = "unreachable";
 
-    for attempt in 0..ATTEMPTS {
+    for attempt in 0..attempts {
         if attempt > 0 {
             counters.retries.fetch_add(1, Ordering::Relaxed);
-            std::thread::sleep(BACKOFF);
+            // Never sleep past the deadline: a pause that outlives the client's
+            // patience is the same as a failed attempt, but slower.
+            let wait = backoff_for(attempt).min(DEADLINE.saturating_sub(started.elapsed()));
+            std::thread::sleep(wait);
         }
         let left = DEADLINE.saturating_sub(started.elapsed());
         if left.is_zero() {
@@ -426,6 +562,16 @@ fn attempt_all(
         }
     }
     Err(last)
+}
+
+/// The pause before attempt `attempt` of one resolution.
+///
+/// Linear in the attempt index would keep retrying an endpoint that just timed
+/// out at the same pace; doubling gives a lost request a second chance without
+/// spending the entire budget waiting. The exponent is bounded before the shift
+/// so this cannot overflow on a caller that asks for many attempts.
+fn backoff_for(attempt: usize) -> Duration {
+    BACKOFF * (1u32 << attempt.min(4))
 }
 
 /// One attempt: connect, handshake, exchange, and check what came back.
@@ -660,6 +806,54 @@ mod tests {
             named.describe(),
             "https://dns.alidns.com/dns-query via 223.5.5.5:443"
         );
+    }
+
+    #[test]
+    fn the_backoff_doubles_and_stays_bounded() {
+        assert_eq!(backoff_for(1), BACKOFF * 2);
+        assert_eq!(backoff_for(2), BACKOFF * 4);
+        // The exponent is capped, so an attempt number far past `ATTEMPTS`
+        // cannot turn the pause into an overflow or an hour-long sleep.
+        assert_eq!(backoff_for(9), BACKOFF * 16);
+    }
+
+    #[test]
+    fn an_endpoint_that_keeps_failing_is_tried_once_per_resolution() {
+        let health = Health::default();
+        assert_eq!(health.attempts(), ATTEMPTS);
+        assert_eq!(health.record_failure(), HealthChange::FirstFailure);
+        assert_eq!(health.attempts(), ATTEMPTS, "one lost request is not an outage");
+        assert_eq!(health.record_failure(), HealthChange::None);
+        assert_eq!(health.record_failure(), HealthChange::EnteredCooldown);
+        assert_eq!(health.attempts(), 1);
+        assert!(health.remaining().is_some());
+
+        // One answer puts it straight back to full retries. Being unhealthy is
+        // not a latch: the endpoint is never disabled, only slowed down.
+        assert_eq!(health.record_success(), HealthChange::Recovered);
+        assert_eq!(health.attempts(), ATTEMPTS);
+        assert_eq!(health.remaining(), None);
+    }
+
+    #[test]
+    fn the_cooldown_widens_without_overflowing() {
+        let health = Health::default();
+        for _ in 0..FAILURES_BEFORE_COOLDOWN {
+            health.record_failure();
+        }
+        let first = health.remaining().expect("cooling down");
+
+        for _ in 0..2 {
+            health.record_failure();
+        }
+        let later = health.remaining().expect("still cooling down");
+        assert!(later > first, "each further failure widens the pause");
+
+        for _ in 0..20 {
+            health.record_failure();
+        }
+        let capped = health.remaining().expect("still cooling down");
+        assert!(capped <= MAX_COOLDOWN);
     }
 
     #[test]

@@ -231,6 +231,17 @@ class MainActivity : ComponentActivity() {
         }
         requestNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
+
+    /**
+     * The two callbacks below are held by a process-wide singleton, and they
+     * close over this activity. Clearing them is what keeps a finished activity
+     * — and its whole view hierarchy — from outliving the screen it belonged to.
+     */
+    override fun onDestroy() {
+        KernelState.onConnect = null
+        KernelState.onDisconnect = null
+        super.onDestroy()
+    }
 }
 
 /**

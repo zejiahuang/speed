@@ -445,6 +445,12 @@ class DnsRedirect(
                 val buffer = ByteArray(BUFFER)
                 val packet = DatagramPacket(buffer, buffer.size)
                 out.receive(packet)
+                // The socket has to stay on the wildcard address: a socket bound
+                // to loopback cannot reach an upstream resolver. That also makes
+                // this port reachable from the local network, where a spoofed
+                // reply would otherwise only have to match a 16-bit transaction
+                // id. Only accept an answer that came from the server we asked.
+                if (packet.address != server || packet.port != 53) return@runCatching null
                 val reply = packet.data.copyOf(packet.length)
                 if (reply.size < 2 || query.size < 2) return@runCatching null
                 if (reply[0] != query[0] || reply[1] != query[1]) return@runCatching null

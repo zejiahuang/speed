@@ -67,6 +67,17 @@ class DetourVpnService : VpnService() {
     private var dnsRedirect: DnsRedirect? = null
     private var tunnel: ParcelFileDescriptor? = null
 
+    /**
+     * Set by [fail] so the stop that follows keeps the error on screen.
+     *
+     * A failed start tears everything down, but the home screen still has to
+     * explain what went wrong and offer the report. [teardown] is the one place
+     * that resets the status, so it consults this flag instead of resetting
+     * unconditionally.
+     */
+    @Volatile
+    private var keepStatusOnStop = false
+
     override fun onCreate() {
         super.onCreate()
         instance = this
@@ -78,6 +89,7 @@ class DetourVpnService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
+                keepStatusOnStop = false
                 teardown()
                 stopSelf()
                 return START_NOT_STICKY
@@ -100,6 +112,7 @@ class DetourVpnService : VpnService() {
     }
 
     private fun start(mode: KernelState.Mode) {
+        keepStatusOnStop = false
         if (engine != null || proxy != null || mitm != null) {
             KernelState.log(
                 this@DetourVpnService,
@@ -821,7 +834,13 @@ class DetourVpnService : VpnService() {
         // from it.
         runCatching { tunnel?.close() }
         tunnel = null
-        KernelState.reset(KernelState.status.value.mode)
+        // A failure has already told the user why; resetting here would erase the
+        // one thing the screen needs to show. Every other exit resets.
+        val keepStatus = keepStatusOnStop
+        keepStatusOnStop = false
+        if (!keepStatus) {
+            KernelState.reset(KernelState.status.value.mode)
+        }
         // `applied` describes a running engine. There is none once this returns,
         // and leaving the old document behind would make the next comparison a
         // comparison against a tunnel that no longer exists.
@@ -887,7 +906,13 @@ class DetourVpnService : VpnService() {
         proxy = null
         runCatching { tunnel?.close() }
         tunnel = null
-        updateNotification(getString(R.string.home_state_error))
+        // The tunnel is gone and there is nothing left to supervise. Keeping the
+        // service in the foreground would hold a notification and a process open
+        // for no work; `keepStatusOnStop` carries the failure across the stop so
+        // the home screen can still show it.
+        keepStatusOnStop = true
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
 
     override fun onRevoke() {

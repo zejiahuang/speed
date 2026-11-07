@@ -1169,6 +1169,21 @@ class Prefs internal constructor(private val store: SharedPreferences) {
         store.edit().apply(block).apply()
     }
 
+    /**
+     * Like [edit], but does not return until the value is on disk.
+     *
+     * `apply()` is asynchronous by design. That is fine for a preference whose
+     * loss means re-asking, but not for a record that decides whether the user
+     * has already consented: a process killed before the write drains would show
+     * the disclaimer again, and the user would have no way to know their answer
+     * was not kept. That is not hypothetical — the consent was accepted and then
+     * the process was killed by an ANR while testing the emulator build, and the
+     * digest was gone on the next launch.
+     */
+    private fun editDurably(block: SharedPreferences.Editor.() -> Unit) {
+        store.edit().apply(block).commit()
+    }
+
     fun updateProxyPort(value: Int) { proxyPort = value.coerceIn(1024, 65535); edit { putInt(KEY_PROXY_PORT, proxyPort) } }
 
     /**
@@ -1222,7 +1237,7 @@ class Prefs internal constructor(private val store: SharedPreferences) {
         edit { putString(KEY_UPDATE_CHANNEL, updateChannel) }
     }
     fun updateLastUpdateCheckAt(value: Long) { lastUpdateCheckAt = value; edit { putLong(KEY_LAST_UPDATE_CHECK_AT, value) } }
-    fun updateDisclaimerAcceptedDigest(value: String) { disclaimerAcceptedDigest = value; edit { putString(KEY_DISCLAIMER_ACCEPTED, value) } }
+    fun updateDisclaimerAcceptedDigest(value: String) { disclaimerAcceptedDigest = value; editDurably { putString(KEY_DISCLAIMER_ACCEPTED, value) } }
     fun updateStatsInterval(value: Int) { statsIntervalSeconds = value; edit { putInt(KEY_STATS_INTERVAL, value) } }
     fun updateLogArchive(value: Boolean) { logArchive = value; edit { putBoolean(KEY_LOG_ARCHIVE, value) } }
     fun updateDynamicColor(value: Boolean) { dynamicColor = value; edit { putBoolean(KEY_DYNAMIC_COLOR, value) } }
@@ -1442,10 +1457,10 @@ class Prefs internal constructor(private val store: SharedPreferences) {
         updateUpstreamProxyUsername("")
         updateUpstreamProxyPassword("")
         updateUpstreamProxyEnabled(false)
-        // The upstream resolver goes back to the client's own, which is what a
-        // fresh install is on. Cleared in one call so a restore cannot leave a
-        // named URL behind with no address to reach it by.
-        updateDnsUpstream("", "")
+        // The upstream resolver goes back to the built-in DoH preset, which is
+        // what a fresh install starts on. Written in one call so a restore
+        // cannot leave a named URL behind with no address to reach it by.
+        updateDnsUpstream(DEFAULT_DNS_UPSTREAM.url, DEFAULT_DNS_UPSTREAM.address)
         updateMtu(1500)
         updateConnectTimeout(10)
         updateTcpIdle(300)

@@ -420,9 +420,16 @@ fun HomeScreen() {
                 contentAlignment = Alignment.Center,
             ) {
                 val reserve = if (failure != null) 132.dp else 56.dp
-                val heroDiameter = minOf(
-                    powerDiameter,
-                    (maxHeight - reserve).coerceAtLeast(96.dp),
+                // `PowerControl` draws its halo at 8/7 of the circle's diameter,
+                // so the height it actually occupies is larger than `diameter`.
+                // Sizing the circle as `maxHeight - reserve` therefore overflows
+                // by `diameter / 7`; on a 720×1280 screen in proxy mode — where
+                // the address card also takes height — that clipped the
+                // "Connected" line down to a single pixel.
+                val heroDiameter = heroDiameterAt(
+                    maxHeight = maxHeight,
+                    reference = powerDiameter,
+                    reserve = reserve,
                 )
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     PowerControl(
@@ -829,6 +836,21 @@ private fun statusText(status: KernelState.Status): String = stringResource(
         KernelState.Phase.ON -> R.string.home_state_on
         KernelState.Phase.ERROR -> R.string.home_state_error
     },
+)
+
+/**
+ * The diameter the power control can take without starving what sits under it.
+ *
+ * The halo is 8/7 of the circle, so the control's real height is
+ * `diameter * 8/7`; only what is left after that belongs to the status line
+ * (`reserve`). Solving that inequality gives the 7/8 factor. Kept as a pure
+ * function so the geometry can be checked without a device: a clipped status
+ * line is an off-by-one that is invisible until it happens on a screen size
+ * the developer did not hold.
+ */
+internal fun heroDiameterAt(maxHeight: Dp, reference: Dp, reserve: Dp): Dp = minOf(
+    reference,
+    ((maxHeight - reserve) * 7f / 8f).coerceAtLeast(96.dp),
 )
 
 /**
