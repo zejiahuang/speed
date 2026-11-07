@@ -7,6 +7,7 @@ import dev.detour.R
 import dev.detour.core.BuildFlags
 import dev.detour.core.DetourVpnService
 import dev.detour.core.Disclaimer
+import dev.detour.core.ErrorReport
 import dev.detour.core.Kernel
 import dev.detour.core.KernelState
 import dev.detour.core.LogArchive
@@ -85,6 +86,20 @@ class DetourApp : Application() {
         // both.
         if (restored == KernelState.Mode.ROOT && !Prefs.of(this).autoConnect) {
             scope.launch { RootHelper.recoverStale(this@DetourApp) }
+        }
+
+        // Put the last failure back on screen. `KernelState` is memory, so a
+        // process that died after a failed start — an ANR during first launch is
+        // the one measured — comes back saying "not connected" with no hint of
+        // why. The service records the reason durably for exactly this case;
+        // restoring it here reuses the home screen's existing error layout
+        // instead of adding a second way to show the same thing.
+        //
+        // Skipped under auto-connect, which is about to start and will write its
+        // own status: showing yesterday's error for a fraction of a second
+        // before "connecting" would be noise, not information.
+        if (!Prefs.of(this).autoConnect) {
+            restoreLastFailure()
         }
 
         // Before the first log line, so the kernel-load result below is archived
@@ -187,6 +202,35 @@ class DetourApp : Application() {
     }
 
     /**
+     * Show the last failed start again, if it is recent enough to explain this one.
+     *
+     * The age limit is the point: a record from a week ago is history, not the
+     * reason nothing is connected now, and a screen that keeps offering last
+     * week's error teaches the user to ignore it. Within the window it is the
+     * most useful thing the screen can say, because the alternative is a neutral
+     * "not connected" with the cause already written to disk and unread.
+     */
+    private fun restoreLastFailure() {
+        val prefs = Prefs.of(this)
+        val message = prefs.lastFailure ?: return
+        if (System.currentTimeMillis() - prefs.lastFailureAt > LAST_FAILURE_MAX_AGE_MS) return
+        // A reason written by a newer build is not in this build's enum. The
+        // message is still worth showing, so an unreadable cause degrades to
+        // UNKNOWN rather than dropping the record.
+        val reason = prefs.lastFailureReason
+            ?.let { name -> runCatching { ErrorReport.Reason.valueOf(name) }.getOrNull() }
+            ?: ErrorReport.Reason.UNKNOWN
+        KernelState.setStatus {
+            it.copy(
+                phase = KernelState.Phase.ERROR,
+                message = message,
+                failure = reason,
+                reportPath = null,
+            )
+        }
+    }
+
+    /**
      * Connect on launch, when the user has asked for it and consent already exists.
      *
      * The consent test is the whole point of the method. `VpnService.prepare`
@@ -248,5 +292,17 @@ class DetourApp : Application() {
         // separate feature, and this method's permission to start a service
         // depends on the user having opened the app.
         ContextCompat.startForegroundService(this, DetourVpnService.startIntent(this, mode))
+    }
+
+    private companion object {
+        /**
+         * How long a recorded failure is still shown as the explanation.
+         *
+         * A day, not forever: the record answers "why is nothing connected right
+         * now", and an old one answers a question nobody is asking. It is also
+         * long enough to cover the case that motivated the record — a process
+         * killed during the first launch and reopened the next day.
+         */
+        const val LAST_FAILURE_MAX_AGE_MS = 24L * 60 * 60 * 1000
     }
 }

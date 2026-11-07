@@ -704,6 +704,7 @@
     <string name="log_loop_stop_timeout">The step loop did not exit within %1$d ms; giving up — the kernel will leak rather than be freed</string>
     <string name="log_disconnected">Disconnected</string>
     <string name="log_vpn_revoked">The system revoked the VPN</string>
+    <string name="notification_vpn_revoked">The system revoked this VPN (usually because another VPN started), so the connection stopped.</string>
     <string name="log_root_parse_failed">Parsing the rule document failed; root mode will not hijack any domain: %1$s</string>
     <string name="log_root_no_domains">The rule document contains no domains; root mode started but hijacks no traffic</string>
     <string name="log_cache_from_older_version">The rule cache came from an older version; discarded and re-fetched</string>
@@ -781,6 +782,8 @@
          cause, so the advice does not depend on matching the error's wording. -->
     <string name="error_hint_rules">The rules are not ready: refresh them on the Rules page, and switch to another source if that keeps failing.</string>
     <string name="error_hint_permission">VPN authorisation is missing: tap the button above and allow it in the system dialog.</string>
+    <string name="err_foreground_refused">The system refused to run this in the background, so it could not start: %1$s</string>
+    <string name="error_hint_foreground">The system refused background running: allow speed to run in the background (turn off its battery restriction) and try again.</string>
     <string name="error_hint_root_unavailable">Root access was refused: allow speed in your root manager and pick Root mode again.</string>
     <string name="error_hint_root_install">The root takeover did not install: the report names the step that failed. An unwritable hosts file and a refused command both look like this.</string>
     <string name="error_hint_mitm">The local reverse proxy did not come up: disconnect and try again. A busy port looks the same.</string>

@@ -330,6 +330,60 @@ class Prefs internal constructor(private val store: SharedPreferences) {
     var statsIntervalSeconds by mutableStateOf(store.getInt(KEY_STATS_INTERVAL, 5))
         private set
 
+    /**
+     * The message of the last start that failed, or `null` for none.
+     *
+     * [KernelState] lives in memory by design: it describes a tunnel that exists
+     * right now. A failure outlives the tunnel, though, and the process can be
+     * killed before anyone reads it — an ANR during startup does exactly that.
+     * Without this record the home screen comes back saying "not connected" and
+     * offers no explanation, which is what happened while testing the emulator
+     * build: the run failed, the process was killed, and the reason was gone.
+     *
+     * Written with [editDurably] because the failure is precisely the moment the
+     * process is most likely to die.
+     */
+    var lastFailure by mutableStateOf(store.getString(KEY_LAST_FAILURE, null))
+        private set
+
+    var lastFailureReason by mutableStateOf(store.getString(KEY_LAST_FAILURE_REASON, null))
+        private set
+
+    var lastFailureAt by mutableStateOf(store.getLong(KEY_LAST_FAILURE_AT, 0L))
+        private set
+
+    /** Record a failed start so it survives this process. */
+    fun recordFailure(message: String, reason: ErrorReport.Reason) {
+        val now = System.currentTimeMillis()
+        lastFailure = message
+        lastFailureReason = reason.name
+        lastFailureAt = now
+        editDurably {
+            putString(KEY_LAST_FAILURE, message)
+            putString(KEY_LAST_FAILURE_REASON, reason.name)
+            putLong(KEY_LAST_FAILURE_AT, now)
+        }
+    }
+
+    /**
+     * Forget the recorded failure.
+     *
+     * Called when a start succeeds: the record exists to explain a tunnel that is
+     * not running, and a running one has nothing to explain. Also called by the
+     * home screen when the user dismisses the notice.
+     */
+    fun clearFailure() {
+        if (lastFailure == null) return
+        lastFailure = null
+        lastFailureReason = null
+        lastFailureAt = 0L
+        edit {
+            remove(KEY_LAST_FAILURE)
+            remove(KEY_LAST_FAILURE_REASON)
+            remove(KEY_LAST_FAILURE_AT)
+        }
+    }
+
     var logArchive by mutableStateOf(store.getBoolean(KEY_LOG_ARCHIVE, true))
         private set
 
@@ -1932,6 +1986,17 @@ class Prefs internal constructor(private val store: SharedPreferences) {
      * check; see `lastUpdateCheckAt`.
      */
     private const val KEY_LAST_UPDATE_CHECK_AT = "last_update_check_at"
+
+    /**
+     * The last start that failed; see `lastFailure`.
+     *
+     * Not part of [restoreDefaults]: it is a record of something that happened,
+     * not a setting, and clearing it on "restore defaults" would erase the only
+     * explanation the home screen has for the last disconnection.
+     */
+    private const val KEY_LAST_FAILURE = "last_failure_message"
+    private const val KEY_LAST_FAILURE_REASON = "last_failure_reason"
+    private const val KEY_LAST_FAILURE_AT = "last_failure_at"
 
     /**
      * Digest of the accepted disclaimer text; see `disclaimerAcceptedDigest`.

@@ -45,6 +45,16 @@ object ErrorReport {
         /** The system refused the VPN authorisation. */
         PERMISSION,
 
+        /**
+         * The service could not be promoted to the foreground.
+         *
+         * Separate from [PERMISSION] because the fix is different: the VPN
+         * authorisation is a dialog this app can ask for again, while a refused
+         * foreground start is the system's background-running policy, and only
+         * the user's battery settings can change it.
+         */
+        FOREGROUND,
+
         /** No usable `su`. */
         ROOT_UNAVAILABLE,
 
@@ -71,6 +81,7 @@ object ErrorReport {
     fun suggestionRes(reason: Reason): Int = when (reason) {
         Reason.RULES -> R.string.error_hint_rules
         Reason.PERMISSION -> R.string.error_hint_permission
+        Reason.FOREGROUND -> R.string.error_hint_foreground
         Reason.ROOT_UNAVAILABLE -> R.string.error_hint_root_unavailable
         Reason.ROOT_INSTALL -> R.string.error_hint_root_install
         Reason.MITM -> R.string.error_hint_mitm

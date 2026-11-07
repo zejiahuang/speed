@@ -42,7 +42,7 @@ use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use watt_rules::{Family, Outcome, Router, Strategy};
@@ -98,12 +98,42 @@ const FIRST_BYTE_DEADLINE: Duration = Duration::from_secs(3);
 
 const COPY_BUFFER: usize = 32 * 1024;
 
+/// How many connections may be in flight at once.
+///
+/// One thread per connection with nothing above it is a promise to allocate a
+/// thread and two buffers for every socket a caller opens, and a listener on a
+/// port does not get to assume the caller is well behaved. A browser opening
+/// hundreds of sockets in a burst is normal; a loop opening thousands is a
+/// process-wide outage on a phone, because the memory goes before the CPU does.
+///
+/// 256 is generous for a single device — the practical limit is file descriptors
+/// long before it — and small enough that the worst case (thread stack plus two
+/// copy buffers each) stays inside the budget of the app that is also holding a
+/// tunnel. Over the cap the connection is refused rather than queued: a queue
+/// would turn the same overload into latency for every client instead of an
+/// honest failure for the one that arrived late.
+const MAX_CONNECTIONS: usize = 256;
+
 /// How often the rules' dial names are re-resolved.
 ///
 /// Resolving per request would be a DNS lookup per request to learn something
 /// that changes on the order of minutes. This is the `dynamic a <name>` cadence
 /// from Caddy, for the same reason.
 const DIAL_REFRESH: Duration = Duration::from_secs(60);
+
+/// Frees one connection slot when the worker that owns it ends.
+///
+/// A guard rather than a decrement at the end of the closure: the worker can
+/// return early on several error paths, and a panic must not be the one case
+/// that leaks a slot — that would turn a single bad request into a proxy that
+/// slowly loses capacity until every client is refused.
+struct Slot(Arc<AtomicUsize>);
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
 
 /// Counters for one running proxy.
 ///
@@ -265,19 +295,50 @@ pub fn serve_until(
     // feature does not work" rather than "the feature has not run yet".
     spawn_dial_refresh(Arc::clone(&router), Arc::clone(&stop));
 
+    // Workers in flight. Decremented by a guard inside each worker, so a worker
+    // that panics or returns early cannot leave a permanent slot occupied and
+    // eventually wedge the listener at zero capacity.
+    let live = Arc::new(AtomicUsize::new(0));
+    let mut refused: u64 = 0;
+
     while !stop.load(Ordering::SeqCst) {
         match listener.accept() {
-            Ok((stream, _)) => {
+            Ok((mut stream, _)) => {
                 // Counted at accept, before the worker is spawned: a connection
                 // the thread pool refused to take was still a connection the
                 // client made, and dropping it from the count would make the
                 // other numbers disagree with the traffic the client saw.
                 stats.connections.fetch_add(1, Ordering::Relaxed);
+                if live.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS {
+                    live.fetch_sub(1, Ordering::SeqCst);
+                    // Logged sparsely: under the flood this exists to survive,
+                    // one line per refused socket would turn the log into the
+                    // memory problem. The first and every thousandth are enough
+                    // to tell "cap reached" from "cap never reached".
+                    refused += 1;
+                    if refused == 1 || refused % 1_000 == 0 {
+                        log::warn!(
+                            "proxy at {MAX_CONNECTIONS} connections, refused {refused} so far"
+                        );
+                    }
+                    // Best effort: the client is being told the proxy is full
+                    // rather than left to guess from a closed socket. A failed
+                    // write changes nothing, the stream is dropped either way.
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    );
+                    let _ = stream.flush();
+                    continue;
+                }
                 let router = Arc::clone(&router);
                 let stats = Arc::clone(&stats);
+                let live = Arc::clone(&live);
                 thread::Builder::new()
                     .name("watt-connect".to_string())
                     .spawn(move || {
+                        // Released however the worker ends — normal return, error
+                        // or panic — because the guard owns the decrement.
+                        let _slot = Slot(live);
                         if let Err(err) = handle(stream, &router, &stats) {
                             log::warn!("proxy connection failed: {err}");
                         }

@@ -704,6 +704,7 @@
     <string name="log_loop_stop_timeout">步进循环未在 %1$dms 内退出，放弃等待；内核将泄漏而不是被释放</string>
     <string name="log_disconnected">已断开</string>
     <string name="log_vpn_revoked">系统收回了 VPN</string>
+    <string name="notification_vpn_revoked">VPN 已被系统收回（通常是因为启动了另一个 VPN），连接已停止。</string>
     <string name="log_root_parse_failed">规则文档解析失败，root 模式将不拦截任何域名：%1$s</string>
     <string name="log_root_no_domains">规则文档未包含任何域名，root 模式已启动但不拦截任何流量</string>
     <string name="log_cache_from_older_version">规则缓存来自旧版本，已丢弃并重新拉取</string>
@@ -781,6 +782,8 @@
          cause, so the advice does not depend on matching the error's wording. -->
     <string name="error_hint_rules">规则没准备好：在规则页刷新一次；一直失败就换一个数据源。</string>
     <string name="error_hint_permission">缺 VPN 授权：点上面的按钮，在系统弹窗里允许。</string>
+    <string name="err_foreground_refused">系统不允许后台运行，无法启动：%1$s</string>
+    <string name="error_hint_foreground">系统拒绝了后台运行：在系统设置里允许 speed 后台运行（关闭省电限制），再试一次。</string>
     <string name="error_hint_root_unavailable">拿不到 root 权限：在 root 管理应用里允许 speed，再选一次 Root 模式。</string>
     <string name="error_hint_root_install">root 接管没装成：报告里记着失败在第几步。hosts 不可写、或被拒绝的命令，都会是这个样子。</string>
     <string name="error_hint_mitm">本地反代没起来：断开后重试一次。端口被占用时也是这个现象。</string>

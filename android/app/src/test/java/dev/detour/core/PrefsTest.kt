@@ -27,6 +27,32 @@ class PrefsTest {
     private fun prefs(vararg seeded: Pair<String, Any>) = Prefs(FakeSharedPreferences(seeded.toMap()))
 
     @Test
+    fun aRecordedFailureOutlivesTheProcessThatSawIt() {
+        val store = FakeSharedPreferences(emptyMap())
+        Prefs(store).recordFailure("规则源加载失败", ErrorReport.Reason.RULES)
+
+        // A second instance stands in for the next process: it sees only what
+        // reached the store. That is the entire reason the record exists — an ANR
+        // during startup kills the process before the user reads the message, and
+        // the home screen is left with nothing to explain.
+        val next = Prefs(store)
+        assertEquals("规则源加载失败", next.lastFailure)
+        assertEquals("RULES", next.lastFailureReason)
+        assertTrue(next.lastFailureAt > 0)
+    }
+
+    @Test
+    fun aSuccessfulStartClearsTheRecord() {
+        val prefs = prefs()
+        prefs.recordFailure("boom", ErrorReport.Reason.KERNEL)
+        prefs.clearFailure()
+
+        assertEquals(null, prefs.lastFailure)
+        assertEquals(null, prefs.lastFailureReason)
+        assertEquals(0L, prefs.lastFailureAt)
+    }
+
+    @Test
     fun aFreshInstallGetsTheDocumentedDefaults() {
         val prefs = prefs()
 

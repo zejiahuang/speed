@@ -121,14 +121,21 @@ data class RuleSource(
     /**
      * Whether this source can be selected and loaded.
      *
-     * A local source has no [url] to be non-empty, so the old single expression
-     * would have marked every imported file un-selectable — the one thing this
-     * kind of source exists to be.
+     * Two separate answers live here. A local source has no [url] at all, so a
+     * check on the URL alone would mark every imported file un-selectable — the
+     * one thing that kind of source exists to be. And a remote source must be
+     * `https://`: see the comment on the branch.
      */
     val usable: Boolean get() = when {
         unavailable -> false
         isLocal -> true
-        else -> url.isNotEmpty()
+        // `https://` only, refused rather than downgraded. The document decides
+        // which address every hostname on the device resolves to, so a fetch an
+        // intermediary can rewrite is an interception of the whole device — the
+        // same argument `Prefs` makes for the DoH endpoint. An `http://` source
+        // used to pass here because the check was only "is there a URL at all";
+        // that made the scheme the one part of the trust chain nobody verified.
+        else -> url.startsWith("https://", ignoreCase = true)
     }
 
     /** Every URL that can serve this source, in the order they should be tried. */

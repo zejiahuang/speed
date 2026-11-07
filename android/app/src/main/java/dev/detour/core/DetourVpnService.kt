@@ -131,7 +131,26 @@ class DetourVpnService : VpnService() {
                 reportPath = null,
             )
         }
-        startForeground(NOTIFICATION_ID, notification(getString(R.string.home_state_connecting)))
+        // Promoting the service can be refused, and when it is, the tunnel cannot
+        // run: everything below happens inside a foreground service, and Android
+        // kills a background service that overstays. Android 12+ refuses a start
+        // from the background (`ForegroundServiceStartNotAllowedException`) and
+        // Android 14+ refuses one whose type the app is not allowed to use
+        // (`SecurityException`); some vendor power savers do the same in their own
+        // way. Letting either escape would crash the process instead of telling
+        // the user the one thing that helps — allow background running.
+        try {
+            startForeground(NOTIFICATION_ID, notification(getString(R.string.home_state_connecting)))
+        } catch (err: RuntimeException) {
+            fail(
+                getString(R.string.err_foreground_refused, err.message ?: err.javaClass.simpleName),
+                ErrorReport.Reason.FOREGROUND,
+            )
+            return
+        }
+        // A new start supersedes whatever failed last time. The record exists to
+        // explain a tunnel that is not running; this one is running now.
+        Prefs.of(this).clearFailure()
 
         scope.launch {
             try {
@@ -870,6 +889,10 @@ class DetourVpnService : VpnService() {
         reason: ErrorReport.Reason = ErrorReport.Reason.UNKNOWN,
     ) {
         val report = ErrorReport.write(this, KernelState.status.value.mode, message, reason)
+        // Before the status write, and durably: the process is on its way down and
+        // the home screen has to be able to explain this after it is restarted —
+        // see `Prefs.lastFailure`.
+        runCatching { Prefs.of(this).recordFailure(message, reason) }
         KernelState.setStatus {
             it.copy(
                 phase = KernelState.Phase.ERROR,
@@ -925,7 +948,40 @@ class DetourVpnService : VpnService() {
             R.string.log_vpn_revoked,
         )
         teardown()
+        // The system stops the tunnel silently: `onRevoke` is called when another
+        // VPN is selected, and the only visible trace used to be that the home
+        // screen stopped saying "connected". Users read that as a bug rather than
+        // as "something else took the tunnel". A one-shot notification is the
+        // smallest way to say which it was.
+        notifyRevoked()
         stopSelf()
+    }
+
+    /**
+     * Post a dismissible note that the system withdrew the tunnel.
+     *
+     * Deliberately a separate notification from the ongoing one: that one is
+     * removed by [teardown], and reusing its id would make this note vanish with
+     * it. `setOngoing(false)` and `setAutoCancel(true)` because there is nothing
+     * left to supervise — this is an explanation, not a status indicator.
+     */
+    private fun notifyRevoked() {
+        val open = PendingIntent.getActivity(
+            this, 0,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE,
+        )
+        val note = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_sys_warning)
+            .setContentTitle(getString(R.string.app_name))
+            .setContentText(getString(R.string.notification_vpn_revoked))
+            .setOngoing(false)
+            .setAutoCancel(true)
+            .setContentIntent(open)
+            .build()
+        runCatching {
+            getSystemService(NotificationManager::class.java)?.notify(REVOKED_NOTIFICATION_ID, note)
+        }
     }
 
     override fun onDestroy() {
@@ -974,6 +1030,12 @@ class DetourVpnService : VpnService() {
     companion object {
         private const val TAG = "DetourVpn"
         private const val NOTIFICATION_ID = 1
+
+        /**
+         * The "the system took the tunnel" note, separate from [NOTIFICATION_ID]
+         * so [teardown] removing the ongoing notification cannot remove it too.
+         */
+        private const val REVOKED_NOTIFICATION_ID = 2
         private const val CHANNEL_ID = "detour.tunnel"
         /**
          * How often the rate is recomputed.

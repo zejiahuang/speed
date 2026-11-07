@@ -199,6 +199,17 @@ object RulesRepository {
     const val MAX_LOCAL_BYTES = 8 * 1024 * 1024
 
     /**
+     * The largest remote document accepted, in bytes.
+     *
+     * Same number as [MAX_LOCAL_BYTES] and for the same reason, but it has to be
+     * enforced differently: a file on disk can be measured before it is read,
+     * while a response can be chunked, lie about its `Content-Length`, or simply
+     * never end. The counting read in [readAtMost] is what makes the limit real
+     * for those.
+     */
+    private const val MAX_REMOTE_BYTES = 8 * 1024 * 1024
+
+    /**
      * Records which rule source produced [CACHE_NAME].
      *
      * A sidecar rather than a field in the document — see the class comment for
@@ -577,6 +588,26 @@ object RulesRepository {
         val urls = source.fetchUrls
         val failures = mutableListOf<String>()
         for ((index, url) in urls.withIndex()) {
+            // `usable` already refuses a plaintext source, but this list also
+            // carries the mirrors, and a stored source from an older build could
+            // still name an `http://` address. The gate belongs here too: the
+            // cost of the duplicate check is one string comparison, and the cost
+            // of missing it is trusting a document that decided the device's
+            // routes over a connection anyone could rewrite.
+            if (!url.startsWith("https://", ignoreCase = true)) {
+                failures += "$url → not https"
+                KernelState.log(
+                    context,
+                    KernelState.LogEntry.Level.WARN,
+                    TAG,
+                    R.string.log_candidate_failed,
+                    index + 1,
+                    urls.size,
+                    url,
+                    "not https",
+                )
+                continue
+            }
             // The index is in the log because a fallback that succeeds on the
             // third try and one that succeeds on the first look identical in a
             // log otherwise, and "which endpoint is actually carrying this
@@ -825,10 +856,41 @@ object RulesRepository {
             if (connection.responseCode != HttpURLConnection.HTTP_OK) {
                 throw java.io.IOException("HTTP ${connection.responseCode} for $url")
             }
-            connection.inputStream.bufferedReader().use { it.readText() }
+            // A declared length over the cap is refused before reading a byte.
+            // The header can lie, or be absent for a chunked response, which is
+            // why the counting read below does not rely on it.
+            if (connection.contentLengthLong > MAX_REMOTE_BYTES) {
+                throw java.io.IOException(
+                    "documented ${connection.contentLengthLong} bytes for $url, limit $MAX_REMOTE_BYTES",
+                )
+            }
+            connection.inputStream.use { readAtMost(it, MAX_REMOTE_BYTES, url) }.toString(Charsets.UTF_8)
         } finally {
             connection.disconnect()
         }
+    }
+
+    /**
+     * Read up to [limit] bytes, refusing a document that is longer.
+     *
+     * A rule document is parsed into a map of hostnames, so its size is bounded
+     * by the memory of the device rather than by anything the server promises.
+     * Reading an endless or hostile response into a `String` is the shortest way
+     * from "a bad mirror" to an OOM on a phone that is also holding a tunnel, and
+     * the kernel would have no rules to show for it either way.
+     */
+    private fun readAtMost(input: java.io.InputStream, limit: Int, url: String): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        val chunk = ByteArray(16 * 1024)
+        while (true) {
+            val read = input.read(chunk)
+            if (read < 0) break
+            if (out.size() + read > limit) {
+                throw java.io.IOException("document for $url exceeds $limit bytes")
+            }
+            out.write(chunk, 0, read)
+        }
+        return out.toByteArray()
     }
 
     fun cacheFile(context: Context): File = File(context.filesDir, CACHE_NAME)

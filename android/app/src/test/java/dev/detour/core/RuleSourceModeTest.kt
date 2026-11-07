@@ -32,6 +32,27 @@ class RuleSourceModeTest {
         RuleSource.defaults().first { it.id == RuleSource.HELLOGITHUB_HOSTS_ID }
 
     @Test
+    fun aPlaintextSourceIsNotSelectable() {
+        val https = helloGithub()
+        assertTrue(https.usable)
+
+        // The scheme is the whole trust argument for a remote document: the rules
+        // decide where hostnames go, so anyone who can rewrite the fetch can
+        // redirect the device. Before this check, `usable` only asked whether a
+        // URL existed, which let `http://` through.
+        val plain = https.copy(url = https.url.replaceFirst("https://", "http://"))
+        assertFalse("a plaintext rule source must not be selectable", plain.usable)
+    }
+
+    @Test
+    fun aLocalSourceStaysSelectable() {
+        // The scheme rule is about the network. An imported file has no URL, and
+        // a check that forgot that would make every import unusable.
+        val local = helloGithub().copy(url = "", localFile = "rules-abc123.txt")
+        assertTrue(local.usable)
+    }
+
+    @Test
     fun rootModeIgnoresTheSelection() {
         val pinned = RuleSource.forMode(KernelState.Mode.ROOT, helloGithub())
         assertEquals(RuleSource.S302_UPSTREAM_ID, pinned.id)

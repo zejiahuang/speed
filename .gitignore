@@ -44,6 +44,17 @@ __pycache__/
 # --- Local build logs -------------------------------------------------------
 *.log
 
+# --- Local Android toolchain ------------------------------------------------
+# The SDK, NDK and system images are multi-gigabyte downloads that any machine
+# can fetch again; committing them would be the largest possible change that
+# describes nothing about this repository. They live at the workspace root only
+# because the sandbox has no writable home for them.
+.android-sdk/
+.android-ndk/
+# Emulator evidence from manual runs. Useful while verifying a change, never
+# reviewed alongside it.
+emulator-*.png
+
 # --- Editors / OS -----------------------------------------------------------
 .vscode/
 *.swp
