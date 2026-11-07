@@ -205,6 +205,20 @@ jobs:
             echo "$badging" | sed -n '1,2p'
             echo "$badging" | grep -q "versionName='$expected'" || {
               echo "包内 versionName 不是 $expected" >&2; exit 1; }
+
+            # 每个分包里必须有它自己的原生库。ABI 拆分是按 `jniLibs/` 里实际存在的
+            # 目录产出的：某个 ABI 的 `.so` 没被编译或拷贝进去时，Gradle 不会报错，
+            # 它会照常产出一个没有 `lib/` 的包 —— 装上之后 `System.loadLibrary` 失败，
+            # 表现为「内核不可用」，而签名、版本号、包数量全部合规，前面的门禁一条都
+            # 拦不住。用户拿到的就是这样一个包。
+            abi="$(basename "$apk")"
+            abi="${abi#app-}"
+            abi="${abi%-release.apk}"
+            if ! unzip -l "$apk" | grep -q "lib/$abi/libwatt_ffi.so"; then
+              echo "包 $apk 缺少 lib/$abi/libwatt_ffi.so，装上后内核不可用" >&2
+              unzip -l "$apk" | grep 'lib/' >&2
+              exit 1
+            fi
           done
 
       - name: 上传产物
