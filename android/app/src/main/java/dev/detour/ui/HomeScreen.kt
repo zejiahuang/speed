@@ -366,6 +366,14 @@ fun HomeScreen() {
                     // acknowledgement. The other two are reversible by tapping
                     // again; this one changes what the device trusts, so the cost
                     // is stated before it is paid rather than after.
+                    //
+                    // The row is not drawn while [BuildFlags.ROOT_MODE] is off, so
+                    // this branch is unreachable from the picker; it is a refusal
+                    // rather than a mode switch so a stale caller cannot slip past
+                    // the flag.
+                    if (picked == KernelState.Mode.ROOT && !BuildFlags.ROOT_MODE) {
+                        return@ModePicker
+                    }
                     if (picked != KernelState.Mode.ROOT) {
                         // Stored as well as shown: the holder is a process
                         // singleton, so a choice that only lived there would be
@@ -1061,21 +1069,27 @@ private fun ModePicker(
                     selected = current == KernelState.Mode.VPN,
                     onClick = { onPick(KernelState.Mode.VPN) },
                 )
-                Spacer(Modifier.height(spacing.sm))
-                // Always drawn, and that is the change: the row used to appear only
-                // when a probe taken at launch had already found a usable `su`,
-                // which hid the request from the devices that had not been asked
-                // yet. Tapping it is what asks — and a refusal comes back as a
-                // refusal dialog, not as a row that silently does nothing.
-                ModeRow(
-                    title = stringResource(R.string.home_mode_root),
-                    detail = stringResource(
-                        if (asking) R.string.home_mode_root_asking else R.string.home_mode_root_desc,
-                    ),
-                    selected = current == KernelState.Mode.ROOT,
-                    enabled = !asking,
-                    onClick = { onPick(KernelState.Mode.ROOT) },
-                )
+                // Withheld for now — see [BuildFlags.ROOT_MODE]. The row is kept
+                // whole rather than deleted so flipping the flag is the only
+                // change needed to bring the mode back.
+                if (BuildFlags.ROOT_MODE) {
+                    Spacer(Modifier.height(spacing.sm))
+                    // Always drawn when offered, and that was the change: the row
+                    // used to appear only when a probe taken at launch had already
+                    // found a usable `su`, which hid the request from the devices
+                    // that had not been asked yet. Tapping it is what asks — and a
+                    // refusal comes back as a refusal dialog, not as a row that
+                    // silently does nothing.
+                    ModeRow(
+                        title = stringResource(R.string.home_mode_root),
+                        detail = stringResource(
+                            if (asking) R.string.home_mode_root_asking else R.string.home_mode_root_desc,
+                        ),
+                        selected = current == KernelState.Mode.ROOT,
+                        enabled = !asking,
+                        onClick = { onPick(KernelState.Mode.ROOT) },
+                    )
+                }
             }
         },
         confirmButton = {

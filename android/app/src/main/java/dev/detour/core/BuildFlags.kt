@@ -35,4 +35,19 @@ package dev.detour.core
  */
 object BuildFlags {
     const val TUN_ONLY = false
+
+    /**
+     * Whether root mode is offered — **off, for now.**
+     *
+     * The mode is withheld rather than deleted: its implementation (`RootHelper`,
+     * `DnsRedirect`, the service's `startRoot`) is untouched, and this constant is
+     * the one switch that puts it back on screen when that path is reworked. With
+     * it `false` the picker has no root row, a stored `root` restores as `PROXY`,
+     * the console refuses `mode root`, and the service refuses a start that names
+     * it — so neither an old setting nor a script can reach it.
+     *
+     * Unlike [TUN_ONLY], this does not change how the restore treats the *other*
+     * modes; only the root value is overridden.
+     */
+    const val ROOT_MODE = false
 }

@@ -783,6 +783,7 @@
     <string name="error_hint_rules">The rules are not ready: refresh them on the Rules page, and switch to another source if that keeps failing.</string>
     <string name="error_hint_permission">VPN authorisation is missing: tap the button above and allow it in the system dialog.</string>
     <string name="err_foreground_refused">The system refused to run this in the background, so it could not start: %1$s</string>
+    <string name="err_root_removed">Root mode has been removed for now. Use VPN or proxy mode instead.</string>
     <string name="error_hint_foreground">The system refused background running: allow speed to run in the background (turn off its battery restriction) and try again.</string>
     <string name="error_hint_root_unavailable">Root access was refused: allow speed in your root manager and pick Root mode again.</string>
     <string name="error_hint_root_install">The root takeover did not install: the report names the step that failed. An unwritable hosts file and a refused command both look like this.</string>

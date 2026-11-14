@@ -113,6 +113,16 @@ class DetourVpnService : VpnService() {
 
     private fun start(mode: KernelState.Mode) {
         keepStatusOnStop = false
+        // Root mode is withheld for now — see [BuildFlags.ROOT_MODE]. The picker
+        // and the restore already refuse it, but a console command, an old
+        // `ACTION_START` extra or a stored setting can still name it, and reaching
+        // `startRoot` would install the privileged edits this build deliberately
+        // does not offer. Refused here, at the one place every start funnels
+        // through.
+        if (mode == KernelState.Mode.ROOT && !BuildFlags.ROOT_MODE) {
+            fail(getString(R.string.err_root_removed), ErrorReport.Reason.UNKNOWN)
+            return
+        }
         if (engine != null || proxy != null || mitm != null) {
             KernelState.log(
                 this@DetourVpnService,

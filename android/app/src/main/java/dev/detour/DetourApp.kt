@@ -65,10 +65,16 @@ class DetourApp : Application() {
         // `KernelState.Status` default to as well — one fallback for the three, so
         // a corrupt value cannot name a mode the other two disagree with.
         val stored = Prefs.of(this).mode
-        val restored = if (BuildFlags.TUN_ONLY) {
-            KernelState.Mode.VPN
-        } else {
-            runCatching { KernelState.Mode.valueOf(stored.uppercase()) }
+        // Whether the stored value names the withheld mode. Kept separately from
+        // the restored mode because the two answer different questions: the
+        // restore must not *enter* root mode while the flag is off, but a device
+        // that ran it before the flag was flipped can still be carrying its hosts
+        // edits — see the stale undo below.
+        val storedRoot = stored.trim().equals(KernelState.Mode.ROOT.name, ignoreCase = true)
+        val restored = when {
+            BuildFlags.TUN_ONLY -> KernelState.Mode.VPN
+            storedRoot && !BuildFlags.ROOT_MODE -> KernelState.Mode.PROXY
+            else -> runCatching { KernelState.Mode.valueOf(stored.uppercase()) }
                 .getOrDefault(KernelState.Mode.PROXY)
         }
         KernelState.restoreMode(restored)
@@ -76,7 +82,14 @@ class DetourApp : Application() {
         // A root-mode run that was killed never ran its restore, so the device can
         // still be pointed at a proxy that is gone — a hosts entry at a dead
         // loopback address is a device-wide outage, so it is cleaned up before
-        // anything else can act on it.
+        // anything else can act on it. `storedRoot` keeps that cleanup running
+        // after the mode is withheld: an update must not strand the very edits
+        // this build no longer offers to undo.
+        //
+        // The stored value is then rewritten to the mode actually restored. Left
+        // as `root`, this undo — and the `su` probe inside it — would run on every
+        // cold start forever, asking for a privilege the build no longer uses.
+        // Root mode returns with its own choice, not with a setting nobody can see.
         //
         // **Guarded on `!autoConnect` deliberately.** When auto-connect is on, the
         // service is about to start, and its own start path runs the identical
@@ -84,8 +97,13 @@ class DetourApp : Application() {
         // two undos racing, and the loser would be whichever finished last, which
         // could be the undo landing *after* the fresh install. One of the two, not
         // both.
-        if (restored == KernelState.Mode.ROOT && !Prefs.of(this).autoConnect) {
-            scope.launch { RootHelper.recoverStale(this@DetourApp) }
+        if (storedRoot) {
+            if (!BuildFlags.ROOT_MODE) {
+                Prefs.of(this).updateMode(restored.name.lowercase())
+            }
+            if (!Prefs.of(this).autoConnect) {
+                scope.launch { RootHelper.recoverStale(this@DetourApp) }
+            }
         }
 
         // Put the last failure back on screen. `KernelState` is memory, so a

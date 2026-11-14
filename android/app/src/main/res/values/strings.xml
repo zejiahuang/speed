@@ -783,6 +783,7 @@
     <string name="error_hint_rules">规则没准备好：在规则页刷新一次；一直失败就换一个数据源。</string>
     <string name="error_hint_permission">缺 VPN 授权：点上面的按钮，在系统弹窗里允许。</string>
     <string name="err_foreground_refused">系统不允许后台运行，无法启动：%1$s</string>
+    <string name="err_root_removed">Root 模式已暂时移除，请改用 VPN 或代理模式。</string>
     <string name="error_hint_foreground">系统拒绝了后台运行：在系统设置里允许 speed 后台运行（关闭省电限制），再试一次。</string>
     <string name="error_hint_root_unavailable">拿不到 root 权限：在 root 管理应用里允许 speed，再选一次 Root 模式。</string>
     <string name="error_hint_root_install">root 接管没装成：报告里记着失败在第几步。hosts 不可写、或被拒绝的命令，都会是这个样子。</string>

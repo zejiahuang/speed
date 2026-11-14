@@ -2,6 +2,7 @@ package dev.detour.control
 
 import android.content.Context
 import androidx.core.content.ContextCompat
+import dev.detour.core.BuildFlags
 import dev.detour.core.DetourVpnService
 import dev.detour.core.Kernel
 import dev.detour.core.KernelState
@@ -311,11 +312,18 @@ object ControlConsole {
             val mode = when (value?.lowercase()) {
                 "vpn" -> KernelState.Mode.VPN
                 "proxy", "connect" -> KernelState.Mode.PROXY
-                "root" -> KernelState.Mode.ROOT
+                // Withheld for now — see [BuildFlags.ROOT_MODE]. Rejecting it
+                // here rather than letting the service refuse it keeps the
+                // console's answer the same shape as an unknown word.
+                "root" -> if (BuildFlags.ROOT_MODE) KernelState.Mode.ROOT else null
                 else -> null
             }
             if (mode == null) {
-                JSONObject().put("error", "mode expects vpn, proxy or root")
+                JSONObject().put(
+                    "error",
+                    if (BuildFlags.ROOT_MODE) "mode expects vpn, proxy or root"
+                    else "mode expects vpn or proxy",
+                )
             } else {
                 // Stored as well as shown. Setting only the holder looked right
                 // and meant a mode chosen here was forgotten on the next cold
@@ -734,7 +742,11 @@ object ControlConsole {
             "log_archive" -> asBool?.let { prefs.updateLogArchive(it) } ?: return bad("bool")
             "dynamic_color" -> asBool?.let { prefs.updateDynamicColor(it) } ?: return bad("bool")
             "dark_mode" -> prefs.updateDarkMode(value)
-            "mode" -> prefs.updateMode(value)
+            "mode" -> if (!BuildFlags.ROOT_MODE && value.equals("root", ignoreCase = true)) {
+                return JSONObject().put("error", "mode expects vpn or proxy")
+            } else {
+                prefs.updateMode(value)
+            }
             "theme_color" -> prefs.updateThemeColor(value)
             "corner_style" -> prefs.updateCornerStyle(value)
             "mtu" -> asInt?.let { prefs.updateMtu(it) } ?: return bad("int")
